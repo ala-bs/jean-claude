@@ -97,10 +97,10 @@ function findLivePendingRequestForTask(
   for (const [stepId, step] of Object.entries(state.steps)) {
     if (step.taskId !== taskId || stepId === excludeStepId) continue;
     if (step.pendingPermission) {
-      return { type: 'permission', permission: step.pendingPermission };
+      return { type: 'permission', stepId, permission: step.pendingPermission };
     }
     if (step.pendingQuestion) {
-      return { type: 'question', question: step.pendingQuestion };
+      return { type: 'question', stepId, question: step.pendingQuestion };
     }
   }
   return null;
@@ -222,6 +222,11 @@ export interface TaskState {
  */
 export interface PendingRequest {
   type: 'permission' | 'question';
+  /**
+   * The step that owns the request. Needed by per-step UI (the step flow bar)
+   * to color the right chip when the step itself isn't in the `steps` cache.
+   */
+  stepId?: string;
   permission?: NormalizedPermissionRequest & { taskId: string };
   question?: {
     taskId: string;
@@ -1094,7 +1099,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
     set((state) => ({
       pendingRequestsByTaskId: {
         ...state.pendingRequestsByTaskId,
-        [taskId]: request,
+        [taskId]: stepId ? { ...request, stepId } : request,
       },
       // Bump only the owning step. Bumping task-wide (or inferring the step set
       // from `state.steps`, which misses steps unloaded mid-refetch) would

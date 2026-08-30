@@ -4,11 +4,13 @@ import {
   Check,
   ChevronsLeftRight,
   Circle,
+  CircleHelp,
   GitPullRequest,
   Loader2,
   Pencil,
   Plus,
   Search,
+  ShieldAlert,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -23,6 +25,7 @@ import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useMessageContextMenu } from '@/features/agent/ui-message-stream/ui-message-context-menu';
+import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useTaskState } from '@/stores/navigation';
 import { useToastStore } from '@/stores/toasts';
 
@@ -484,9 +487,69 @@ function StatusIcon({ status }: { status: TaskStepStatus }) {
 /*  Step type icon (overrides status icon for special step types)       */
 /* ------------------------------------------------------------------ */
 
-function StepTypeIcon({ step }: { step: TaskStep }) {
+/**
+ * A running step can be blocked on the user: waiting on a permission decision
+ * or on an answer to a question. Those states get their own chip color instead
+ * of the generic purple "running" treatment.
+ */
+function useStepAttention({
+  stepId,
+  taskId,
+}: {
+  stepId: string;
+  taskId: string;
+}): 'permission' | 'question' | null {
+  return useTaskMessagesStore((state) => {
+    const step = state.steps[stepId];
+    if (step?.pendingPermission) return 'permission';
+    if (step?.pendingQuestion) return 'question';
+    // `steps` is an LRU cache and only the opened step gets its per-step slot
+    // written, so a sibling step waiting on the user would otherwise stay
+    // purple. The task-level slot is always written and carries its owner.
+    const taskRequest = state.pendingRequestsByTaskId[taskId];
+    if (taskRequest?.stepId === stepId) return taskRequest.type;
+    return null;
+  });
+}
+
+/**
+ * Attention colors only apply while the agent is actually alive on this step:
+ * a stale pending request on a finished, archived or collapsed step keeps its
+ * normal status color.
+ */
+export function getStepChipAttention({
+  step,
+  pendingAttention,
+  isArchivedGroup,
+}: {
+  step: Pick<TaskStep, 'status' | 'archivedAt'>;
+  pendingAttention: 'permission' | 'question' | null;
+  isArchivedGroup?: boolean;
+}): 'permission' | 'question' | null {
+  if (step.status !== 'running') return null;
+  if (isArchivedGroup || step.archivedAt) return null;
+  return pendingAttention;
+}
+
+function StepTypeIcon({
+  step,
+  attention,
+}: {
+  step: TaskStep;
+  attention: 'permission' | 'question' | null;
+}) {
+  const cls = 'h-2.5 w-2.5 shrink-0';
+  if (attention === 'permission') {
+    return (
+      <ShieldAlert className={clsx(cls, 'text-status-run animate-pulse')} />
+    );
+  }
+  if (attention === 'question') {
+    return (
+      <CircleHelp className={clsx(cls, 'text-status-azure animate-pulse')} />
+    );
+  }
   if (step.type === 'review') {
-    const cls = 'h-2.5 w-2.5 shrink-0';
     if (step.status === 'running') {
       return <Search className={clsx(cls, 'text-acc-ink animate-pulse')} />;
     }
@@ -519,6 +582,11 @@ const CHIP_STYLES: Record<TaskStepStatus, string> = {
     'border border-status-run/30 bg-status-run-soft text-status-run cursor-pointer hover:bg-status-run/15',
 };
 
+const ATTENTION_CHIP_STYLES: Record<'permission' | 'question', string> = {
+  permission: 'step-chip-permission text-status-run cursor-pointer',
+  question: 'step-chip-question text-status-azure cursor-pointer',
+};
+
 /* ------------------------------------------------------------------ */
 /*  Step chip                                                          */
 /* ------------------------------------------------------------------ */
@@ -545,6 +613,15 @@ function StepChip({
   onContextMenu?: (event: React.MouseEvent) => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
+  const stepAttention = useStepAttention({
+    stepId: step.id,
+    taskId: step.taskId,
+  });
+  const attention = getStepChipAttention({
+    step,
+    pendingAttention: stepAttention,
+    isArchivedGroup,
+  });
 
   useEffect(() => {
     if (isActive && ref.current) {
@@ -566,7 +643,9 @@ function StepChip({
         aria-expanded={isArchivedGroup ? false : undefined}
         className={clsx(
           'h-full w-full gap-1 rounded-md px-1.5 py-0.5 text-[10px] leading-none transition-all duration-300 ease-out',
-          CHIP_STYLES[step.status],
+          attention
+            ? ATTENTION_CHIP_STYLES[attention]
+            : CHIP_STYLES[step.status],
           isActive &&
             'ring-acc/70 ring-offset-bg-0 shadow-[0_0_10px_0_oklch(0.72_0.20_295_/_0.3),0_0_3px_0_oklch(0.72_0.20_295_/_0.2)] ring-[1.5px] ring-offset-[1.5px] brightness-125',
           (step.archivedAt || isArchivedGroup) && 'opacity-45 grayscale',
@@ -582,7 +661,7 @@ function StepChip({
         {isArchivedGroup ? (
           <Archive className="h-2.5 w-2.5 shrink-0" />
         ) : (
-          <StepTypeIcon step={step} />
+          <StepTypeIcon step={step} attention={attention} />
         )}
         <span className="flex min-w-0 items-center gap-0.5">
           <span className="text-[9px] opacity-40">
