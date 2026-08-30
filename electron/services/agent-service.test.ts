@@ -100,6 +100,7 @@ const {
     modes: [] as unknown[],
     sessionAllowedTools: [] as unknown[],
     permissionRuleUpdates: [] as unknown[],
+    followUpPrompts: [] as unknown[],
     stops: [] as string[],
   };
 
@@ -114,6 +115,8 @@ const {
       | ((input: unknown) => Promise<AgentRunHandle>)
       | null,
     sessionAllowedTools: [] as string[],
+    followUpPromptSupported: true,
+    followUpPromptAccepted: true,
   };
 
   const unsupported = (reason: string) => ({ supported: false, reason });
@@ -177,6 +180,14 @@ const {
               providerCalls.permissionRuleUpdates.push(input);
             },
           }),
+          followUpPrompt: providerState.followUpPromptSupported
+            ? supported({
+                send: async (input: unknown) => {
+                  providerCalls.followUpPrompts.push(input);
+                  return providerState.followUpPromptAccepted;
+                },
+              })
+            : unsupported('follow-up prompts unsupported'),
           resourceTracking: supported({
             getRootPid: ({ handle }: { handle: AgentRunHandle }) =>
               handle.rootPid ?? null,
@@ -193,7 +204,10 @@ const {
     providerCalls.modes.length = 0;
     providerCalls.sessionAllowedTools.length = 0;
     providerCalls.permissionRuleUpdates.length = 0;
+    providerCalls.followUpPrompts.length = 0;
     providerCalls.stops.length = 0;
+    providerState.followUpPromptSupported = true;
+    providerState.followUpPromptAccepted = true;
     providerState.permissionsSupported = true;
     providerState.questionsSupported = true;
     providerState.runtimeModeSwitchSupported = true;
@@ -2135,6 +2149,373 @@ describe('agentService provider runtime', () => {
       'interrupt',
     ]);
     expect(stepServiceMock.errorStep).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A run with live background tasks keeps its process alive past the turn's
+   * `result`, so the step reads `completed` while background work is still
+   * going. Stopping that run to deliver a follow-up would kill the background
+   * jobs with it, so the prompt must go into the live run instead.
+   */
+  function createBackgroundWorkHandle(): {
+    handle: AgentRunHandle;
+    release: () => void;
+  } {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const handle: AgentRunHandle = {
+      runId: 'provider-run-1',
+      events: (async function* () {
+        yield { type: 'session-id', sessionId: 'sdk-session-1' } as AgentEvent;
+        yield {
+          type: 'background-tasks',
+          tasks: [{ taskId: 'bg-1', description: 'long build' }],
+        } as AgentEvent;
+        yield completeEvent();
+        // The CLI stays up for the background task.
+        await released;
+      })(),
+      rootPid: 123,
+      stop: vi.fn(async () => {
+        providerCalls.stops.push('provider-run-1');
+        release();
+      }),
+      dispose: vi.fn(),
+    };
+
+    return { handle, release };
+  }
+
+  it('sends a follow-up into the live run instead of interrupting it while background jobs are alive', async () => {
+    const { handle, release } = createBackgroundWorkHandle();
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalled();
+    });
+
+    await agentService.beginSendMessage('step-1', [
+      { type: 'text', text: 'follow up' },
+    ]);
+
+    // Delivered through the live run...
+    expect(providerCalls.followUpPrompts).toHaveLength(1);
+    expect(providerCalls.followUpPrompts[0]).toMatchObject({
+      handle,
+      parts: [{ type: 'text', text: 'follow up' }],
+    });
+    // ...so nothing was stopped and no second run was started.
+    expect(providerCalls.stops).toHaveLength(0);
+    expect(handle.stop).not.toHaveBeenCalled();
+    expect(stepServiceMock.interruptStep).not.toHaveBeenCalled();
+    expect(providerCalls.runStarts).toHaveLength(1);
+
+    release();
+    await startPromise;
+  });
+
+  /**
+   * The exact class of bug found twice during review: an accepted injection
+   * that is never answered must still drive the step to a terminal state.
+   * `continueRunWithPrompt` clears `turnFinalized` but deliberately preserves
+   * `lastTerminalStatus`, which is the only fallback `closeReactivatedStep`
+   * has. Clearing it (as the first implementation did) wedges the step on
+   * `running` forever with no live session and no recovery path.
+   */
+  it('still closes the step when an injected prompt is never answered', async () => {
+    const { handle, release } = createBackgroundWorkHandle();
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalled();
+    });
+    stepServiceMock.completeStep.mockClear();
+
+    await agentService.beginSendMessage('step-1', [
+      { type: 'text', text: 'follow up' },
+    ]);
+    expect(providerCalls.followUpPrompts).toHaveLength(1);
+
+    // Reflect the `StepService.update(stepId, {status:'running'})` that
+    // injection just performed — `closeReactivatedStep` reads the step row back
+    // and only closes a step it still sees as running.
+    taskStepRepositoryMock.findById.mockResolvedValue({
+      ...defaultStep,
+      status: 'running',
+    });
+
+    // The agent never answers; the run simply ends (watchdog closed stdin).
+    release();
+    await startPromise;
+
+    // Terminal state reached rather than stuck on 'running'.
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalledWith('step-1');
+    });
+    expect(stepServiceMock.errorStep).not.toHaveBeenCalled();
+  });
+
+  it('falls back to restarting the run when the live run refuses the follow-up', async () => {
+    const { handle, release } = createBackgroundWorkHandle();
+    providerState.runStartImplementation = async () => handle;
+    providerState.followUpPromptAccepted = false;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalled();
+    });
+
+    const secondHandle = createHandle({
+      runId: 'provider-run-2',
+      events: [completeEvent()],
+    });
+    providerState.runStartImplementation = async () => secondHandle;
+
+    const { completion } = await agentService.beginSendMessage('step-1', [
+      { type: 'text', text: 'follow up' },
+    ]);
+    await completion;
+
+    expect(providerCalls.followUpPrompts).toHaveLength(1);
+    expect(providerCalls.stops).toContain('provider-run-1');
+    expect(providerCalls.runStarts).toHaveLength(2);
+
+    release();
+    await startPromise;
+  });
+
+  /**
+   * Same shape as the background-work handle, but the run never reports any
+   * background task. The run is still LIVE and its turn IS finalized, so this
+   * isolates the `backgroundTasks.length === 0` guard specifically.
+   */
+  function createLiveIdleHandle(): {
+    handle: AgentRunHandle;
+    release: () => void;
+  } {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const handle: AgentRunHandle = {
+      runId: 'provider-run-1',
+      events: (async function* () {
+        yield { type: 'session-id', sessionId: 'sdk-session-1' } as AgentEvent;
+        yield completeEvent();
+        await released;
+      })(),
+      rootPid: 123,
+      stop: vi.fn(async () => {
+        providerCalls.stops.push('provider-run-1');
+        release();
+      }),
+      dispose: vi.fn(),
+    };
+
+    return { handle, release };
+  }
+
+  it('does not hijack a follow-up on a live run when no background work is live', async () => {
+    const { handle, release } = createLiveIdleHandle();
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalled();
+    });
+
+    const secondHandle = createHandle({
+      runId: 'provider-run-2',
+      events: [completeEvent()],
+    });
+    providerState.runStartImplementation = async () => secondHandle;
+
+    const { completion } = await agentService.beginSendMessage('step-1', [
+      { type: 'text', text: 'follow up' },
+    ]);
+    await completion;
+
+    // The run was live and finalized, but with no background work to protect
+    // the old interrupt-and-restart semantics must be preserved exactly.
+    expect(providerCalls.followUpPrompts).toHaveLength(0);
+    expect(providerCalls.stops).toContain('provider-run-1');
+    expect(providerCalls.runStarts).toHaveLength(2);
+
+    release();
+    await startPromise;
+  });
+
+  it('still interrupts a mid-turn run even while background jobs are live', async () => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const handle: AgentRunHandle = {
+      runId: 'provider-run-1',
+      events: (async function* () {
+        yield { type: 'session-id', sessionId: 'sdk-session-1' } as AgentEvent;
+        yield {
+          type: 'background-tasks',
+          tasks: [{ taskId: 'bg-1', description: 'long build' }],
+        } as AgentEvent;
+        // NOTE: no result — the turn is still in flight.
+        await released;
+      })(),
+      rootPid: 123,
+      stop: vi.fn(async () => {
+        providerCalls.stops.push('provider-run-1');
+        release();
+      }),
+      dispose: vi.fn(),
+    };
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    const secondHandle = createHandle({
+      runId: 'provider-run-2',
+      events: [completeEvent()],
+    });
+    providerState.runStartImplementation = async () => secondHandle;
+
+    const { completion } = await agentService.beginSendMessage('step-1', [
+      { type: 'text', text: 'follow up' },
+    ]);
+    await completion;
+
+    // Interrupting a turn in progress is what the user asked for; injecting
+    // would have queued the prompt behind work they wanted abandoned.
+    expect(providerCalls.followUpPrompts).toHaveLength(0);
+    expect(providerCalls.stops).toContain('provider-run-1');
+
+    await startPromise;
+  });
+
+  it('still kills background jobs on an explicit stop', async () => {
+    const { handle, release } = createBackgroundWorkHandle();
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalled();
+    });
+
+    await agentService.stop('step-1');
+
+    expect(handle.stop).toHaveBeenCalled();
+    expect(providerCalls.stops).toContain('provider-run-1');
+
+    release();
+    await startPromise;
+  });
+
+  it('restarts instead of injecting when the model changed since the run started', async () => {
+    const { handle, release } = createBackgroundWorkHandle();
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalled();
+    });
+
+    // User picks a different model before sending the follow-up. Model is baked
+    // in at query() time, so injecting would silently ignore the change.
+    taskStepRepositoryMock.findById.mockResolvedValue({
+      ...defaultStep,
+      modelPreference: 'claude-opus-4',
+    });
+    const secondHandle = createHandle({
+      runId: 'provider-run-2',
+      events: [completeEvent()],
+    });
+    providerState.runStartImplementation = async () => secondHandle;
+
+    const { completion } = await agentService.beginSendMessage('step-1', [
+      { type: 'text', text: 'follow up' },
+    ]);
+    await completion;
+
+    expect(providerCalls.followUpPrompts).toHaveLength(0);
+    expect(providerCalls.stops).toContain('provider-run-1');
+    expect(providerCalls.runStarts).toHaveLength(2);
+
+    release();
+    await startPromise;
+  });
+
+  it('restarts instead of injecting when the thinking effort changed', async () => {
+    const { handle, release } = createBackgroundWorkHandle();
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalled();
+    });
+
+    // Effort is baked in at query() time just like the model.
+    taskStepRepositoryMock.findById.mockResolvedValue({
+      ...defaultStep,
+      thinkingEffort: 'high',
+    });
+    const secondHandle = createHandle({
+      runId: 'provider-run-2',
+      events: [completeEvent()],
+    });
+    providerState.runStartImplementation = async () => secondHandle;
+
+    const { completion } = await agentService.beginSendMessage('step-1', [
+      { type: 'text', text: 'follow up' },
+    ]);
+    await completion;
+
+    expect(providerCalls.followUpPrompts).toHaveLength(0);
+    expect(providerCalls.stops).toContain('provider-run-1');
+    expect(providerCalls.runStarts).toHaveLength(2);
+
+    release();
+    await startPromise;
+  });
+
+  it('applies the configured prompt preface to an injected follow-up', async () => {
+    const { handle, release } = createBackgroundWorkHandle();
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalled();
+    });
+
+    applyConfiguredPromptPrefaceMock.mockImplementation(
+      async ({ parts }: { parts: PromptPart[] }) => [
+        { type: 'text', text: 'PREFACE' },
+        ...parts,
+      ],
+    );
+
+    await agentService.beginSendMessage('step-1', [
+      { type: 'text', text: 'follow up' },
+    ]);
+
+    // Without this, per-prompt prefaces silently vanish exactly when
+    // background jobs are live.
+    expect(providerCalls.followUpPrompts[0]).toMatchObject({
+      parts: [
+        { type: 'text', text: 'PREFACE' },
+        { type: 'text', text: 'follow up' },
+      ],
+    });
+
+    release();
+    await startPromise;
   });
 
   /**

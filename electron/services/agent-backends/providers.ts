@@ -13,6 +13,7 @@ import {
   type BackendConfigCapability,
   type BackendSkillCapability,
   type Capability,
+  type FollowUpPromptCapability,
   type McpCapability,
   type ModelDiscoveryCapability,
   type PermissionCapability,
@@ -207,6 +208,26 @@ function createSessionAllowedToolsCapability(
   };
 }
 
+function createFollowUpPromptCapability(
+  backend: AgentBackendType,
+): FollowUpPromptCapability {
+  return {
+    async send({ handle, parts }) {
+      const binding = getRunBinding({
+        handle,
+        backend,
+        capability: 'agent.followUpPrompt',
+      });
+      return (
+        (await binding.backend.sendUserMessage?.(
+          binding.adapterSessionId,
+          parts,
+        )) ?? false
+      );
+    },
+  };
+}
+
 const resourceTrackingCapability: ResourceTrackingCapability = {
   getRootPid: ({ handle }) => handle.rootPid ?? null,
 };
@@ -261,6 +282,7 @@ function createCapabilities({
   supportsRuntimeModeSwitch,
   supportsSessionAllowedTools,
   supportsPermissionRuleUpdates,
+  supportsFollowUpPrompt = false,
 }: {
   backend: AgentBackendType;
   run: RunAgentCapability;
@@ -269,6 +291,7 @@ function createCapabilities({
   supportsRuntimeModeSwitch: boolean;
   supportsSessionAllowedTools: boolean;
   supportsPermissionRuleUpdates: boolean;
+  supportsFollowUpPrompt?: boolean;
 }): AgentBackendCapabilities {
   return {
     agent: {
@@ -299,6 +322,11 @@ function createCapabilities({
         : unsupported<PermissionRuleUpdateCapability>(
             'runtime permission rule refresh is not supported by this backend',
           ),
+      followUpPrompt: supportsFollowUpPrompt
+        ? supported(createFollowUpPromptCapability(backend))
+        : unsupported<FollowUpPromptCapability>(
+            'this backend cannot accept a new prompt on a live run',
+          ),
       resourceTracking: supported(resourceTrackingCapability),
     },
     generation: createGenerationCapabilities(backend),
@@ -324,6 +352,7 @@ export const claudeCodeProvider: AgentBackendProvider = {
     supportsRuntimeModeSwitch: true,
     supportsSessionAllowedTools: true,
     supportsPermissionRuleUpdates: true,
+    supportsFollowUpPrompt: true,
   }),
 };
 

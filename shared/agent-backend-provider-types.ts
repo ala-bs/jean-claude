@@ -93,6 +93,24 @@ export interface SessionAllowedToolsCapability {
   list(input: { handle: AgentRunHandle }): string[];
 }
 
+/**
+ * Hand an additional user prompt to a run whose input stream is still open, so
+ * the same backend run continues instead of being torn down and restarted.
+ *
+ * This exists for background work: a run that spawned background tasks keeps its
+ * process alive past the turn's `result`, and stopping it to send a follow-up
+ * would kill those background tasks with it.
+ *
+ * Resolves `false` when the input stream has already closed — the caller must
+ * fall back to stopping the run and starting a new one.
+ */
+export interface FollowUpPromptCapability {
+  send(input: {
+    handle: AgentRunHandle;
+    parts: PromptPart[];
+  }): Promise<boolean>;
+}
+
 export interface ResourceTrackingCapability {
   getRootPid(input: { handle: AgentRunHandle }): number | null;
 }
@@ -164,6 +182,8 @@ export interface AgentCapabilityGroup {
   sessionAllowedTools: Capability<SessionAllowedToolsCapability>;
   /** Optional so provider mocks/tests without this capability still typecheck. */
   permissionRuleUpdates?: Capability<PermissionRuleUpdateCapability>;
+  /** Optional: continue a live run with a new prompt instead of restarting it. */
+  followUpPrompt?: Capability<FollowUpPromptCapability>;
   resourceTracking: Capability<ResourceTrackingCapability>;
 }
 

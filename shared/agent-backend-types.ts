@@ -172,6 +172,15 @@ export interface AgentBackend {
     sessionId: string;
     rules: ResolvedPermissionRule[];
   }): void;
+  /**
+   * Push an extra user message into a run whose streaming input is still open,
+   * continuing the same run rather than starting a new one.
+   *
+   * Resolves `false` when the input stream has already closed, which tells the
+   * caller to fall back to stop-then-restart. Optional: only backends that feed
+   * the agent from a live input stream can support it.
+   */
+  sendUserMessage?(sessionId: string, parts: PromptPart[]): Promise<boolean>;
   dispose(): Promise<void>;
 }
 
