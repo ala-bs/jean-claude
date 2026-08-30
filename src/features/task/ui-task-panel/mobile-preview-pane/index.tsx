@@ -230,6 +230,11 @@ export function MobilePreviewPane({
   const [deviceId, setDeviceId] = useState('');
   const [previewRotationDeg, setPreviewRotationDeg] = useState(0);
   const [inputNotice, setInputNotice] = useState<string | null>(null);
+  // Keyed by session id so dismissing the notice for one degraded stream does
+  // not hide it for the next session, which may degrade for a new reason.
+  const [dismissedDegradedSessionId, setDismissedDegradedSessionId] = useState<
+    string | null
+  >(null);
   // Successful actions stay silent: they clear any stale error instead of
   // adding an informational banner.
   const showActionNotice = useCallback((_message?: string) => {
@@ -1067,6 +1072,12 @@ export function MobilePreviewPane({
     formatError(stopError) ??
     formatError(rotateError);
   const fatalSessionError = session?.status === 'error' ? displayError : null;
+  // Deliberately not folded into `displayError`: the stream is healthy, so
+  // this must not take over the pane as an error state.
+  const degradedReason =
+    session && session.id !== dismissedDegradedSessionId
+      ? (session.degradedReason ?? null)
+      : null;
   const streamStrategyLabel = getStreamStrategyLabel(session?.streamStrategy);
 
   const runtimeLaunchState = useMobilePreviewExpoLaunch({
@@ -2506,8 +2517,21 @@ export function MobilePreviewPane({
           )}
         />
       ) : null}
-      {inputNotice || autoPreviewStartError || showRuntimeLaunchNotice ? (
+      {inputNotice ||
+      autoPreviewStartError ||
+      showRuntimeLaunchNotice ||
+      degradedReason ? (
         <PreviewNoticeStack insetLeft={!isStandalone}>
+          {degradedReason ? (
+            <PreviewNotice
+              tone="warn"
+              onDismiss={() =>
+                setDismissedDegradedSessionId(session?.id ?? null)
+              }
+            >
+              {degradedReason}
+            </PreviewNotice>
+          ) : null}
           {inputNotice ? (
             <PreviewNotice
               tone="error"

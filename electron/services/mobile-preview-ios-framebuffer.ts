@@ -372,7 +372,12 @@ export async function buildCoreSimulatorFramebufferHelper(
       Date.now() - compileStartedAt,
       error instanceof Error ? error.message : String(error),
     );
-    throw error;
+    throw new Error(
+      `Failed to compile the CoreSimulator framebuffer helper (developerDir=${developerDir}): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
   }
   debug(
     'iOS preview framebuffer helper compiled output=%s elapsedMs=%d',
@@ -405,12 +410,14 @@ export function createScreenshotStream(
     signal?: AbortSignal;
   },
   screenshotSize: { width: number; height: number },
+  fallbackReason?: string | null,
 ): { session: MobilePreviewSession; stop: () => Promise<void> } {
   debug(
-    'iOS preview using simctl screenshot stream deviceId=%s width=%d height=%d',
+    'iOS preview using simctl screenshot stream deviceId=%s width=%d height=%d reason=%s',
     params.deviceId,
     screenshotSize.width,
     screenshotSize.height,
+    fallbackReason ?? 'none',
   );
 
   const session: MobilePreviewSession = {
@@ -425,6 +432,7 @@ export function createScreenshotStream(
     streamStrategy: 'simctl-screenshot',
     inputStatus: 'starting',
     error: null,
+    degradedReason: fallbackReason ?? null,
   };
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -735,7 +743,8 @@ export async function createCoreSimulatorFramebufferStream(
         height: fallbackSize.height,
         frameFormat: 'mjpeg',
         streamStrategy: 'simctl-screenshot',
-        error: reason,
+        error: null,
+        degradedReason: reason,
       });
     })().catch((error) => {
       if (active.stopped || isIosPreviewDisposed()) return;
