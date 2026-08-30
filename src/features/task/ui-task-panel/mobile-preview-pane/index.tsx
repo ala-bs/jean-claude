@@ -77,14 +77,15 @@ import { useTaskMessagesStore } from '@/stores/task-messages';
 import { api } from '@/lib/api';
 import { createMobileDevServerCommandId } from '@/lib/mobile-preview-runtime';
 
-import type {
-  MobilePlatform,
-  MobilePreviewAndroidAppStatus,
-  MobilePreviewDevice,
-  MobilePreviewIosAppStatus,
-  MobilePreviewNetworkRequest,
-  MobilePreviewQuality,
-  MobilePreviewTextSize,
+import {
+  isPhysicalMobilePreviewDevice,
+  type MobilePlatform,
+  type MobilePreviewAndroidAppStatus,
+  type MobilePreviewDevice,
+  type MobilePreviewIosAppStatus,
+  type MobilePreviewNetworkRequest,
+  type MobilePreviewQuality,
+  type MobilePreviewTextSize,
 } from '@shared/mobile-simulator-types';
 
 import {
@@ -99,6 +100,10 @@ import {
   type NetworkFilterToken,
   type NetworkPresetFilter,
 } from './utils-network';
+import {
+  applyDeviceToBuildCommand,
+  getDeviceBuildCommandNotice,
+} from './utils-device-build-command';
 import {
   applyPreviewDeviceSwitch,
   cancelPendingWorkspaceSetup,
@@ -117,6 +122,7 @@ import {
   formatDeviceState,
   getDefaultAndroidProjectPath,
   getPreviewDeviceKey,
+  sortPhysicalDevicesByAvailability,
 } from './utils-device-setup';
 import { EmptyState, PreviewErrorState } from './ui-common';
 import {
@@ -177,6 +183,8 @@ import {
   type PreviewFacts,
   type PreviewStepKey,
   getSetupModel,
+  PHYSICAL_IOS_STREAMING_UNSUPPORTED_DETAIL,
+  PHYSICAL_IOS_STREAMING_UNSUPPORTED_TITLE,
 } from './utils-setup-model';
 import {
   type PreviewStepActionIntent,
@@ -473,7 +481,7 @@ export function MobilePreviewPane({
     (platform === 'android'
       ? mobilePreviewConfig?.androidPrebuildCommand
       : mobilePreviewConfig?.iosPrebuildCommand) ?? defaultPrebuildCommand;
-  const buildCommand =
+  const configuredBuildCommand =
     platform === 'android'
       ? (mobilePreviewConfig?.androidBuildCommand ?? null)
       : (mobilePreviewConfig?.iosBuildCommand ?? null);
@@ -990,6 +998,40 @@ export function MobilePreviewPane({
     ],
   );
   const selectedDeviceCanStart = canStartDevice(selectedDevice);
+  const selectedDeviceIsPhysical = isPhysicalMobilePreviewDevice(selectedDevice);
+  const selectedDeviceConnected =
+    selectedDeviceIsPhysical && selectedDevice?.connection === 'connected';
+  // The selected device — simulator or real hardware — gets a
+  // `--device`/`--udid`/`--deviceId` selector (or its `{{device}}` token
+  // substituted) so the CLI builds onto it instead of its own default. Script
+  // wrappers like `pnpm run ios` hide the CLI, so the detected stacks decide
+  // the flag.
+  // Round-trip the stacks through a primitive so the memo has a stable dep and
+  // nothing downstream holds a reference into the detected-app object.
+  const selectedAppStacksKey = useMemo(
+    () =>
+      detectedApps.find((app) => app.path === appPath)?.stacks.join(',') ?? '',
+    [appPath, detectedApps],
+  );
+  const buildCommandForDevice = useMemo(
+    () =>
+      configuredBuildCommand
+        ? applyDeviceToBuildCommand({
+            command: configuredBuildCommand,
+            device: selectedDevice,
+            stacks: selectedAppStacksKey
+              ? selectedAppStacksKey.split(',')
+              : null,
+          })
+        : null,
+    [configuredBuildCommand, selectedAppStacksKey, selectedDevice],
+  );
+  const buildCommand = buildCommandForDevice?.command ?? null;
+  const buildCommandDeviceNotice = buildCommandForDevice
+    ? getDeviceBuildCommandNotice(buildCommandForDevice)
+    : null;
+  const physicalIosStreamingUnsupported =
+    platform === 'ios' && selectedDeviceIsPhysical;
   const activeSessionDeviceReady =
     !!session &&
     session.status !== 'stopped' &&
@@ -1558,7 +1600,8 @@ export function MobilePreviewPane({
       return;
     }
     if (!buildCommand || needsAppSelection) return;
-    if (platform === 'ios' && !deviceId) return;
+    // Both platforms scope the build command id by device.
+    if (!deviceId) return;
     if (platform === 'ios') {
       setLaunchedIosBuildCommandIds((current) =>
         current.includes(buildCommandId) ? current : [...current, buildCommandId],
@@ -2356,6 +2399,7 @@ export function MobilePreviewPane({
         buildCommand,
         buildRunning,
         buildStarting,
+        selectedDeviceIsPhysical,
         androidAppMissing,
         androidTrustConfigured,
         hasActiveSession,
@@ -2374,6 +2418,7 @@ export function MobilePreviewPane({
       port: {
         startAdHocCommand: runCommands.startAdHocCommand,
         stopCommand: runCommands.stopCommand,
+        ensureMetroReverse: api.mobilePreview.ensureMetroReverse,
         startPreviewSession: start,
         startNetworkProxy: networkProxy.start,
         stopNetworkProxy: networkProxy.stop,
@@ -2428,6 +2473,7 @@ export function MobilePreviewPane({
     prebuildCommand,
     prebuildCommandId,
     projectId,
+    selectedDeviceIsPhysical,
     proxyStatus,
     quality,
     runCommands,
@@ -2509,6 +2555,10 @@ export function MobilePreviewPane({
     selectedDevice: selectedDevice
       ? { name: selectedDevice.name, state: selectedDevice.state }
       : null,
+    selectedDeviceIsPhysical,
+    selectedDeviceConnected,
+    selectedDeviceUnavailableReason: selectedDevice?.unavailableReason ?? null,
+    buildCommandDeviceNotice,
     sessionStatus: session?.status,
     isStarting,
     isStopping,
@@ -2947,6 +2997,16 @@ export function MobilePreviewPane({
         </div>
       </div>
     );
+  } else if (physicalIosStreamingUnsupported) {
+    // Deliberately ahead of `displayError`: the iOS adapter throws a raw
+    // "streaming is not supported" error for physical devices, and that error
+    // is far less useful than saying what does still work.
+    body = (
+      <EmptyState
+        title={PHYSICAL_IOS_STREAMING_UNSUPPORTED_TITLE}
+        detail={PHYSICAL_IOS_STREAMING_UNSUPPORTED_DETAIL}
+      />
+    );
   } else if (displayError) {
     body = <PreviewErrorState message={displayError} />;
   } else if (
@@ -2995,7 +3055,12 @@ export function MobilePreviewPane({
     body = (
       <EmptyState
         title="Device not ready"
-        detail="Select a booted or shutdown simulator device"
+        detail={
+          // A physical device already explains exactly what to do about it;
+          // the simulator copy would be both wrong and useless there.
+          selectedDevice?.unavailableReason ??
+          'Select a booted or shutdown simulator device'
+        }
       />
     );
   } else {
@@ -3019,6 +3084,16 @@ export function MobilePreviewPane({
     }
     return firstDevice.name.localeCompare(secondDevice.name);
   });
+  // Real hardware is grouped separately so it is never confused with a
+  // disposable simulator. Ordering within each group is preserved.
+  // Unreachable hardware stays listed (it shows in Xcode too), but the usable
+  // devices come first so the one connected handset is not buried.
+  const physicalDevices = sortPhysicalDevicesByAvailability(
+    orderedDevices.filter((device) => isPhysicalMobilePreviewDevice(device)),
+  );
+  const simulatorDevices = orderedDevices.filter(
+    (device) => !isPhysicalMobilePreviewDevice(device),
+  );
   // Device -> task associations across every task, so a row can show that a
   // device belongs to some other task than the one this pane is rendering.
   const { data: deviceAssignments } = useMobilePreviewDeviceAssignments();
@@ -3205,41 +3280,53 @@ export function MobilePreviewPane({
             ) : orderedDevices.length === 0 ? (
               <div className="text-ink-4 p-2 text-xs">No visible devices. Use cog to add one.</div>
             ) : (
-              <div className={clsx('mb-1.5', standaloneLayout.deviceGroup)}>
-                <div className="text-ink-4 px-2 py-1 text-[9px] font-semibold tracking-wide uppercase">
-                  Saved devices
-                </div>
-                {orderedDevices.map((device) => {
-                  const selected =
-                    device.id === deviceId && device.platform === platform;
-                  const deviceKey = getPreviewDeviceKey(
-                    device.platform,
-                    device.id,
-                  );
-                  const taskInfo = resolveDeviceRowTaskInfo({
-                    assignedTask: deviceTaskMap.get(deviceKey),
-                    // This pane knows its own session is coming up before the
-                    // cross-task assignments query catches up.
-                    isLocallyActive:
-                      activeSessionDeviceKeys.has(deviceKey) ||
-                      (selectedPreviewDeviceKey === deviceKey &&
-                        (isStarting || activeSessionDeviceReady)),
-                    isStarting,
-                    currentTaskId: taskId,
-                    currentTask,
-                  });
-                  return (
-                    <DeviceRailRow
-                      key={device.id}
-                      device={device}
-                      selected={selected}
-                      taskInfo={taskInfo}
-                      onSelect={() => handleSelectDevice(device)}
-                      className={standaloneLayout.deviceButton}
-                    />
-                  );
-                })}
-              </div>
+              (
+                [
+                  ['Simulators', simulatorDevices],
+                  ['Real devices', physicalDevices],
+                ] as const
+              ).map(([groupLabel, groupDevices]) =>
+                groupDevices.length === 0 ? null : (
+                  <div
+                    key={groupLabel}
+                    className={clsx('mb-1.5', standaloneLayout.deviceGroup)}
+                  >
+                    <div className="text-ink-4 px-2 py-1 text-[9px] font-semibold tracking-wide uppercase">
+                      {groupLabel}
+                    </div>
+                    {groupDevices.map((device) => {
+                      const selected =
+                        device.id === deviceId && device.platform === platform;
+                      const deviceKey = getPreviewDeviceKey(
+                        device.platform,
+                        device.id,
+                      );
+                      const taskInfo = resolveDeviceRowTaskInfo({
+                        assignedTask: deviceTaskMap.get(deviceKey),
+                        // This pane knows its own session is coming up before the
+                        // cross-task assignments query catches up.
+                        isLocallyActive:
+                          activeSessionDeviceKeys.has(deviceKey) ||
+                          (selectedPreviewDeviceKey === deviceKey &&
+                            (isStarting || activeSessionDeviceReady)),
+                        isStarting,
+                        currentTaskId: taskId,
+                        currentTask,
+                      });
+                      return (
+                        <DeviceRailRow
+                          key={device.id}
+                          device={device}
+                          selected={selected}
+                          taskInfo={taskInfo}
+                          onSelect={() => handleSelectDevice(device)}
+                          className={standaloneLayout.deviceButton}
+                        />
+                      );
+                    })}
+                  </div>
+                ),
+              )
             )}
           </div>
         </aside>

@@ -11,6 +11,10 @@ export const baseFacts: PreviewFacts = {
   selectedDeviceCanStart: true,
   activeSessionDeviceReady: false,
   selectedDevice: { name: 'iPhone 15', state: 'booted' },
+  selectedDeviceIsPhysical: false,
+  selectedDeviceConnected: false,
+  selectedDeviceUnavailableReason: null,
+  buildCommandDeviceNotice: null,
 
   sessionStatus: undefined,
   isStarting: false,

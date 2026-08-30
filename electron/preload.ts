@@ -1141,6 +1141,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('mobilePreview:reloadExpo', params),
     forwardPort: (params: MobilePreviewForwardPortParams) =>
       ipcRenderer.invoke('mobilePreview:forwardPort', params),
+    ensureMetroReverse: (params: { deviceId: string; metroPort: number }) =>
+      ipcRenderer.invoke('mobilePreview:ensureMetroReverse', params),
     setTextSize: (params: MobilePreviewSetTextSizeParams) =>
       ipcRenderer.invoke('mobilePreview:setTextSize', params),
     setColorScheme: (sessionId: string, scheme: MobileColorScheme) =>

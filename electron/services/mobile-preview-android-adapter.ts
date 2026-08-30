@@ -64,7 +64,9 @@ type MobilePreviewFramePayload =
       keyframe?: boolean;
     };
 
-const DEVICE_LINE_STATES = new Set(['device', 'offline', 'unauthorized']);
+const ANDROID_EMULATOR_SERIAL_PATTERN = /^emulator-\d+$/;
+const ANDROID_INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
+const ANDROID_LAUNCH_TIMEOUT_MS = 30_000;
 const MAX_ANDROID_COORDINATE = 100_000;
 const MAX_ANDROID_DURATION_MS = 60_000;
 const ANDROID_EMULATOR_BOOT_TIMEOUT_MS = 90_000;
@@ -440,7 +442,7 @@ async function getAndroidCommandLineToolPath(
   return null;
 }
 
-async function getAdbCommand(signal?: AbortSignal): Promise<string> {
+export async function getAdbCommand(signal?: AbortSignal): Promise<string> {
   const adb = await getAndroidSdkToolCommand('adb', signal);
   if (adb) return adb;
 
@@ -620,22 +622,80 @@ function assertInputEvent(
   }
 }
 
-function parseDeviceName(id: string, details: string[]): string {
-  const model = details
-    .find((detail) => detail.startsWith('model:'))
-    ?.slice('model:'.length);
-  if (model) return model.replaceAll('_', ' ');
-
-  const product = details
-    .find((detail) => detail.startsWith('product:'))
-    ?.slice('product:'.length);
-  if (product) return product.replaceAll('_', ' ');
-
-  return id;
+function isAndroidEmulatorSerial(id: string): boolean {
+  return ANDROID_EMULATOR_SERIAL_PATTERN.test(id);
 }
 
-function mapDeviceState(state: string): MobilePreviewDevice['state'] {
-  return state === 'device' ? 'booted' : 'unknown';
+function parseAdbDeviceDetail(
+  details: string[],
+  key: string,
+): string | undefined {
+  const value = details
+    .find((detail) => detail.startsWith(`${key}:`))
+    ?.slice(key.length + 1);
+  return value ? value : undefined;
+}
+
+function humanizeAdbDetail(value: string): string {
+  return value.replaceAll('_', ' ');
+}
+
+function parseDeviceName(id: string, details: string[]): string {
+  const label =
+    parseAdbDeviceDetail(details, 'model') ??
+    parseAdbDeviceDetail(details, 'product') ??
+    parseAdbDeviceDetail(details, 'device');
+  return label ? humanizeAdbDetail(label) : id;
+}
+
+function parseDeviceModel(details: string[]): string | undefined {
+  const model =
+    parseAdbDeviceDetail(details, 'model') ??
+    parseAdbDeviceDetail(details, 'device');
+  return model ? humanizeAdbDetail(model) : undefined;
+}
+
+/**
+ * `adb devices` reports many connection states (`device`, `offline`,
+ * `unauthorized`, `authorizing`, `connecting`, `recovery`, `sideload`,
+ * `bootloader`, ...). Unknown states must still surface the device so the rail
+ * can explain why it cannot be used instead of silently dropping it.
+ */
+function mapDeviceState(state: string): Pick<
+  MobilePreviewDevice,
+  'state' | 'connection' | 'unavailableReason'
+> {
+  if (state === 'device') {
+    return { state: 'booted', connection: 'connected' };
+  }
+  if (state === 'unauthorized' || state === 'authorizing') {
+    return {
+      state: 'unknown',
+      connection: 'unauthorized',
+      unavailableReason: 'Accept the USB debugging prompt on the device.',
+    };
+  }
+  if (state === 'offline') {
+    return {
+      state: 'unknown',
+      connection: 'unavailable',
+      unavailableReason:
+        'Device is offline — reconnect the cable or re-enable USB debugging.',
+    };
+  }
+  if (state === 'connecting') {
+    return {
+      state: 'unknown',
+      connection: 'unavailable',
+      unavailableReason:
+        'Device is still connecting — reconnect the cable if this does not clear.',
+    };
+  }
+  return {
+    state: 'unknown',
+    connection: 'unavailable',
+    unavailableReason: `Device is in "${state}" state and cannot be used for preview.`,
+  };
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -737,6 +797,7 @@ export function parseAvdList(output: string): MobilePreviewDevice[] {
       id: name,
       name: name.replaceAll('_', ' '),
       platform: 'android' as const,
+      kind: 'simulator' as const,
       state: 'shutdown' as const,
     }));
 }
@@ -881,14 +942,20 @@ export function parseAdbDevices(output: string): MobilePreviewDevice[] {
     if (!trimmed) return [];
 
     const [id, state, ...details] = trimmed.split(/\s+/);
-    if (!id || !state || !DEVICE_LINE_STATES.has(state)) return [];
+    if (!id || !state) return [];
+
+    const isEmulator = isAndroidEmulatorSerial(id);
+    const model = isEmulator ? undefined : parseDeviceModel(details);
 
     return [
       {
         id,
         name: parseDeviceName(id, details),
         platform: 'android' as const,
-        state: mapDeviceState(state),
+        kind: (isEmulator ? 'simulator' : 'physical') as
+          MobilePreviewDevice['kind'],
+        ...(model ? { model } : {}),
+        ...mapDeviceState(state),
       },
     ];
   });
@@ -901,7 +968,7 @@ async function getBootedAvdNameByDeviceId(
   const names = new Map<string, string>();
   await Promise.all(
     devices
-      .filter((device) => device.id.startsWith('emulator-'))
+      .filter((device) => isAndroidEmulatorSerial(device.id))
       .map(async (device) => {
         try {
           const { stdout } = await runAdbCommand(
@@ -936,7 +1003,15 @@ async function listAllAndroidDevices(): Promise<MobilePreviewDevice[]> {
   const namedAdbDevices = adbDevices.map((device) => {
     const avdName = bootedAvdNameByDeviceId.get(device.id);
     return avdName
-      ? { ...device, id: avdName, name: avdName.replaceAll('_', ' ') }
+      ? {
+          ...device,
+          id: avdName,
+          // The rail id becomes the AVD name, so keep the adb serial for the
+          // CLIs that need it (`adb -s`, `run-android --deviceId`).
+          connectionId: device.id,
+          name: avdName.replaceAll('_', ' '),
+          kind: 'simulator' as const,
+        }
       : device;
   });
   const shutdownAvds = parseAvdList(avdOutput).filter(
@@ -1060,7 +1135,7 @@ async function resolveBootedAndroidAvdName(
   signal?: AbortSignal,
 ): Promise<string | null> {
   const bootedEmulators = devices.filter(
-    (device) => device.id.startsWith('emulator-') && device.state === 'booted',
+    (device) => isAndroidEmulatorSerial(device.id) && device.state === 'booted',
   );
   const bootedAvdNameByDeviceId = await getBootedAvdNameByDeviceId(
     bootedEmulators,
@@ -1072,7 +1147,7 @@ async function resolveBootedAndroidAvdName(
   return matchingDevice?.id ?? null;
 }
 
-async function resolveAndroidAdbSerial(
+export async function resolveAndroidAdbSerial(
   deviceIdOrAvdName: string,
   signal?: AbortSignal,
 ) {
@@ -1090,11 +1165,27 @@ async function resolveAndroidAdbSerial(
   );
   if (bootedDeviceId) return bootedDeviceId;
 
-  const emulatorCommand = await getEmulatorCommand(signal);
-  if (!emulatorCommand) {
-    throw new Error(
-      'Missing required Android emulator tool: emulator. Install Android Studio or ensure the Android SDK emulator command is on PATH.',
-    );
+  // The id is not attached to adb, so the only way it can still be used is if
+  // it names a bootable AVD. That requires the `emulator` binary: without it no
+  // AVD could have been listed in the first place, so the id can only be a
+  // device that went away. An `emulator-<port>` serial is an adb serial, never
+  // an AVD name, so it is never bootable from here either.
+  const emulatorCommand = isAndroidEmulatorSerial(deviceIdOrAvdName)
+    ? null
+    : await getEmulatorCommand(signal);
+  const isBootableAvd = emulatorCommand
+    ? parseAvdList(
+        (
+          await runCommand(
+            emulatorCommand,
+            ['-list-avds'],
+            signal ? { signal } : undefined,
+          )
+        ).stdout,
+      ).some((device) => device.id === deviceIdOrAvdName)
+    : false;
+  if (!emulatorCommand || !isBootableAvd) {
+    throw new Error(`Device ${deviceIdOrAvdName} is no longer connected.`);
   }
 
   spawn(emulatorCommand, ['-avd', deviceIdOrAvdName], {
@@ -1121,6 +1212,245 @@ async function resolveAndroidAdbSerial(
     windowNameIncludes: [...windowNameIncludes, adbSerial],
   });
   return adbSerial;
+}
+
+/**
+ * Resolves the adb serial and refuses ids that adb lists in a non-usable state
+ * (`unauthorized`, `offline`, ...), so install/launch surface the actionable
+ * reason instead of raw adb output.
+ */
+async function resolveUsableAndroidAdbSerial(
+  deviceIdOrAvdName: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const adbSerial = await resolveAndroidAdbSerial(deviceIdOrAvdName, signal);
+  const devices = parseAdbDevices(
+    (await runAdbCommand(['devices', '-l'], signal ? { signal } : undefined))
+      .stdout,
+  );
+  const device = devices.find((candidate) => candidate.id === adbSerial);
+  if (device && device.connection !== 'connected') {
+    throw new Error(
+      device.unavailableReason ??
+        `Device ${deviceIdOrAvdName} is not ready for preview.`,
+    );
+  }
+  return adbSerial;
+}
+
+/**
+ * Parses `adb reverse --list` output. adb prints one mapping per line and the
+ * leading column differs between versions (`emulator-5554 tcp:8081 tcp:8081`
+ * vs `(reverse) tcp:8081 tcp:8081`), so only the trailing `<remote> <local>`
+ * pair is read.
+ */
+export function parseAdbReverseList(
+  output: string,
+): { remote: string; local: string }[] {
+  return output.split(/\r?\n/).flatMap((line) => {
+    const tokens = line.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length < 2) return [];
+    const [remote, local] = tokens.slice(-2);
+    // Both endpoints are `<scheme>:<value>` (tcp/localabstract/...); anything
+    // else is a header or an error line and must not be treated as a mapping.
+    if (!/^[a-z]+:.+$/i.test(remote) || !/^[a-z]+:.+$/i.test(local)) return [];
+    return [{ remote, local }];
+  });
+}
+
+/**
+ * Makes Metro on the host reachable from a physical handset by mapping the
+ * device's own loopback back to the Mac (`adb reverse`), which is what
+ * `react-native run-android` does. Idempotent: existing mappings are detected
+ * through `adb reverse --list` and left alone.
+ *
+ * Emulators are a no-op — they already reach the host through their own
+ * networking (`10.0.2.2`) and the existing launch path relies on that. The
+ * emulator/physical split is read from the `adb devices -l` listing rather than
+ * from the serial shape, because a physical device attached over TCP/IP has a
+ * `host:port` serial that looks nothing like a USB serial.
+ */
+export async function ensureAndroidMetroReverse({
+  deviceId,
+  metroPort,
+  signal,
+}: {
+  deviceId: string;
+  metroPort: number;
+  signal?: AbortSignal;
+}): Promise<{ reversed: boolean; alreadyPresent: boolean }> {
+  signal?.throwIfAborted();
+  assertDeviceId(deviceId);
+  assertPort(metroPort, 'Metro port');
+  await assertAdbInstalled(signal);
+
+  const devices = parseAdbDevices(
+    (await runAdbCommand(['devices', '-l'], signal ? { signal } : undefined))
+      .stdout,
+  );
+  const listed = devices.find((device) => device.id === deviceId);
+  if (listed) {
+    if (listed.kind !== 'physical') {
+      return { reversed: false, alreadyPresent: false };
+    }
+  } else {
+    // Not an adb serial: the only other accepted id is an AVD name, which
+    // always names an emulator. Anything else is simply gone.
+    const bootedEmulatorId = await resolveBootedAndroidAvdName(
+      devices,
+      deviceId,
+      signal,
+    );
+    if (bootedEmulatorId) return { reversed: false, alreadyPresent: false };
+    throw new Error(`Device ${deviceId} is no longer connected.`);
+  }
+
+  const adbSerial = await resolveUsableAndroidAdbSerial(deviceId, signal);
+  const endpoint = `tcp:${metroPort}`;
+  const { stdout } = await runAdbCommand(
+    ['-s', adbSerial, 'reverse', '--list'],
+    signal ? { signal } : undefined,
+  );
+  const alreadyPresent = parseAdbReverseList(stdout).some(
+    (entry) => entry.remote === endpoint && entry.local === endpoint,
+  );
+  if (alreadyPresent) {
+    return { reversed: false, alreadyPresent: true };
+  }
+
+  await runAdbCommand(
+    ['-s', adbSerial, 'reverse', endpoint, endpoint],
+    signal ? { signal } : undefined,
+  );
+  return { reversed: true, alreadyPresent: false };
+}
+
+function assertAndroidApkPath(apkPath: string): void {
+  if (!apkPath.trim()) {
+    throw new Error('Android APK path is required.');
+  }
+  if (!apkPath.endsWith('.apk')) {
+    throw new Error(`Invalid Android APK path: ${apkPath}`);
+  }
+}
+
+function assertAndroidPackageName(packageName: string): void {
+  if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/.test(packageName)) {
+    throw new Error(`Invalid Android package name: ${packageName}`);
+  }
+}
+
+function assertAndroidActivityName(activity: string): void {
+  if (!/^\.?[A-Za-z][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)*$/.test(activity)) {
+    throw new Error(`Invalid Android activity name: ${activity}`);
+  }
+}
+
+/**
+ * `adb install` exits 0 even when the package manager refuses the APK, so the
+ * combined output has to be parsed for the `Failure [REASON]` marker.
+ */
+export function assertAdbInstallSucceeded(
+  output: string,
+  { apkPath, deviceId }: { apkPath: string; deviceId: string },
+): void {
+  // The marker must be its own token at the start of a line (or after
+  // whitespace) so an echoed APK path such as `/tmp/FailureRepro/app.apk` is
+  // not mistaken for an install failure.
+  const failure = output.match(/^(?:.*\s)?Failure\b[ \t]*(?:\[([^\]]*)\])?/m);
+  if (failure) {
+    throw new Error(
+      `Failed to install ${apkPath} on ${deviceId}: ${failure[1]?.trim() || 'unknown adb install failure'}`,
+    );
+  }
+  if (!/\bSuccess\b/.test(output)) {
+    throw new Error(
+      `Failed to install ${apkPath} on ${deviceId}: ${output.trim() || 'adb install produced no output'}`,
+    );
+  }
+}
+
+export function assertAndroidLaunchSucceeded(
+  output: string,
+  { deviceId, packageName }: { deviceId: string; packageName: string },
+): void {
+  const error = output.match(
+    /^.*(?:Error(?: type \d+)?:|No activities found).*$/m,
+  );
+  if (error) {
+    throw new Error(
+      `Failed to launch ${packageName} on ${deviceId}: ${error[0].trim()}`,
+    );
+  }
+}
+
+export async function installAndroidApk({
+  deviceId,
+  apkPath,
+  signal,
+}: {
+  deviceId: string;
+  apkPath: string;
+  signal?: AbortSignal;
+}): Promise<void> {
+  signal?.throwIfAborted();
+  await assertAdbInstalled(signal);
+  assertDeviceId(deviceId);
+  assertAndroidApkPath(apkPath);
+  const adbSerial = await resolveUsableAndroidAdbSerial(deviceId, signal);
+  const { stdout, stderr } = await runAdbCommand(
+    ['-s', adbSerial, 'install', '-r', apkPath],
+    { timeoutMs: ANDROID_INSTALL_TIMEOUT_MS, ...(signal && { signal }) },
+  );
+  assertAdbInstallSucceeded(`${stdout}\n${stderr}`, { apkPath, deviceId });
+}
+
+export async function launchAndroidApp({
+  deviceId,
+  packageName,
+  activity,
+  signal,
+}: {
+  deviceId: string;
+  packageName: string;
+  activity?: string;
+  signal?: AbortSignal;
+}): Promise<void> {
+  signal?.throwIfAborted();
+  await assertAdbInstalled(signal);
+  assertDeviceId(deviceId);
+  assertAndroidPackageName(packageName);
+  if (activity !== undefined) assertAndroidActivityName(activity);
+  const adbSerial = await resolveUsableAndroidAdbSerial(deviceId, signal);
+  const args = activity
+    ? [
+        '-s',
+        adbSerial,
+        'shell',
+        'am',
+        'start',
+        '-n',
+        `${packageName}/${activity}`,
+      ]
+    : [
+        '-s',
+        adbSerial,
+        'shell',
+        'monkey',
+        '-p',
+        packageName,
+        '-c',
+        'android.intent.category.LAUNCHER',
+        '1',
+      ];
+  const { stdout, stderr } = await runAdbCommand(args, {
+    timeoutMs: ANDROID_LAUNCH_TIMEOUT_MS,
+    ...(signal && { signal }),
+  });
+  assertAndroidLaunchSucceeded(`${stdout}\n${stderr}`, {
+    deviceId,
+    packageName,
+  });
 }
 
 function escapeAdbInputText(text: string): string {
@@ -1918,6 +2248,23 @@ export function createAndroidMobilePreviewAdapter({
       return listAllAndroidDevices();
     },
 
+    async installAndroidApk(params: {
+      deviceId: string;
+      apkPath: string;
+      signal?: AbortSignal;
+    }): Promise<void> {
+      await installAndroidApk(params);
+    },
+
+    async launchAndroidApp(params: {
+      deviceId: string;
+      packageName: string;
+      activity?: string;
+      signal?: AbortSignal;
+    }): Promise<void> {
+      await launchAndroidApp(params);
+    },
+
     async startStream(params: {
       taskId: string;
       deviceId: string;
@@ -2246,6 +2593,8 @@ export function createAndroidMobilePreviewAdapter({
         `tcp:${hostPort}`,
       ]);
     },
+
+    ensureMetroReverse: ensureAndroidMetroReverse,
 
     async setTextSize(
       deviceId: string,

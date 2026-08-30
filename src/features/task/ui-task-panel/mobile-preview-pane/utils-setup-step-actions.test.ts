@@ -108,9 +108,11 @@ describe('getSetupStepAction — install/build', () => {
     expect(action('install', {}, {}, { hasBuildCommand: false }).disabled).toBe(true);
   });
 
-  it('is disabled on ios without a device', () => {
+  // Both platforms scope the build command id by device now, so neither can
+  // build without one.
+  it('is disabled on either platform without a device', () => {
     expect(action('install', { platform: 'ios', deviceId: '' }).disabled).toBe(true);
-    expect(action('install', { platform: 'android', deviceId: '' }).disabled).toBe(false);
+    expect(action('install', { platform: 'android', deviceId: '' }).disabled).toBe(true);
   });
 
   it('is disabled while app selection is pending or the build status is loading', () => {
@@ -216,5 +218,57 @@ describe('getSetupStepAction — https', () => {
   it('loads while installing the cert or preparing trust', () => {
     expect(action('https', { proxyIsInstallingCertificate: true }).loading).toBe(true);
     expect(action('https', { proxyIsPreparingAndroidAppTrust: true }).loading).toBe(true);
+  });
+});
+
+describe('getSetupStepAction — physical devices', () => {
+  const connectedPixel = {
+    platform: 'android' as const,
+    selectedDeviceIsPhysical: true,
+    selectedDeviceConnected: true,
+  };
+
+  it('enables Build for a connected physical Android device', () => {
+    expect(action('install', connectedPixel)?.disabled).toBe(false);
+  });
+
+  it('enables Build for a connected physical iPhone', () => {
+    expect(
+      action('install', {
+        platform: 'ios',
+        selectedDeviceIsPhysical: true,
+        selectedDeviceConnected: true,
+      })?.disabled,
+    ).toBe(false);
+  });
+
+  it('disables Build while the physical device is unreachable', () => {
+    expect(
+      action('install', { ...connectedPixel, selectedDeviceConnected: false })
+        ?.disabled,
+    ).toBe(true);
+  });
+
+  it('disables Build with no device on either platform', () => {
+    expect(action('install', { platform: 'android', deviceId: '' })?.disabled).toBe(
+      true,
+    );
+    expect(action('install', { platform: 'ios', deviceId: '' })?.disabled).toBe(
+      true,
+    );
+  });
+
+  it('disables Start preview for a physical iPhone (no capture path)', () => {
+    expect(
+      action('preview', {
+        platform: 'ios',
+        selectedDeviceIsPhysical: true,
+        selectedDeviceConnected: true,
+      })?.disabled,
+    ).toBe(true);
+  });
+
+  it('keeps Start preview available for a physical Android device', () => {
+    expect(action('preview', connectedPixel)?.disabled).toBe(false);
   });
 });

@@ -27,6 +27,8 @@ import {
   registerBeforeQuitCleanup,
 } from './mobile-preview-lifecycle';
 import { dbg } from '../lib/debug';
+import { getLanAddress } from './mobile-preview-lan-address';
+import { isKnownPhysicalIosDevice } from './mobile-preview-ios-devicectl';
 import { runCommand } from './mobile-preview-process';
 
 const DEFAULT_PROXY_PORT = 9099;
@@ -80,6 +82,7 @@ type AdbDevice = {
 
 type NetworkProxyServiceOptions = {
   runCommandImpl?: typeof runCommand;
+  getLanAddressImpl?: typeof getLanAddress;
   createServer?: typeof http.createServer;
   connectSocket?: typeof net.connect;
   caDirectory?: string;
@@ -381,20 +384,66 @@ function summarizeCommandOutput(output: string) {
   return output.trim().replace(/\s+/g, ' ').slice(0, 300) || '(empty)';
 }
 
+/**
+ * A physical iPhone is not the Mac: `127.0.0.1` is the phone's own loopback and
+ * `10.0.2.2` is an emulator-only alias, so it can only reach the proxy through
+ * the Mac's LAN address.
+ *
+ * Device kind is resolved with {@link isKnownPhysicalIosDevice} and never from
+ * the id format — CoreDevice identifiers and CoreSimulator UDIDs are both
+ * UUID-shaped.
+ */
+function resolveProxyMode({
+  platform,
+  deviceId,
+  autoConfigureDevice,
+}: Pick<
+  MobilePreviewNetworkProxyStartParams,
+  'platform' | 'deviceId' | 'autoConfigureDevice'
+>): MobilePreviewNetworkProxySession['mode'] {
+  if (autoConfigureDevice === false) return 'manual';
+  if (platform === 'android') return 'android-emulator';
+  return isKnownPhysicalIosDevice(deviceId) ? 'ios-device' : 'ios-simulator';
+}
+
+function resolveProxyHost({
+  mode,
+  getLanAddressImpl,
+}: {
+  mode: MobilePreviewNetworkProxySession['mode'];
+  getLanAddressImpl: typeof getLanAddress;
+}): string {
+  if (mode === 'android-emulator') return '10.0.2.2';
+  if (mode !== 'ios-device') return '127.0.0.1';
+  const lanAddress = getLanAddressImpl();
+  if (!lanAddress) {
+    throw new Error(
+      'No LAN address found for this Mac, so a physical iOS device cannot reach the network proxy. Connect the Mac to Wi-Fi or Ethernet (not just a VPN tunnel) and try again.',
+    );
+  }
+  return lanAddress;
+}
+
+/**
+ * `xcrun simctl keychain add-root-cert` only resolves CoreSimulator UDIDs, and
+ * there is no devicectl equivalent for real hardware, so the CA has to be
+ * installed and trusted by hand on the device.
+ */
+function physicalIosCertificateMessage(certPath: string) {
+  return `The proxy certificate can't be installed automatically on a physical iOS device. Copy ${certPath} to the device (AirDrop or email), install the profile in Settings > General > VPN & Device Management, then enable full trust in Settings > General > About > Certificate Trust Settings.`;
+}
+
 function createSession({
   params,
   port,
   mode,
+  proxyHost,
 }: {
   params: MobilePreviewNetworkProxyStartParams;
   port: number;
   mode: MobilePreviewNetworkProxySession['mode'];
+  proxyHost: string;
 }): MobilePreviewNetworkProxySession {
-  const proxyHost =
-    params.platform === 'android' && mode === 'android-emulator'
-      ? '10.0.2.2'
-    : '127.0.0.1';
-
   return {
     id: crypto.randomUUID(),
     projectPath: params.projectPath,
@@ -427,6 +476,7 @@ function updateSession(
 
 export function createMobilePreviewNetworkProxyService({
   runCommandImpl = runCommand,
+  getLanAddressImpl = getLanAddress,
   createServer = http.createServer,
   connectSocket = net.connect,
   caDirectory = DEFAULT_CA_DIR,
@@ -472,15 +522,7 @@ export function createMobilePreviewNetworkProxyService({
 
   function findSession(params: MobilePreviewNetworkProxyStartParams) {
     const requestedPort = params.port ?? DEFAULT_PROXY_PORT;
-    const shouldConfigureAndroid =
-      params.autoConfigureDevice !== false && params.platform === 'android';
-    const shouldConfigureIos =
-      params.autoConfigureDevice !== false && params.platform === 'ios';
-    const mode = shouldConfigureAndroid
-      ? 'android-emulator'
-      : shouldConfigureIos
-        ? 'ios-simulator'
-        : 'manual';
+    const mode = resolveProxyMode(params);
     return Array.from(sessions.values()).find(
       (entry) =>
         entry.session.projectPath === params.projectPath &&
@@ -623,6 +665,31 @@ export function createMobilePreviewNetworkProxyService({
     return options.allowUnresolved === false ? null : deviceIdOrAvdName;
   }
 
+  /**
+   * `adb devices -l` also lists devices that cannot accept shell commands
+   * (`unauthorized`, `offline`, ...). Those serials resolve fine, so without
+   * this guard `pm list packages` / `am force-stop` would surface raw adb text
+   * instead of the actionable reason install and launch already report.
+   */
+  async function assertAndroidDeviceUsable(adbSerial: string): Promise<void> {
+    const { stdout } = await runCommandImpl('adb', ['devices', '-l']);
+    const device = parseAdbDevices(stdout).find(
+      (candidate) => candidate.id === adbSerial,
+    );
+    if (!device || device.state === 'device') return;
+    if (device.state === 'unauthorized' || device.state === 'authorizing') {
+      throw new Error('Accept the USB debugging prompt on the device.');
+    }
+    if (device.state === 'offline') {
+      throw new Error(
+        'Device is offline — reconnect the cable or re-enable USB debugging.',
+      );
+    }
+    throw new Error(
+      `Device is in "${device.state}" state and cannot be used for preview.`,
+    );
+  }
+
   async function prepareAndroidAppTrust(
     params: PrepareAndroidAppTrustParams,
   ): Promise<MobilePreviewAndroidAppTrustResult> {
@@ -728,6 +795,7 @@ export function createMobilePreviewNetworkProxyService({
         trustConfigured: trustStatus.trustConfigured,
       };
     }
+    await assertAndroidDeviceUsable(adbSerial);
     const { stdout } = await runCommandImpl('adb', [
       '-s',
       adbSerial,
@@ -764,6 +832,7 @@ export function createMobilePreviewNetworkProxyService({
     }
 
     const adbSerial = await resolveAndroidProxyAdbSerial(params.deviceId);
+    await assertAndroidDeviceUsable(adbSerial);
     dbg.mobilePreview(
       'network-proxy android app restart device=%s package=%s',
       adbSerial,
@@ -1496,15 +1565,15 @@ export function createMobilePreviewNetworkProxyService({
       }
 
       const requestedPort = params.port ?? DEFAULT_PROXY_PORT;
-      const shouldConfigureAndroid =
-        params.autoConfigureDevice !== false && params.platform === 'android';
-      const shouldConfigureIos =
-        params.autoConfigureDevice !== false && params.platform === 'ios';
-      const mode = shouldConfigureAndroid
-        ? 'android-emulator'
-        : shouldConfigureIos
-          ? 'ios-simulator'
-          : 'manual';
+      const mode = resolveProxyMode(params);
+      const shouldConfigureAndroid = mode === 'android-emulator';
+      // Only a simulator borrows the Mac's own proxy settings; a physical
+      // iPhone has its own Wi-Fi proxy configuration and pointing the Mac at
+      // the proxy would do nothing for it.
+      const shouldConfigureIos = mode === 'ios-simulator';
+      // Resolved before the server binds so a missing LAN address fails fast
+      // instead of leaving a listener behind.
+      const proxyHost = resolveProxyHost({ mode, getLanAddressImpl });
       const shared = findSharedSession(params);
       if (shared) {
         if (shouldConfigureAndroid) {
@@ -1525,10 +1594,7 @@ export function createMobilePreviewNetworkProxyService({
           platform: params.platform,
           deviceId: params.deviceId,
           mode,
-          proxyHost:
-            params.platform === 'android' && mode === 'android-emulator'
-              ? '10.0.2.2'
-              : '127.0.0.1',
+          proxyHost,
           updatedAt: nowIso(),
         });
         emitSession(shared.session);
@@ -1582,6 +1648,7 @@ export function createMobilePreviewNetworkProxyService({
         params,
         port,
         mode,
+        proxyHost,
       });
 
       if (shouldConfigureAndroid) {
@@ -1642,6 +1709,23 @@ export function createMobilePreviewNetworkProxyService({
         params.deviceId,
         certPath,
       );
+      if (params.platform === 'ios' && isKnownPhysicalIosDevice(params.deviceId)) {
+        // No simctl (or devicectl) equivalent exists for real hardware, so this
+        // is guidance rather than an error — the rest of setup still works.
+        dbg.mobilePreview(
+          'network-proxy ios physical cert manual device=%s cert=%s',
+          params.deviceId,
+          certPath,
+        );
+        return {
+          platform: params.platform,
+          deviceId: params.deviceId,
+          certPath,
+          installedAt: nowIso(),
+          installed: false,
+          message: physicalIosCertificateMessage(certPath),
+        };
+      }
       if (params.platform === 'ios') {
         await runCommandImpl('xcrun', [
           'simctl',
@@ -1666,6 +1750,8 @@ export function createMobilePreviewNetworkProxyService({
         deviceId: params.deviceId,
         certPath,
         installedAt: nowIso(),
+        installed: true,
+        message: null,
       };
     },
 

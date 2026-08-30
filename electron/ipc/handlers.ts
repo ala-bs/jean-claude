@@ -478,6 +478,7 @@ import { deleteProjectRetainingMemory } from '../services/project-deletion-servi
 import { detectProjectLogos } from '../services/project-logo-detection-service';
 import { detectProjects } from '../services/project-detection-service';
 import { encodeLocalImageUrl } from '../services/local-image-protocol-service';
+import { ensureAndroidMetroReverse } from '../services/mobile-preview-android-adapter';
 import { eureciaSessionService } from '../services/eurecia-session-service';
 import { exitCurrentPreviewAfterReload } from '../services/reload-preview-service';
 import { fetchImageAsBase64 } from '../services/azure-image-proxy-service';
@@ -5781,6 +5782,11 @@ export function registerIpcHandlers() {
     'mobilePreview:forwardPort',
     (_, params: MobilePreviewForwardPortParams) =>
       mobilePreviewService.forwardPort(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:ensureMetroReverse',
+    (_, params: { deviceId: string; metroPort: number }) =>
+      ensureAndroidMetroReverse(params),
   );
   ipcMain.handle(
     'mobilePreview:setTextSize',

@@ -11,10 +11,29 @@ import type {
 } from '@shared/mobile-simulator-types';
 
 import {
+  getAdbCommand,
+  resolveAndroidAdbSerial,
+} from './mobile-preview-android-adapter';
+import {
   type MobilePreviewLifecycle,
   registerBeforeQuitCleanup,
 } from './mobile-preview-lifecycle';
 import { runCommand, spawnManaged } from './mobile-preview-process';
+
+/**
+ * Resolves the adb binary (SDK-aware, not just PATH) and the adb *serial* for a
+ * rail device id. For a booted emulator the rail id is the AVD name
+ * (`Pixel_7_API_34`), which `adb -s` does not understand.
+ */
+export type ResolveAndroidAdb = (deviceId: string) => Promise<{
+  command: string;
+  serial: string;
+}>;
+
+const defaultResolveAndroidAdb: ResolveAndroidAdb = async (deviceId) => ({
+  command: await getAdbCommand(),
+  serial: await resolveAndroidAdbSerial(deviceId),
+});
 
 type ProcessHandle = {
   child: {
@@ -40,6 +59,7 @@ type PacketCaptureServiceOptions = {
     options?: { env?: typeof process.env },
   ) => ProcessHandle;
   runCommandImpl?: typeof runCommand;
+  resolveAndroidAdb?: ResolveAndroidAdb;
   lifecycle?: MobilePreviewLifecycle;
   logger?: Pick<typeof console, 'error'>;
 };
@@ -150,10 +170,15 @@ function updateSession(
   };
 }
 
-async function buildPacketCaptureCommand(
-  params: MobilePreviewPacketCaptureStartParams,
-  runCommandImpl: typeof runCommand,
-): Promise<
+async function buildPacketCaptureCommand({
+  params,
+  runCommandImpl,
+  resolveAndroidAdb,
+}: {
+  params: MobilePreviewPacketCaptureStartParams;
+  runCommandImpl: typeof runCommand;
+  resolveAndroidAdb: ResolveAndroidAdb;
+}): Promise<
   | { command: string; args: string[]; status?: 'running'; error?: null }
   | { command: string; args: string[]; status: 'setup-needed'; error: string }
   | { command: string; args: string[]; status: 'errored'; error: string }
@@ -163,28 +188,22 @@ async function buildPacketCaptureCommand(
   }
 
   if (params.platform === 'android') {
+    const { command, serial } = await resolveAndroidAdb(params.deviceId);
+    const captureArgs = ['-s', serial, 'shell', 'tcpdump', '-l', '-n'];
+
     try {
-      await runCommandImpl('adb', [
-        '-s',
-        params.deviceId,
-        'shell',
-        'which',
-        'tcpdump',
-      ]);
+      await runCommandImpl(command, ['-s', serial, 'shell', 'which', 'tcpdump']);
     } catch {
       return {
-        command: 'adb',
-        args: ['-s', params.deviceId, 'shell', 'tcpdump', '-l', '-n'],
+        command,
+        args: captureArgs,
         status: 'setup-needed',
         error:
           'Android packet capture requires tcpdump on the device. Install tcpdump or provide a custom packet capture command.',
       };
     }
 
-    return {
-      command: 'adb',
-      args: ['-s', params.deviceId, 'shell', 'tcpdump', '-l', '-n'],
-    };
+    return { command, args: captureArgs };
   }
 
   if (params.platform === 'ios') {
@@ -206,6 +225,7 @@ async function buildPacketCaptureCommand(
 export function createMobilePreviewPacketCaptureService({
   spawnProcess = spawnManaged,
   runCommandImpl = runCommand,
+  resolveAndroidAdb = defaultResolveAndroidAdb,
   lifecycle,
   logger = console,
 }: PacketCaptureServiceOptions = {}) {
@@ -249,10 +269,11 @@ export function createMobilePreviewPacketCaptureService({
     async start(
       params: MobilePreviewPacketCaptureStartParams,
     ): Promise<MobilePreviewPacketCaptureSession> {
-      const { command, args, status, error } = await buildPacketCaptureCommand(
+      const { command, args, status, error } = await buildPacketCaptureCommand({
         params,
         runCommandImpl,
-      );
+        resolveAndroidAdb,
+      });
       let session = createSession({ params, command, args, status, error });
       if (session.status !== 'running') {
         emitSession(session);

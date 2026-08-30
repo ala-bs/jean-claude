@@ -57,10 +57,11 @@ export function getMobileBuildCommandId({
   platform: 'ios' | 'android';
   deviceId?: string;
 }) {
+  // Device-scoped on both platforms: a build targets exactly one simulator or
+  // handset, so two devices must not share one command id (and therefore one
+  // log stream / status).
   const baseId = `mobile-build:${encodeURIComponent(appPath || '.')}:${platform}`;
-  return platform === 'ios'
-    ? `${baseId}:${encodeURIComponent(deviceId || 'no-device')}`
-    : baseId;
+  return `${baseId}:${encodeURIComponent(deviceId || 'no-device')}`;
 }
 
 export function getIosBuildAttemptDecision({

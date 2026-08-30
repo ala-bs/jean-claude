@@ -6,7 +6,32 @@ import tls from 'node:tls';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  rememberPhysicalIosDevices,
+  resetKnownPhysicalIosDevicesForTests,
+} from './mobile-preview-ios-devicectl';
 import { createMobilePreviewNetworkProxyService } from './mobile-preview-network-proxy-service';
+
+const PHYSICAL_IOS_DEVICE_ID = 'D0C5D914-1111-2222-3333-444455556666';
+
+/**
+ * A CoreDevice identifier is UUID-shaped exactly like a CoreSimulator UDID, so
+ * the only way the service can tell them apart is the devicectl registry.
+ */
+function registerPhysicalIosDevice(id = PHYSICAL_IOS_DEVICE_ID) {
+  rememberPhysicalIosDevices({
+    devices: [
+      {
+        id,
+        name: "Patrick's iPhone",
+        platform: 'ios',
+        state: 'booted',
+        kind: 'physical',
+      },
+    ],
+    listingSucceeded: true,
+  });
+}
 
 const servers: http.Server[] = [];
 const services: Array<ReturnType<typeof createMobilePreviewNetworkProxyService>> =
@@ -45,6 +70,7 @@ function closeServer(server: http.Server) {
 afterEach(async () => {
   await Promise.all(services.splice(0).map((service) => service.stopAll()));
   await Promise.all(servers.splice(0).map(closeServer));
+  resetKnownPhysicalIosDevicesForTests();
 });
 
 describe('mobile preview network proxy service', () => {
@@ -198,6 +224,41 @@ describe('mobile preview network proxy service', () => {
       'packages',
       'com.example.app',
     ]);
+  });
+
+  it('surfaces the actionable reason for an unauthorized physical Android device', async () => {
+    const tempRoot = os.tmpdir();
+    await fs.mkdir(tempRoot, { recursive: true });
+    const tempDir = await fs.mkdtemp(
+      path.join(tempRoot, 'jc-proxy-unauthorized-'),
+    );
+    const gradlePath = path.join(tempDir, 'android', 'app', 'build.gradle');
+    await fs.mkdir(path.dirname(gradlePath), { recursive: true });
+    await fs.writeFile(gradlePath, 'android { applicationId "com.example.app" }');
+
+    const runCommandImpl = vi.fn(async (command: string, args: string[]) => {
+      const commandText = `${command} ${args.join(' ')}`;
+      if (commandText === 'adb devices -l') {
+        return {
+          stdout: 'List of devices attached\n1A2B3C4D unauthorized usb:1-2\n',
+          stderr: '',
+        };
+      }
+      throw new Error(`Unexpected command: ${commandText}`);
+    });
+    const service = createService({ runCommandImpl: runCommandImpl as never });
+    const params = {
+      projectPath: tempDir,
+      androidProjectPath: 'android',
+      deviceId: '1A2B3C4D',
+    };
+
+    await expect(service.getAndroidAppStatus(params)).rejects.toThrow(
+      'Accept the USB debugging prompt on the device.',
+    );
+    await expect(service.restartAndroidApp(params)).rejects.toThrow(
+      'Accept the USB debugging prompt on the device.',
+    );
   });
 
   it('forwards HTTP requests and emits captured request data', async () => {
@@ -381,6 +442,7 @@ describe('mobile preview network proxy service', () => {
     });
 
     expect(session.mode).toBe('android-emulator');
+    expect(session.proxyHost).toBe('10.0.2.2');
     expect(runCommandImpl).toHaveBeenCalledWith('adb', [
       '-s',
       'android-1',
@@ -590,6 +652,7 @@ describe('mobile preview network proxy service', () => {
     });
 
     expect(session.mode).toBe('ios-simulator');
+    expect(session.proxyHost).toBe('127.0.0.1');
     expect(runCommandImpl).toHaveBeenCalledWith('networksetup', [
       '-setwebproxy',
       'Wi-Fi',
@@ -921,5 +984,126 @@ describe('mobile preview network proxy service', () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it('returns manual install guidance instead of running simctl for physical iOS', async () => {
+    registerPhysicalIosDevice();
+    const tempRoot = os.tmpdir();
+    await fs.mkdir(tempRoot, { recursive: true });
+    const tempDir = await fs.mkdtemp(path.join(tempRoot, 'jc-proxy-ca-'));
+    const runCommandImpl = vi.fn(async (command: string, args: string[]) => {
+      if (command === 'openssl') {
+        await fs.writeFile(args[args.indexOf('-out') + 1], 'cert');
+        await fs.writeFile(args[args.indexOf('-keyout') + 1], 'key');
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const service = createService({ runCommandImpl, caDirectory: tempDir });
+
+    try {
+      const result = await service.installCertificate({
+        platform: 'ios',
+        deviceId: PHYSICAL_IOS_DEVICE_ID,
+      });
+
+      expect(result.installed).toBe(false);
+      expect(result.certPath).toBe(
+        path.join(tempDir, 'jean-claude-mobile-preview-ca.pem'),
+      );
+      expect(result.message).toContain(
+        "can't be installed automatically on a physical iOS device",
+      );
+      expect(result.message).toContain('VPN & Device Management');
+      expect(result.message).toContain('Certificate Trust Settings');
+      expect(result.message).toContain(result.certPath);
+      expect(runCommandImpl).not.toHaveBeenCalledWith(
+        'xcrun',
+        expect.anything(),
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('advertises the Mac LAN address for a physical iOS proxy session', async () => {
+    registerPhysicalIosDevice();
+    const runCommandImpl = vi.fn(async () => ({ stdout: '', stderr: '' }));
+    const service = createService({
+      runCommandImpl,
+      getLanAddressImpl: () => '192.168.1.42',
+    });
+
+    const session = await service.start({
+      projectPath: '/project',
+      appPath: '.',
+      platform: 'ios',
+      deviceId: PHYSICAL_IOS_DEVICE_ID,
+      port: 0,
+    });
+
+    expect(session.mode).toBe('ios-device');
+    expect(session.proxyHost).toBe('192.168.1.42');
+    // The Mac's own proxy settings are irrelevant to a real handset.
+    expect(runCommandImpl).not.toHaveBeenCalledWith(
+      'networksetup',
+      expect.anything(),
+    );
+  });
+
+  it('fails with actionable guidance when a physical iOS device has no LAN route', async () => {
+    registerPhysicalIosDevice();
+    const service = createService({
+      runCommandImpl: vi.fn(async () => ({ stdout: '', stderr: '' })),
+      getLanAddressImpl: () => null,
+    });
+
+    await expect(
+      service.start({
+        projectPath: '/project',
+        appPath: '.',
+        platform: 'ios',
+        deviceId: PHYSICAL_IOS_DEVICE_ID,
+        port: 0,
+      }),
+    ).rejects.toThrow('No LAN address found for this Mac');
+  });
+
+  it('keeps loopback routing for a simulator whose id looks like a CoreDevice id', async () => {
+    // Same UUID shape as a physical device, but not in the devicectl registry.
+    const runCommandImpl = vi.fn(async (command: string, args: string[]) => {
+      if (command === 'route') {
+        return { stdout: '   interface: en0\n', stderr: '' };
+      }
+      if (command === 'networksetup') {
+        if (args[0] === '-listallhardwareports') {
+          return {
+            stdout: ['Hardware Port: Wi-Fi', 'Device: en0'].join('\n'),
+            stderr: '',
+          };
+        }
+        if (args[0] === '-getwebproxy' || args[0] === '-getsecurewebproxy') {
+          return {
+            stdout: ['Enabled: No', 'Server:', 'Port: 0'].join('\n'),
+            stderr: '',
+          };
+        }
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const service = createService({
+      runCommandImpl,
+      getLanAddressImpl: () => '192.168.1.42',
+    });
+
+    const session = await service.start({
+      projectPath: '/project',
+      appPath: '.',
+      platform: 'ios',
+      deviceId: PHYSICAL_IOS_DEVICE_ID,
+      port: 0,
+    });
+
+    expect(session.mode).toBe('ios-simulator');
+    expect(session.proxyHost).toBe('127.0.0.1');
   });
 });

@@ -90,7 +90,11 @@ export function getSetupStepAction(
       disabled:
         !actionFacts.hasBuildCommand ||
         needsAppSelection ||
-        (platform === 'ios' && !deviceId) ||
+        // Both platforms scope the build command id by device now, so a build
+        // without a target device would write into a shared "no-device" stream.
+        // A physical device satisfies this as soon as it is connected.
+        !deviceId ||
+        (facts.selectedDeviceIsPhysical && !facts.selectedDeviceConnected) ||
         facts.normalizedBuildStatus === 'loading' ||
         facts.buildStarting ||
         facts.buildStopping,
@@ -111,10 +115,15 @@ export function getSetupStepAction(
   }
 
   if (stepKey === 'preview') {
+    // Physical iPhones have no capture path, so offering "Start" here would
+    // only produce an adapter error. The step itself explains why.
+    const physicalIosStreamingUnsupported =
+      platform === 'ios' && facts.selectedDeviceIsPhysical;
     return {
       label: facts.hasActiveSession ? 'Stop' : 'Start',
       intent: 'preview-toggle',
       disabled:
+        (physicalIosStreamingUnsupported && !facts.hasActiveSession) ||
         facts.isStopping ||
         (!facts.hasActiveSession &&
           (!deviceId ||

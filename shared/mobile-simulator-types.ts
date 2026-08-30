@@ -32,13 +32,55 @@ export type MobilePreviewStreamStrategy =
   | 'adb-screenshot'
   | 'scrcpy';
 
+/**
+ * `simulator` covers Android emulators (AVDs) and iOS simulators.
+ * `physical` covers real hardware reachable over USB/Wi-Fi (adb serials,
+ * CoreDevice/devicectl identifiers).
+ */
+export type MobilePreviewDeviceKind = 'simulator' | 'physical';
+
+/**
+ * Connection health for physical devices. Simulators are always `connected`
+ * when present.
+ * - `unauthorized`: adb pairing prompt not accepted on the handset
+ * - `unavailable`: paired but not currently reachable (devicectl), or adb `offline`
+ * - `untrusted`: iOS device not paired / Developer Mode disabled
+ */
+export type MobilePreviewDeviceConnection =
+  | 'connected'
+  | 'unauthorized'
+  | 'unavailable'
+  | 'untrusted';
+
 export type MobilePreviewDevice = {
   id: string;
   name: string;
   platform: MobilePlatform;
   state: 'booted' | 'shutdown' | 'unknown';
   osVersion?: string;
+  /** Defaults to `'simulator'` when absent (back-compat with older callers). */
+  kind?: MobilePreviewDeviceKind;
+  connection?: MobilePreviewDeviceConnection;
+  /** Model marketing name, e.g. "iPhone 14 Pro" / "Pixel 7". Physical devices only. */
+  model?: string;
+  /** Reason the device cannot currently be used for preview. */
+  unavailableReason?: string;
+  /**
+   * The transport-level identifier the platform CLI expects (adb serial for
+   * Android, e.g. `emulator-5554`); falls back to `id` when absent.
+   *
+   * Booted Android emulators are surfaced under their AVD name so the rail
+   * reads well, but `adb`/`react-native run-android --deviceId` need the
+   * serial.
+   */
+  connectionId?: string;
 };
+
+export function isPhysicalMobilePreviewDevice(
+  device: Pick<MobilePreviewDevice, 'kind'> | null | undefined,
+): boolean {
+  return device?.kind === 'physical';
+}
 
 export type MobilePreviewAndroidToolStatus = {
   hostArch: string;
@@ -331,7 +373,10 @@ export type MobilePreviewNetworkProxyStatus = 'running' | 'stopped' | 'errored';
 export type MobilePreviewNetworkProxyMode =
   | 'manual'
   | 'android-emulator'
-  | 'ios-simulator';
+  | 'ios-simulator'
+  // A physical iPhone routes through the Mac's LAN address, not its loopback,
+  // and the Mac's own proxy settings are irrelevant to it.
+  | 'ios-device';
 
 export type MobilePreviewNetworkCaptureSource =
   | 'proxied'
@@ -398,6 +443,13 @@ export type MobilePreviewNetworkProxyCertificate = {
   deviceId: string;
   certPath: string;
   installedAt: string;
+  /**
+   * `false` when the CA could not be pushed to the device automatically and the
+   * user has to install it by hand (physical iOS). `message` then carries the
+   * actionable instructions.
+   */
+  installed: boolean;
+  message: string | null;
 };
 
 export type MobilePreviewAndroidAppTrustParams = {

@@ -9,6 +9,18 @@ import { cleanPreviewError, formatError } from './utils-preview-error';
 
 export type PreviewStepStatus = 'idle' | 'running' | 'ready' | 'blocked' | 'error';
 
+/**
+ * Physical iPhones can be built to and launched, but not mirrored: there is no
+ * AVFoundation capture path, so the iOS adapter throws for physical devices.
+ * Say so plainly instead of surfacing that error.
+ */
+export const PHYSICAL_IOS_STREAMING_UNSUPPORTED_DETAIL =
+  'Live mirroring is not supported on a physical iPhone. Build, install and launch still work — watch the device itself.';
+
+/** Same, for physical iOS in the preview surface's empty state. */
+export const PHYSICAL_IOS_STREAMING_UNSUPPORTED_TITLE =
+  'Mirroring unavailable on this iPhone';
+
 export type PreviewStepKey =
   | 'app'
   | 'dependencies-install'
@@ -58,6 +70,18 @@ export type PreviewFacts = {
   selectedDeviceCanStart: boolean;
   activeSessionDeviceReady: boolean;
   selectedDevice: { name: string; state: MobilePreviewDevice['state'] } | null;
+  /** True when the selected device is real hardware rather than a simulator. */
+  selectedDeviceIsPhysical: boolean;
+  /** Physical devices only: whether the handset is reachable right now. */
+  selectedDeviceConnected: boolean;
+  /** Why the selected device cannot be used, straight from the adapter. */
+  selectedDeviceUnavailableReason: string | null;
+  /**
+   * Set when the configured build command could not be pointed at the selected
+   * physical device (unrecognised custom command). See
+   * `utils-device-build-command`.
+   */
+  buildCommandDeviceNotice: string | null;
 
   // stream session
   sessionStatus: string | undefined;
@@ -167,6 +191,15 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
     iosBuildVerificationFailed,
   } = derived;
 
+  // A physical handset that is not reachable blocks everything downstream of
+  // the device step: there is nothing to install onto and nothing to stream.
+  const physicalDeviceUnreachable =
+    facts.selectedDeviceIsPhysical && !facts.selectedDeviceConnected;
+  const physicalDeviceDetail =
+    facts.selectedDeviceUnavailableReason ?? 'Device not connected';
+  const physicalIosStreamingUnsupported =
+    facts.selectedDeviceIsPhysical && platform === 'ios';
+
   const setupSteps: PreviewStepView[] = [
     {
       key: 'app',
@@ -201,7 +234,11 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
       label: 'Device ready',
       status: deviceReady ? 'ready' : deviceId ? 'blocked' : 'idle',
       detail: facts.selectedDevice
-        ? `${facts.selectedDevice.name} · ${facts.formatDeviceState(facts.selectedDevice.state)}`
+        ? facts.selectedDeviceIsPhysical
+          ? `${facts.selectedDevice.name} · ${
+              facts.selectedDeviceConnected ? 'Connected' : physicalDeviceDetail
+            }`
+          : `${facts.selectedDevice.name} · ${facts.formatDeviceState(facts.selectedDevice.state)}`
         : facts.activeSessionDeviceReady
           ? `${deviceId} · active preview session`
           : 'Select booted device',
@@ -231,7 +268,9 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
           {
             key: 'install' as const,
             label: 'App installed',
-            status: (facts.iosAppStatusError
+            status: (physicalDeviceUnreachable
+              ? 'blocked'
+              : facts.iosAppStatusError
               ? 'error'
               : facts.isIosAppStatusLoading ||
                   facts.normalizedBuildStatus === 'loading' ||
@@ -243,8 +282,10 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
                   : appNeedsBuild
                     ? 'blocked'
                     : 'idle') as PreviewStepStatus,
-            detail:
-              platform === 'android'
+            detail: physicalDeviceUnreachable
+              ? physicalDeviceDetail
+              : (facts.buildCommandDeviceNotice ??
+                (platform === 'android'
                 ? facts.androidAppStatus?.packageName
                   ? androidAppInstalled
                     ? `${facts.androidAppStatus.packageName} · installed`
@@ -264,7 +305,7 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
                           ? 'Build completed, but bundle id is still unresolved'
                           : facts.normalizedBuildStatus === 'errored'
                             ? 'Build failed; check iOS build logs'
-                            : 'Bundle id not detected; build required',
+                            : 'Bundle id not detected; build required')),
             tab: 'dev-server' as const,
           },
         ]
@@ -280,15 +321,27 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
           : 'Not started',
       tab: 'dev-server',
     },
-    {
-      key: 'preview',
-      label: 'Preview streaming',
-      status: previewStatus,
-      detail:
-        facts.previewMethodText ??
-        (previewStatus === 'running' ? 'Starting stream...' : 'Not started'),
-      tab: null,
-    },
+    // Physical iOS has no capture path, so streaming is not part of that
+    // target's setup at all — build, install and launch *are* the complete
+    // working setup there. A step that could never reach `ready` would make a
+    // correctly-running workspace look permanently broken. The explanation
+    // lives on the preview surface instead (see
+    // PHYSICAL_IOS_STREAMING_UNSUPPORTED_DETAIL).
+    ...(physicalIosStreamingUnsupported
+      ? []
+      : [
+          {
+            key: 'preview' as const,
+            label: 'Preview streaming',
+            status: previewStatus,
+            detail:
+              facts.previewMethodText ??
+              (previewStatus === 'running'
+                ? 'Starting stream...'
+                : 'Not started'),
+            tab: null,
+          },
+        ]),
     ...(autoStartProxy
       ? [
           {
@@ -405,7 +458,9 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
         ? 'Resume mobile debug'
         : 'Debug this app end-to-end';
   const setupDetail = allSetupReady
-    ? autoStartProxy
+    ? physicalIosStreamingUnsupported
+      ? `The app is built, installed and launched on this iPhone. ${PHYSICAL_IOS_STREAMING_UNSUPPORTED_DETAIL}`
+      : autoStartProxy
       ? 'Preview, Metro, proxy, and HTTPS decrypt are live.'
       : 'Preview and Metro are live. Proxy stays manual.'
     : nextSetupStep

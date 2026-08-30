@@ -1544,6 +1544,10 @@ export interface Api {
     openDevMenu: (params: MobilePreviewOpenDevMenuParams) => Promise<void>;
     reloadExpo: (params: MobilePreviewReloadExpoParams) => Promise<void>;
     forwardPort: (params: MobilePreviewForwardPortParams) => Promise<void>;
+    ensureMetroReverse: (params: {
+      deviceId: string;
+      metroPort: number;
+    }) => Promise<{ reversed: boolean; alreadyPresent: boolean }>;
     setTextSize: (params: MobilePreviewSetTextSizeParams) => Promise<void>;
     setColorScheme: (
       sessionId: string,
@@ -2778,6 +2782,10 @@ export const api: Api = hasWindowApi
         openDevMenu: async () => {},
         reloadExpo: async () => {},
         forwardPort: async () => {},
+        ensureMetroReverse: async () => ({
+          reversed: false,
+          alreadyPresent: false,
+        }),
         setTextSize: async () => {},
         setColorScheme: async () => {},
         rotate: async () => {},

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { baseDerived, baseFacts } from './utils-preview-fixtures';
 import {
   getSetupModel,
+  PHYSICAL_IOS_STREAMING_UNSUPPORTED_DETAIL,
   type PreviewDerived,
   type PreviewFacts,
   type PreviewStepKey,
@@ -328,5 +329,152 @@ describe('getSetupModel — summary', () => {
       { httpsStatus: 'ready', deviceReady: false },
     );
     expect(result.setupDetail).not.toContain('[object Object]');
+  });
+});
+
+describe('getSetupModel — physical devices', () => {
+  const connectedIphone: Partial<PreviewFacts> = {
+    platform: 'ios',
+    selectedDevice: { name: "Pat's iPhone", state: 'booted' },
+    selectedDeviceIsPhysical: true,
+    selectedDeviceConnected: true,
+  };
+  const unreachableIphone: Partial<PreviewFacts> = {
+    ...connectedIphone,
+    selectedDeviceConnected: false,
+    selectedDeviceUnavailableReason: 'Device is locked; unlock to continue',
+  };
+
+  it('marks a connected physical device ready and says "Connected"', () => {
+    const deviceStep = step(
+      'device',
+      connectedIphone,
+      { deviceReady: true },
+    );
+    expect(deviceStep.status).toBe('ready');
+    expect(deviceStep.detail).toBe("Pat's iPhone · Connected");
+  });
+
+  it('lets the install step reach ready on a connected physical device', () => {
+    const installStep = step(
+      'install',
+      { ...connectedIphone, iosAppStatus: { bundleId: 'com.acme.app' } as never },
+      { deviceReady: true, selectedAppInstalled: true },
+    );
+    expect(installStep.status).toBe('ready');
+    expect(installStep.detail).toBe('com.acme.app · installed');
+  });
+
+  it('blocks the install step with the unavailable reason when not connected', () => {
+    const installStep = step(
+      'install',
+      unreachableIphone,
+      { deviceReady: false, selectedAppInstalled: true },
+    );
+    expect(installStep.status).toBe('blocked');
+    expect(installStep.detail).toBe('Device is locked; unlock to continue');
+  });
+
+  it('blocks the device step with the unavailable reason when not connected', () => {
+    const deviceStep = step('device', unreachableIphone, { deviceReady: false });
+    expect(deviceStep.status).toBe('blocked');
+    expect(deviceStep.detail).toBe(
+      "Pat's iPhone · Device is locked; unlock to continue",
+    );
+  });
+
+  it('falls back to generic copy when no unavailable reason is given', () => {
+    const deviceStep = step(
+      'device',
+      { ...connectedIphone, selectedDeviceConnected: false },
+      { deviceReady: false },
+    );
+    expect(deviceStep.detail).toBe("Pat's iPhone · Device not connected");
+  });
+
+  it('surfaces the build-command notice on the install step', () => {
+    const installStep = step(
+      'install',
+      { ...connectedIphone, buildCommandDeviceNotice: 'Add {{device}} yourself' },
+      { deviceReady: true, selectedAppInstalled: true },
+    );
+    expect(installStep.detail).toBe('Add {{device}} yourself');
+  });
+
+  it('drops the preview step entirely for a physical iPhone', () => {
+    expect(keys(connectedIphone, { deviceReady: true })).toEqual([
+      'app',
+      'dependencies-install',
+      'device',
+      'install',
+      'metro',
+    ]);
+    expect(() => step('preview', connectedIphone, { deviceReady: true })).toThrow(
+      'step preview not present',
+    );
+  });
+
+  it('lets a built and launched physical iPhone read as fully ready', () => {
+    const result = model(connectedIphone, {
+      deviceReady: true,
+      selectedAppInstalled: true,
+      metroStatus: 'ready',
+    });
+    expect(result.allSetupReady).toBe(true);
+    expect(result.nextSetupStep).toBeNull();
+    expect(result.ctaLabel).toBe('Workspace ready');
+    expect(result.setupHeadline).toBe('Workspace ready');
+    // The explanation is not lost: it moves into the ready summary (and onto
+    // the preview surface's empty state).
+    expect(result.setupDetail).toContain(
+      PHYSICAL_IOS_STREAMING_UNSUPPORTED_DETAIL,
+    );
+  });
+
+  it('does not report a preview step as the next action on a physical iPhone', () => {
+    const result = model(connectedIphone, {
+      deviceReady: true,
+      selectedAppInstalled: false,
+      appNeedsBuild: true,
+    });
+    expect(result.nextSetupStep?.key).toBe('install');
+    expect(result.missingSetupLabels).not.toContain('Preview streaming');
+  });
+
+  it('keeps the preview step for a physical Android device', () => {
+    expect(
+      keys(
+        {
+          platform: 'android',
+          selectedDeviceIsPhysical: true,
+          selectedDeviceConnected: true,
+        },
+        { deviceReady: true },
+      ),
+    ).toContain('preview');
+  });
+
+  it('keeps physical Android streaming supported', () => {
+    const previewStep = step(
+      'preview',
+      {
+        platform: 'android',
+        selectedDevice: { name: 'Pixel 7', state: 'booted' },
+        selectedDeviceIsPhysical: true,
+        selectedDeviceConnected: true,
+        previewMethodText: 'scrcpy',
+      },
+      { deviceReady: true, previewStatus: 'ready' },
+    );
+    expect(previewStep.status).toBe('ready');
+    expect(previewStep.detail).toBe('scrcpy');
+  });
+
+  it('does not change any simulator step', () => {
+    const deviceStep = step('device');
+    expect(deviceStep.status).toBe('ready');
+    expect(deviceStep.detail).toBe('iPhone 15 · booted');
+    expect(step('preview').status).toBe('idle');
+    expect(keys()).toContain('preview');
   });
 });

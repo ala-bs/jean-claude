@@ -78,6 +78,10 @@ function createRecordingPort(
       undefined,
     ),
     setAndroidAppStatus: record('setAndroidAppStatus', undefined),
+    ensureMetroReverse: record('ensureMetroReverse', Promise.resolve({
+      reversed: true,
+      alreadyPresent: false,
+    })),
     ...overrides,
   } as unknown as PreviewPort;
 
@@ -146,6 +150,7 @@ const baseFacts: RunWorkspaceSetupFacts = {
   buildCommand: 'gradlew installDebug',
   buildRunning: false,
   buildStarting: false,
+  selectedDeviceIsPhysical: false,
 
   androidAppMissing: false,
   androidTrustConfigured: true,
@@ -670,5 +675,110 @@ describe('runWorkspaceSetup', () => {
     expect(names()).toEqual(['stopNetworkProxy', 'setInputNotice']);
     expect(calls[1].args).toEqual(['cert boom']);
     expect(coordinator.complete).toHaveBeenCalledWith(operation);
+  });
+
+  it('surfaces manual certificate guidance as a notice without failing setup', async () => {
+    // Physical iOS: the port returns install instructions instead of throwing.
+    const { port, calls, names } = createRecordingPort({
+      installCertificate: (() =>
+        Promise.resolve({
+          message: 'Install the profile on the device.',
+        })) as PreviewPort['installCertificate'],
+    });
+    const { coordinator } = createFakeCoordinator();
+    await run({
+      facts: {
+        platform: 'ios',
+        selectedDeviceIsPhysical: true,
+        session: { id: 'session-1', platform: 'ios', deviceId: 'device-1' },
+        networkCertificateInstalled: false,
+      },
+      port,
+      coordinator,
+    });
+    expect(names()).not.toContain('setInputNotice');
+    // The overridden `installCertificate` stub is not recorded by name.
+    expect(names()).toEqual([
+      'stopNetworkProxy',
+      'showActionNotice',
+      'setEnableNetworkMitm',
+      'startNetworkProxy',
+    ]);
+    expect(calls[1].args).toEqual(['Install the profile on the device.']);
+  });
+});
+
+describe('runWorkspaceSetup — physical devices', () => {
+  it('reverses the Metro port for a physical Android device', async () => {
+    const { port, calls, names } = createRecordingPort();
+    const { coordinator } = createFakeCoordinator();
+    await run({
+      facts: { selectedDeviceIsPhysical: true, configuredDevServerPort: 8082 },
+      port,
+      coordinator,
+    });
+    expect(names()).toContain('ensureMetroReverse');
+    const reverse = calls.find((call) => call.name === 'ensureMetroReverse');
+    expect(reverse?.args[0]).toEqual({ deviceId: 'device-1', metroPort: 8082 });
+  });
+
+  it('never reverses the Metro port for an emulator', async () => {
+    const { port, names } = createRecordingPort();
+    const { coordinator } = createFakeCoordinator();
+    await run({ port, coordinator });
+    expect(names()).not.toContain('ensureMetroReverse');
+  });
+
+  it('never reverses the Metro port on iOS', async () => {
+    const { port, names } = createRecordingPort();
+    const { coordinator } = createFakeCoordinator();
+    await run({
+      facts: {
+        platform: 'ios',
+        selectedDeviceIsPhysical: true,
+        session: { id: 'session-1', platform: 'ios', deviceId: 'device-1' },
+      },
+      port,
+      coordinator,
+    });
+    expect(names()).not.toContain('ensureMetroReverse');
+  });
+
+  it('skips the preview stream but still builds on a physical iPhone', async () => {
+    const { port, names } = createRecordingPort();
+    const { coordinator } = createFakeCoordinator();
+    const { iosBuildCoordinator, launched } = createFakeIosBuildCoordinator();
+    await run({
+      facts: {
+        platform: 'ios',
+        selectedDeviceIsPhysical: true,
+        hasActiveSession: false,
+        session: null,
+        autoStartProxy: false,
+        buildCommand: 'npx expo run:ios --device abc',
+      },
+      port,
+      coordinator,
+      iosBuildCoordinator,
+      options: { shouldAutoBuildIos: true },
+    });
+    expect(names()).not.toContain('startPreviewSession');
+    expect(coordinator.waitForFrame).not.toHaveBeenCalled();
+    expect(launched).toEqual(['build-id']);
+  });
+
+  it('still opens a preview stream for a physical Android device', async () => {
+    const { port, names } = createRecordingPort();
+    const { coordinator } = createFakeCoordinator();
+    await run({
+      facts: {
+        selectedDeviceIsPhysical: true,
+        hasActiveSession: false,
+        session: null,
+      },
+      port,
+      coordinator,
+    });
+    expect(names()).toContain('startPreviewSession');
   });
 });

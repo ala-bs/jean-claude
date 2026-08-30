@@ -12,10 +12,36 @@ import type {
 } from '@shared/mobile-simulator-types';
 
 import {
+  getAdbCommand,
+  resolveAndroidAdbSerial,
+} from './mobile-preview-android-adapter';
+import {
   type MobilePreviewLifecycle,
   registerBeforeQuitCleanup,
 } from './mobile-preview-lifecycle';
+import { assertSimulatorOnlyIosDeviceAsync } from './mobile-preview-ios-devicectl';
 import { spawnManaged } from './mobile-preview-process';
+
+/**
+ * Resolves the adb binary (SDK-aware, not just PATH) and the adb *serial* for a
+ * rail device id. For a booted emulator the rail id is the AVD name
+ * (`Pixel_7_API_34`), which `adb -s` does not understand.
+ */
+export type ResolveAndroidAdb = (deviceId: string) => Promise<{
+  command: string;
+  serial: string;
+}>;
+
+/** Throws when `deviceId` is a physical iOS device (simctl cannot see it). */
+export type AssertSimulatorOnlyIos = (params: {
+  deviceId: string;
+  capability: string;
+}) => Promise<void>;
+
+const defaultResolveAndroidAdb: ResolveAndroidAdb = async (deviceId) => ({
+  command: await getAdbCommand(),
+  serial: await resolveAndroidAdbSerial(deviceId),
+});
 
 type ProcessHandle = {
   child: {
@@ -40,6 +66,8 @@ type NativeLogServiceOptions = {
     args: string[],
     options?: { env?: typeof process.env },
   ) => ProcessHandle;
+  resolveAndroidAdb?: ResolveAndroidAdb;
+  assertSimulatorOnlyIos?: AssertSimulatorOnlyIos;
   lifecycle?: MobilePreviewLifecycle;
   logger?: Pick<typeof console, 'error'>;
 };
@@ -52,11 +80,22 @@ function formatCommand(command: string, args: string[]) {
   return [command, ...args].join(' ');
 }
 
-export function buildNativeLogCommand(
-  platform: MobilePlatform,
-  deviceId: string,
-) {
+export async function buildNativeLogCommand({
+  platform,
+  deviceId,
+  resolveAndroidAdb = defaultResolveAndroidAdb,
+  assertSimulatorOnlyIos = assertSimulatorOnlyIosDeviceAsync,
+}: {
+  platform: MobilePlatform;
+  deviceId: string;
+  resolveAndroidAdb?: ResolveAndroidAdb;
+  assertSimulatorOnlyIos?: AssertSimulatorOnlyIos;
+}): Promise<{ command: string; args: string[] }> {
   if (platform === 'ios') {
+    // `simctl spawn` only resolves CoreSimulator UDIDs. A physical iPhone id is
+    // a CoreDevice identifier, also UUID-shaped, so the id format proves
+    // nothing and the registry check is the only reliable guard.
+    await assertSimulatorOnlyIos({ deviceId, capability: 'Native logs' });
     return {
       command: 'xcrun',
       args: [
@@ -73,9 +112,10 @@ export function buildNativeLogCommand(
     };
   }
 
+  const { command, serial } = await resolveAndroidAdb(deviceId);
   return {
-    command: 'adb',
-    args: ['-s', deviceId, 'logcat', '-v', 'time'],
+    command,
+    args: ['-s', serial, 'logcat', '-v', 'time'],
   };
 }
 
@@ -112,6 +152,8 @@ function updateSession(
 
 export function createMobilePreviewNativeLogService({
   spawnProcess = spawnManaged,
+  resolveAndroidAdb = defaultResolveAndroidAdb,
+  assertSimulatorOnlyIos = assertSimulatorOnlyIosDeviceAsync,
   lifecycle,
   logger = console,
 }: NativeLogServiceOptions = {}) {
@@ -157,16 +199,18 @@ export function createMobilePreviewNativeLogService({
       return () => logListeners.delete(listener);
     },
 
-    start(
+    async start(
       params: MobilePreviewNativeLogStartParams,
-    ): MobilePreviewNativeLogSession {
+    ): Promise<MobilePreviewNativeLogSession> {
       const existing = findSession(params);
       if (existing) return existing.session;
 
-      const { command, args } = buildNativeLogCommand(
-        params.platform,
-        params.deviceId,
-      );
+      const { command, args } = await buildNativeLogCommand({
+        platform: params.platform,
+        deviceId: params.deviceId,
+        resolveAndroidAdb,
+        assertSimulatorOnlyIos,
+      });
       let session = createSession({
         platform: params.platform,
         deviceId: params.deviceId,

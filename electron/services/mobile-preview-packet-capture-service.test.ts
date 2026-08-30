@@ -23,6 +23,17 @@ function createChild() {
   return child;
 }
 
+/**
+ * Booted emulators are listed by AVD name on the device rail, so the incoming
+ * deviceId is not an adb serial. Mirrors resolveAndroidAdbSerial's mapping.
+ */
+function createResolveAndroidAdb() {
+  return vi.fn(async (deviceId: string) => ({
+    command: '/sdk/platform-tools/adb',
+    serial: deviceId === 'Pixel_7_API_34' ? 'emulator-5554' : deviceId,
+  }));
+}
+
 describe('mobile preview packet capture service', () => {
   it('starts packet capture with the chosen command', async () => {
     const child = createChild();
@@ -74,6 +85,7 @@ describe('mobile preview packet capture service', () => {
     const service = createMobilePreviewPacketCaptureService({
       spawnProcess,
       runCommandImpl,
+      resolveAndroidAdb: createResolveAndroidAdb(),
     });
 
     const session = await service.start({
@@ -83,18 +95,63 @@ describe('mobile preview packet capture service', () => {
 
     expect(session.status).toBe('running');
     expect(session.command).toBe(
-      'adb -s device-1 shell tcpdump -l -n',
+      '/sdk/platform-tools/adb -s device-1 shell tcpdump -l -n',
     );
-    expect(runCommandImpl).toHaveBeenCalledWith('adb', [
+    expect(runCommandImpl).toHaveBeenCalledWith('/sdk/platform-tools/adb', [
       '-s',
       'device-1',
       'shell',
       'which',
       'tcpdump',
     ]);
-    expect(spawnProcess).toHaveBeenCalledWith('adb', [
+    expect(spawnProcess).toHaveBeenCalledWith('/sdk/platform-tools/adb', [
       '-s',
       'device-1',
+      'shell',
+      'tcpdump',
+      '-l',
+      '-n',
+    ], expect.objectContaining({ env: expect.any(Object) }));
+  });
+
+  it('resolves the adb serial for a booted emulator listed by AVD name', async () => {
+    const child = createChild();
+    const spawnProcess = vi.fn(() => ({
+      child,
+      stop: vi.fn(async () => {
+        child.kill('SIGTERM');
+      }),
+    }));
+    const runCommandImpl = vi.fn(async () => ({
+      stdout: '/system/bin/tcpdump\n',
+      stderr: '',
+    }));
+    const resolveAndroidAdb = createResolveAndroidAdb();
+    const service = createMobilePreviewPacketCaptureService({
+      spawnProcess,
+      runCommandImpl,
+      resolveAndroidAdb,
+    });
+
+    const session = await service.start({
+      platform: 'android',
+      deviceId: 'Pixel_7_API_34',
+    });
+
+    expect(resolveAndroidAdb).toHaveBeenCalledWith('Pixel_7_API_34');
+    expect(session.command).toBe(
+      '/sdk/platform-tools/adb -s emulator-5554 shell tcpdump -l -n',
+    );
+    expect(runCommandImpl).toHaveBeenCalledWith('/sdk/platform-tools/adb', [
+      '-s',
+      'emulator-5554',
+      'shell',
+      'which',
+      'tcpdump',
+    ]);
+    expect(spawnProcess).toHaveBeenCalledWith('/sdk/platform-tools/adb', [
+      '-s',
+      'emulator-5554',
       'shell',
       'tcpdump',
       '-l',
@@ -110,6 +167,7 @@ describe('mobile preview packet capture service', () => {
     const service = createMobilePreviewPacketCaptureService({
       spawnProcess,
       runCommandImpl,
+      resolveAndroidAdb: createResolveAndroidAdb(),
     });
     const sessions: string[] = [];
     service.onSession((event) => {
@@ -123,7 +181,7 @@ describe('mobile preview packet capture service', () => {
 
     expect(session.status).toBe('setup-needed');
     expect(session.command).toBe(
-      'adb -s device-1 shell tcpdump -l -n',
+      '/sdk/platform-tools/adb -s device-1 shell tcpdump -l -n',
     );
     expect(session.error).toContain('requires tcpdump');
     expect(spawnProcess).not.toHaveBeenCalled();

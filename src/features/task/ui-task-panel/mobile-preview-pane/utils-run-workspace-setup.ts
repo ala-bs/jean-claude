@@ -68,6 +68,15 @@ export type PreviewPort = {
   startAdHocCommand: (params: AdHocCommandParams) => Promise<unknown>;
   stopCommand: (runCommandId: string) => Promise<unknown>;
 
+  /**
+   * `adb reverse tcp:<port> tcp:<port>` so a physical handset can reach Metro
+   * on the Mac. Idempotent and safe to call repeatedly; physical Android only.
+   */
+  ensureMetroReverse: (params: {
+    deviceId: string;
+    metroPort: number;
+  }) => Promise<unknown>;
+
   // preview stream session
   startPreviewSession: (
     params: Omit<MobilePreviewStartParams, 'taskId'>,
@@ -81,7 +90,7 @@ export type PreviewPort = {
   installCertificate: (params: {
     platform: MobilePlatform;
     deviceId: string;
-  }) => Promise<unknown>;
+  }) => Promise<{ message?: string | null } | undefined>;
   prepareAndroidAppTrust: (params: {
     projectId: string;
     taskId: string;
@@ -127,6 +136,7 @@ export type RunWorkspaceSetupFacts = Pick<
   | 'buildStarting'
   | 'networkStatus'
   | 'networkCertificateInstalled'
+  | 'selectedDeviceIsPhysical'
 > & {
   // derived values the pane already computes
   deviceReady: boolean;
@@ -294,8 +304,27 @@ export async function runWorkspaceSetup({
         .catch(reportBackgroundFailure('Mobile dev server'));
     }
 
+    // A physical handset has no route to `localhost` on the Mac, so Metro is
+    // unreachable until adb reverses the port. Idempotent, so it is fine that
+    // this runs on every setup pass; failures are advisory only (the user may
+    // be on the same LAN and not need it).
+    if (platform === 'android' && facts.selectedDeviceIsPhysical) {
+      void port
+        .ensureMetroReverse({
+          deviceId,
+          metroPort: facts.configuredDevServerPort,
+        })
+        .catch(reportBackgroundFailure('Metro port forwarding'));
+    }
+
+    // Physical iOS has no capture path (the iOS adapter throws for it), so the
+    // whole streaming section is skipped. Build, install and launch — which do
+    // work on real hardware — still run below.
+    const skipPreviewStream = platform === 'ios' && facts.selectedDeviceIsPhysical;
+
     let setupSessionId = facts.session?.id ?? null;
     if (
+      !skipPreviewStream &&
       facts.hasActiveSession &&
       (!facts.session ||
         facts.session.platform !== platform ||
@@ -304,7 +333,7 @@ export async function runWorkspaceSetup({
       setupCoordinator.cancel();
       return 'session-device-mismatch';
     }
-    if (!facts.hasActiveSession) {
+    if (!skipPreviewStream && !facts.hasActiveSession) {
       const startedSession = await port.startPreviewSession({
         projectPath: facts.effectiveProjectPath,
         platform,
@@ -327,13 +356,14 @@ export async function runWorkspaceSetup({
     }
 
     if (
-      !setupSessionId ||
-      !setupCoordinator.bindSession(setupOperation, setupSessionId)
+      !skipPreviewStream &&
+      (!setupSessionId ||
+        !setupCoordinator.bindSession(setupOperation, setupSessionId))
     ) {
       return 'session-not-bound';
     }
 
-    if (platform === 'ios') {
+    if (platform === 'ios' && !skipPreviewStream && setupSessionId) {
       const frameResult = await setupCoordinator.waitForFrame(
         setupOperation,
         setupSessionId,
@@ -433,7 +463,13 @@ export async function runWorkspaceSetup({
       if (!setupCoordinator.isCurrent(setupOperation)) {
         return 'operation-superseded';
       }
-      await port.installCertificate({ platform, deviceId });
+      // Physical iOS cannot have the CA pushed automatically; the port returns
+      // install instructions instead of throwing, so surface them as a notice
+      // rather than failing the whole setup run.
+      const certificate = await port.installCertificate({ platform, deviceId });
+      if (certificate?.message) {
+        port.showActionNotice(certificate.message);
+      }
       if (!setupCoordinator.isCurrent(setupOperation)) {
         return 'operation-superseded';
       }
