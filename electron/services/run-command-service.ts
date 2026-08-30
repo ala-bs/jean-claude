@@ -47,6 +47,13 @@ const RUN_COMMAND_ENV_SOURCE_KEYS = new Set(
 type ProcessSignal = 'SIGINT' | 'SIGTERM' | 'SIGKILL';
 
 /**
+ * How long a process gets to shut down cleanly after SIGTERM before we escalate
+ * to SIGKILL. Dev servers and build tools often need a couple of seconds to
+ * flush state and tear down child processes.
+ */
+const SIGTERM_GRACE_MS = 5000;
+
+/**
  * A port-conflict override rewrites the command with `--port <n>` (or sets an
  * env var). Prefer that port over the declared one so status consumers point at
  * the server that actually came up.
@@ -1466,7 +1473,10 @@ export class RunCommandService {
           tracked.command,
         );
         signalProcessGroupOrProcess(pid, 'SIGTERM');
-        exited = await this.waitForExit({ tracked, timeoutMs: 1500 });
+        exited = await this.waitForExit({
+          tracked,
+          timeoutMs: SIGTERM_GRACE_MS,
+        });
 
         if (!exited) {
           dbg.runCommand(
