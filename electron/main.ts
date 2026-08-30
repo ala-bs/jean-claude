@@ -47,7 +47,6 @@ import { createReloadPreviewReadinessRegistrar } from './services/reload-preview
 import { dbg } from './lib/debug';
 import { killOrphanedCoreSimulatorHelpers } from './services/mobile-preview-ios-idb-adapter';
 import { migrateDatabase } from './database';
-import { mobilePreviewNetworkProxyService } from './services/mobile-preview-network-proxy-service';
 import { pipelineTrackingService } from './services/pipeline-tracking-service';
 import { rawMessageCleanupService } from './services/raw-message-cleanup-service';
 import { registerIpcHandlers } from './ipc/handlers';
@@ -641,8 +640,6 @@ app.on('before-quit', (event) => {
           // registry must not quit while agents/DB writes are still in flight.
           await runBeforeQuitCleanups();
           dbg.main('Mobile preview sessions stopped');
-          await mobilePreviewNetworkProxyService.stopAll();
-          dbg.main('Mobile preview network proxies stopped');
         })(),
         QUIT_CLEANUP_TIMEOUT_MS,
       );

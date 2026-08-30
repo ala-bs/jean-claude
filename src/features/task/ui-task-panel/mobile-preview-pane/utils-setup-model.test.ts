@@ -34,7 +34,7 @@ function step(
 }
 
 describe('getSetupModel — which steps are present', () => {
-  it('shows the base steps with proxy disabled', () => {
+  it('shows the base steps', () => {
     expect(keys()).toEqual([
       'app',
       'dependencies-install',
@@ -45,30 +45,8 @@ describe('getSetupModel — which steps are present', () => {
     ]);
   });
 
-  it('adds proxy and https when autoStartProxy is on', () => {
-    expect(keys({ autoStartProxy: true })).toContain('proxy');
-    expect(keys({ autoStartProxy: true })).toContain('https');
-  });
-
-  it('omits proxy and https when autoStartProxy is off', () => {
-    expect(keys()).not.toContain('proxy');
-    expect(keys()).not.toContain('https');
-  });
-
   it('adds prebuild for ios when an ios prebuild is needed', () => {
     expect(keys({}, { needsExpoIosPrebuild: true })).toContain('prebuild');
-  });
-
-  it('adds prebuild for android only when the proxy is auto-started', () => {
-    expect(
-      keys({ platform: 'android' }, { needsExpoAndroidPrebuild: true }),
-    ).not.toContain('prebuild');
-    expect(
-      keys(
-        { platform: 'android', autoStartProxy: true },
-        { needsExpoAndroidPrebuild: true },
-      ),
-    ).toContain('prebuild');
   });
 
   it('omits the install step on android without a resolved project path', () => {
@@ -157,81 +135,6 @@ describe('getSetupModel — step statuses', () => {
     expect(step('preview').detail).toBe('Not started');
   });
 
-  it('surfaces proxy errors in the proxy step', () => {
-    const proxy = step('proxy', {
-      autoStartProxy: true,
-      networkProxyErrorRaw: new Error('proxy exploded'),
-    });
-    expect(proxy.status).toBe('idle');
-    expect(String(proxy.detail)).toContain('proxy exploded');
-  });
-
-  it('shows the proxy url when running', () => {
-    expect(
-      step('proxy', {
-        autoStartProxy: true,
-        networkStatus: 'running',
-        networkSessionProxyUrl: 'http://127.0.0.1:9090',
-      }).detail,
-    ).toBe('http://127.0.0.1:9090');
-  });
-});
-
-describe('getSetupModel — https step detail is a descriptor, never JSX', () => {
-  it('returns the network-request-count descriptor when ready', () => {
-    expect(step('https', { autoStartProxy: true }, { httpsStatus: 'ready' }).detail).toEqual({
-      kind: 'network-request-count',
-    });
-  });
-
-  it('explains android trust when blocked', () => {
-    expect(
-      step(
-        'https',
-        { autoStartProxy: true, platform: 'android' },
-        {
-          httpsStatus: 'blocked',
-          effectiveAndroidProjectPath: 'apps/mobile/android',
-          androidTrustConfigured: true,
-        },
-      ).detail,
-    ).toBe('Build and install app on device');
-
-    expect(
-      step(
-        'https',
-        { autoStartProxy: true, platform: 'android' },
-        {
-          httpsStatus: 'blocked',
-          effectiveAndroidProjectPath: 'apps/mobile/android',
-          androidTrustConfigured: false,
-        },
-      ).detail,
-    ).toBe('Rebuild app so debug trust config applies');
-
-    expect(
-      step(
-        'https',
-        { autoStartProxy: true, platform: 'android' },
-        { httpsStatus: 'blocked', effectiveAndroidProjectPath: null },
-      ).detail,
-    ).toBe('Set Android project folder in project settings');
-  });
-
-  it('guides certificate install when not yet installed', () => {
-    expect(
-      step('https', { autoStartProxy: true, networkCertificateInstalled: false }).detail,
-    ).toBe('Install CA certificate to decrypt HTTPS');
-
-    expect(
-      step('https', {
-        autoStartProxy: true,
-        platform: 'android',
-        networkCertificateInstalled: false,
-        androidCertGuidanceVisible: true,
-      }).detail,
-    ).toBe('Finish CA install on Android, then restart app');
-  });
 });
 
 describe('getSetupModel — summary', () => {
@@ -248,7 +151,7 @@ describe('getSetupModel — summary', () => {
     expect(result.ctaLabel).toBe('Workspace ready');
     expect(result.ctaDisabled).toBe(true);
     expect(result.setupHeadline).toBe('Workspace ready');
-    expect(result.setupDetail).toBe('Preview and Metro are live. Proxy stays manual.');
+    expect(result.setupDetail).toBe('Preview and Metro are live.');
   });
 
   it('reports running while a step is starting', () => {
@@ -275,18 +178,6 @@ describe('getSetupModel — summary', () => {
     ).toBe('Run Expo prebuild');
   });
 
-  it('offers to restart a failed proxy', () => {
-    expect(
-      model({ autoStartProxy: true }, { proxyStatus: 'error' }).ctaLabel,
-    ).toBe('Restart proxy');
-  });
-
-  it('offers to fix android trust when https is blocked', () => {
-    expect(
-      model({ autoStartProxy: true }, { httpsStatus: 'blocked' }).ctaLabel,
-    ).toBe('Fix Android trust');
-  });
-
   it('disables the cta when the device is not ready', () => {
     expect(model({}, { deviceReady: false }).ctaDisabled).toBe(true);
   });
@@ -310,7 +201,6 @@ describe('getSetupModel — summary', () => {
     expect(model({ devServerRunning: true }).canStopSetup).toBe(true);
     expect(model({ buildRunning: true }).canStopSetup).toBe(true);
     expect(model({ nativeLogRunning: true }).canStopSetup).toBe(true);
-    expect(model({ networkRunning: true }).canStopSetup).toBe(true);
     expect(model({ prebuildStatusStatus: 'running' }).canStopSetup).toBe(true);
   });
 
@@ -319,17 +209,9 @@ describe('getSetupModel — summary', () => {
     expect(model({ devServerStopping: true }).anySetupStopping).toBe(true);
     expect(model({ buildStopping: true }).anySetupStopping).toBe(true);
     expect(model({ prebuildStopping: true }).anySetupStopping).toBe(true);
-    expect(model({ proxyIsStopping: true }).anySetupStopping).toBe(true);
     expect(model().anySetupStopping).toBe(false);
   });
 
-  it('never interpolates a descriptor detail into the summary text', () => {
-    const result = model(
-      { autoStartProxy: true, deviceId: '' },
-      { httpsStatus: 'ready', deviceReady: false },
-    );
-    expect(result.setupDetail).not.toContain('[object Object]');
-  });
 });
 
 describe('getSetupModel — physical devices', () => {

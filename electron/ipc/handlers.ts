@@ -74,7 +74,6 @@ import type {
   MobilePlatform,
   MobilePreviewAndroidAppRestartParams,
   MobilePreviewAndroidAppStatusParams,
-  MobilePreviewAndroidAppTrustParams,
   MobilePreviewAndroidCreateDeviceParams,
   MobilePreviewAndroidInstallSystemImageParams,
   MobilePreviewAttachSessionParams,
@@ -89,11 +88,8 @@ import type {
   MobilePreviewIosRenameDeviceParams,
   MobilePreviewListSessionsParams,
   MobilePreviewNativeLogStartParams,
-  MobilePreviewNetworkProxyCertificateParams,
-  MobilePreviewNetworkProxyStartParams,
   MobilePreviewOpenDeeplinkParams,
   MobilePreviewOpenDevMenuParams,
-  MobilePreviewPacketCaptureStartParams,
   MobilePreviewReloadExpoParams,
   MobilePreviewSetTextSizeParams,
   MobilePreviewStartParams,
@@ -430,9 +426,8 @@ import {
   searchRegistry,
 } from '../services/skill-registry-service';
 import { detectMobilePreviewProjectConfig } from '../services/mobile-preview-project-detector';
+import { mobilePreviewAndroidAppService } from '../services/mobile-preview-android-app-service';
 import { mobilePreviewNativeLogService } from '../services/mobile-preview-native-log-service';
-import { mobilePreviewNetworkProxyService } from '../services/mobile-preview-network-proxy-service';
-import { mobilePreviewPacketCaptureService } from '../services/mobile-preview-packet-capture-service';
 
 import {
   assertProjectPathUnchanged,
@@ -5816,36 +5811,6 @@ export function registerIpcHandlers() {
     mobilePreviewNativeLogService.stop(sessionId),
   );
   ipcMain.handle(
-    'mobilePreview:startNetworkProxy',
-    (_, params: MobilePreviewNetworkProxyStartParams) =>
-      mobilePreviewNetworkProxyService.start(params),
-  );
-  ipcMain.handle('mobilePreview:stopNetworkProxy', (_, sessionId: string) =>
-    mobilePreviewNetworkProxyService.stop(sessionId),
-  );
-  ipcMain.handle(
-    'mobilePreview:installNetworkProxyCertificate',
-    (_, params: MobilePreviewNetworkProxyCertificateParams) =>
-      mobilePreviewNetworkProxyService.installCertificate(params),
-  );
-  ipcMain.handle(
-    'mobilePreview:prepareAndroidAppTrust',
-    async (_, params: MobilePreviewAndroidAppTrustParams) => {
-      const [project, task] = await Promise.all([
-        ProjectRepository.findById(params.projectId),
-        TaskRepository.findById(params.taskId),
-      ]);
-      if (!project) throw new Error('Project not found');
-      if (!task || task.projectId !== project.id) {
-        throw new Error('Task not found for project');
-      }
-      return mobilePreviewNetworkProxyService.prepareAndroidAppTrust({
-        projectPath: task.worktreePath ?? project.path,
-        androidProjectPath: params.androidProjectPath,
-      });
-    },
-  );
-  ipcMain.handle(
     'mobilePreview:getAndroidAppStatus',
     async (_, params: MobilePreviewAndroidAppStatusParams) => {
       const [project, task] = await Promise.all([
@@ -5856,7 +5821,7 @@ export function registerIpcHandlers() {
       if (!task || task.projectId !== project.id) {
         throw new Error('Task not found for project');
       }
-      return mobilePreviewNetworkProxyService.getAndroidAppStatus({
+      return mobilePreviewAndroidAppService.getAndroidAppStatus({
         projectPath: task.worktreePath ?? project.path,
         androidProjectPath: params.androidProjectPath,
         deviceId: params.deviceId,
@@ -5874,20 +5839,12 @@ export function registerIpcHandlers() {
       if (!task || task.projectId !== project.id) {
         throw new Error('Task not found for project');
       }
-      return mobilePreviewNetworkProxyService.restartAndroidApp({
+      return mobilePreviewAndroidAppService.restartAndroidApp({
         projectPath: task.worktreePath ?? project.path,
         androidProjectPath: params.androidProjectPath,
         deviceId: params.deviceId,
       });
     },
-  );
-  ipcMain.handle(
-    'mobilePreview:startPacketCapture',
-    (_, params: MobilePreviewPacketCaptureStartParams) =>
-      mobilePreviewPacketCaptureService.start(params),
-  );
-  ipcMain.handle('mobilePreview:stopPacketCapture', (_, sessionId: string) =>
-    mobilePreviewPacketCaptureService.stop(sessionId),
   );
   ipcMain.handle(
     'mobilePreview:resolveReactNativeDevTools',
@@ -5947,34 +5904,6 @@ export function registerIpcHandlers() {
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
         win.webContents.send('mobilePreview:nativeLog', event);
-      }
-    });
-  });
-  mobilePreviewNetworkProxyService.onSession((event) => {
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send('mobilePreview:networkProxySession', event);
-      }
-    });
-  });
-  mobilePreviewNetworkProxyService.onRequest((event) => {
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send('mobilePreview:networkProxyRequest', event);
-      }
-    });
-  });
-  mobilePreviewPacketCaptureService.onSession((event) => {
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send('mobilePreview:packetCaptureSession', event);
-      }
-    });
-  });
-  mobilePreviewPacketCaptureService.onRequest((event) => {
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send('mobilePreview:packetCaptureRequest', event);
       }
     });
   });

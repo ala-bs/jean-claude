@@ -114,9 +114,7 @@ import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { UnusedWorktreesCleanup } from '@/features/settings/ui-unused-worktrees-cleanup';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useDeleteWorkActivity } from '@/hooks/use-work-activity';
-import { useMobilePreviewAutoStartProxy } from '@/stores/navigation';
 import { useToastStore } from '@/stores/toasts';
-
 
 
 const MEETING_JOIN_TARGET_OPTIONS = [
@@ -202,44 +200,12 @@ export function AppearanceSettings() {
   );
 }
 
-export function MobilePreviewSettings() {
-  const { autoStartProxy, setAutoStartProxy } = useMobilePreviewAutoStartProxy();
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-ink-1 text-lg font-semibold">Mobile Preview</h2>
-        <p className="text-ink-3 mt-1 text-sm">
-          Configure setup flow behavior for mobile preview pane.
-        </p>
-      </div>
-
-      <div className="border-line-soft bg-bg-0 rounded-lg border px-4 py-3">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-ink-3 mt-1 text-xs">
-              Include proxy and HTTPS setup when Start workspace runs. When off,
-              start proxy manually from Network tab.
-            </p>
-          </div>
-          <Switch
-            checked={autoStartProxy}
-            onChange={setAutoStartProxy}
-            label="Auto-start network proxy"
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function EditorSettings() {
   const { data: editorSetting, isLoading } = useEditorSetting();
   const { data: editorAutomationSetting } = useEditorAutomationSetting();
   const { data: availableEditors } = useAvailableEditors();
   const updateEditor = useUpdateEditorSetting();
   const updateEditorAutomation = useUpdateEditorAutomationSetting();
-  const { autoStartProxy, setAutoStartProxy } = useMobilePreviewAutoStartProxy();
   const [customCommand, setCustomCommand] = useState('');
 
   const handleSelectPreset = (id: string) => {
@@ -360,21 +326,6 @@ export function EditorSettings() {
           label="Close editor windows when completing or deleting tasks"
           description="Uses the selected editor and closes matching worktree windows when possible. macOS only."
         />
-      </div>
-
-      <div className="border-line-soft mt-6 border-t pt-6">
-        <h3 className="text-ink-1 text-sm font-semibold">Mobile Preview</h3>
-        <div className="mt-3 flex items-start justify-between gap-4">
-          <p className="text-ink-3 text-xs">
-            Include proxy and HTTPS setup when Start workspace runs. When off,
-            start proxy manually from Network tab.
-          </p>
-          <Switch
-            checked={autoStartProxy}
-            onChange={setAutoStartProxy}
-            label="Auto-start network proxy"
-          />
-        </div>
       </div>
     </div>
   );

@@ -1,8 +1,5 @@
 import type {
-  MobilePlatform,
   MobilePreviewAndroidAppStatus,
-  MobilePreviewAndroidAppTrustResult,
-  MobilePreviewNetworkProxyStartParams,
   MobilePreviewQuality,
   MobilePreviewSession,
   MobilePreviewStartParams,
@@ -44,9 +41,6 @@ export type RunWorkspaceSetupStop =
   | 'session-superseded'
   | 'session-not-bound'
   | 'frame-wait-cancelled'
-  | 'proxy-disabled'
-  | 'android-project-missing'
-  | 'no-proxy-params'
   | 'cancelled'
   | 'failed'
   | 'completed';
@@ -82,21 +76,6 @@ export type PreviewPort = {
     params: Omit<MobilePreviewStartParams, 'taskId'>,
   ) => Promise<MobilePreviewSession>;
 
-  // network proxy
-  startNetworkProxy: (
-    params: MobilePreviewNetworkProxyStartParams,
-  ) => Promise<unknown>;
-  stopNetworkProxy: (sessionId: string) => Promise<unknown>;
-  installCertificate: (params: {
-    platform: MobilePlatform;
-    deviceId: string;
-  }) => Promise<{ message?: string | null } | undefined>;
-  prepareAndroidAppTrust: (params: {
-    projectId: string;
-    taskId: string;
-    androidProjectPath: string;
-  }) => Promise<MobilePreviewAndroidAppTrustResult>;
-
   // setters the saga writes
   setInputNotice: (notice: string | null) => void;
   showActionNotice: (message?: string) => void;
@@ -106,8 +85,6 @@ export type PreviewPort = {
   setLaunchedIosBuildCommandIds: (
     updater: (current: string[]) => string[],
   ) => void;
-  setEnableNetworkMitm: (enabled: boolean) => void;
-  setAndroidCertGuidanceVisible: (visible: boolean) => void;
   setAndroidAppStatus: (
     updater: (
       current: MobilePreviewAndroidAppStatus | null,
@@ -123,7 +100,6 @@ export type RunWorkspaceSetupFacts = Pick<
   PreviewFacts,
   | 'platform'
   | 'deviceId'
-  | 'autoStartProxy'
   | 'needsAppSelection'
   | 'androidProjectPath'
   | 'androidProjectExists'
@@ -134,15 +110,11 @@ export type RunWorkspaceSetupFacts = Pick<
   | 'hasActiveSession'
   | 'buildRunning'
   | 'buildStarting'
-  | 'networkStatus'
-  | 'networkCertificateInstalled'
   | 'selectedDeviceIsPhysical'
 > & {
   // derived values the pane already computes
   deviceReady: boolean;
   dependenciesInstallStatusValue: string | undefined;
-  proxyStatus: string;
-  androidTrustConfigured: boolean;
   androidAppMissing: boolean;
 
   // identity / paths
@@ -164,19 +136,16 @@ export type RunWorkspaceSetupFacts = Pick<
 
   // live sessions
   session: Pick<MobilePreviewSession, 'id' | 'platform' | 'deviceId'> | null;
-  networkSession: { id: string; enableMitm: boolean } | null;
-  networkProxyParams: MobilePreviewNetworkProxyStartParams | null;
 };
 
 export type RunWorkspaceSetupOptions = {
   shouldAutoBuildIos: boolean;
-  shouldPrebuildAndroid: boolean;
   shouldPrebuildIos: boolean;
 };
 
 /**
  * The workspace setup saga: dependencies install -> expo prebuild -> app
- * build/install -> android trust -> metro -> preview stream -> network proxy.
+ * build/install -> metro -> preview stream.
  *
  * It is a saga, not a reducer: it re-checks `coordinator.isCurrent(operation)`
  * after every await and early-returns so the two "resume" effects in the pane
@@ -197,12 +166,10 @@ export async function runWorkspaceSetup({
   iosBuildCoordinator: PreviewIosBuildCoordinator;
   options: RunWorkspaceSetupOptions;
 }): Promise<RunWorkspaceSetupStop> {
-  const { shouldAutoBuildIos, shouldPrebuildAndroid, shouldPrebuildIos } =
-    options;
+  const { shouldAutoBuildIos, shouldPrebuildIos } = options;
   const {
     platform,
     deviceId,
-    autoStartProxy,
     needsAppSelection,
     deviceReady,
     buildCommand,
@@ -239,7 +206,6 @@ export async function runWorkspaceSetup({
     );
   };
 
-  // Provably identical in all three call sites in this saga.
   const startAndroidBuild = (command: string) => {
     port.setActiveConsoleCommandId(buildCommandId);
     void port
@@ -272,12 +238,11 @@ export async function runWorkspaceSetup({
       return 'dependencies-install-pending';
     }
 
-    if (
-      (autoStartProxy &&
-        shouldPrebuildAndroid &&
-        !setupEffectiveAndroidProjectPath) ||
-      shouldPrebuildIos
-    ) {
+    // Android prebuild stays opt-out here: `expo prebuild` writes a native
+    // `android/` directory into the worktree, and nothing in this flow needs
+    // one. (It used to run only when the network proxy was enabled, because
+    // the HTTPS trust config had to patch a native project.)
+    if (shouldPrebuildIos) {
       port.setResumeSetupAfterPrebuild(true);
       await port.startAdHocCommand({
         runCommandId: facts.prebuildCommandId,
@@ -406,128 +371,7 @@ export async function runWorkspaceSetup({
         .catch(reportBackgroundFailure('iOS build'));
     }
 
-    if (!autoStartProxy) {
-      if (
-        platform === 'android' &&
-        setupEffectiveAndroidProjectPath &&
-        androidAppMissing &&
-        buildCommand &&
-        !buildRunning &&
-        !buildStarting
-      ) {
-        startAndroidBuild(buildCommand);
-      }
-      return 'proxy-disabled';
-    }
-
-    if (platform === 'android' && !setupEffectiveAndroidProjectPath) {
-      if (shouldPrebuildAndroid) {
-        port.setResumeSetupAfterPrebuild(true);
-        await port.startAdHocCommand({
-          runCommandId: facts.prebuildCommandId,
-          name: 'Expo Android prebuild',
-          command: facts.prebuildCommand,
-          ports: [],
-        });
-        port.showActionNotice(
-          'Expo prebuild started; setup will continue when it finishes',
-        );
-      } else {
-        port.showActionNotice(
-          'Checking Android project folder before proxy setup',
-        );
-      }
-      return 'android-project-missing';
-    }
-
-    const networkProxyParams = facts.networkProxyParams;
-    if (!networkProxyParams) return 'no-proxy-params';
-    if (!setupCoordinator.isCurrent(setupOperation)) {
-      return 'operation-superseded';
-    }
-
-    if (facts.proxyStatus === 'error' && facts.networkSession) {
-      await port.stopNetworkProxy(facts.networkSession.id);
-      if (!setupCoordinator.isCurrent(setupOperation)) {
-        return 'operation-superseded';
-      }
-    }
-
-    if (!facts.networkCertificateInstalled) {
-      if (facts.networkSession && facts.networkStatus === 'running') {
-        await port.stopNetworkProxy(facts.networkSession.id);
-        if (!setupCoordinator.isCurrent(setupOperation)) {
-          return 'operation-superseded';
-        }
-      }
-      if (!setupCoordinator.isCurrent(setupOperation)) {
-        return 'operation-superseded';
-      }
-      // Physical iOS cannot have the CA pushed automatically; the port returns
-      // install instructions instead of throwing, so surface them as a notice
-      // rather than failing the whole setup run.
-      const certificate = await port.installCertificate({ platform, deviceId });
-      if (certificate?.message) {
-        port.showActionNotice(certificate.message);
-      }
-      if (!setupCoordinator.isCurrent(setupOperation)) {
-        return 'operation-superseded';
-      }
-      port.setEnableNetworkMitm(true);
-      if (platform === 'android') {
-        port.setAndroidCertGuidanceVisible(true);
-      }
-      await port.startNetworkProxy({ ...networkProxyParams, enableMitm: true });
-    } else if (facts.networkStatus !== 'running') {
-      if (!setupCoordinator.isCurrent(setupOperation)) {
-        return 'operation-superseded';
-      }
-      port.setEnableNetworkMitm(true);
-      await port.startNetworkProxy({ ...networkProxyParams, enableMitm: true });
-    } else if (facts.networkSession && !facts.networkSession.enableMitm) {
-      await port.stopNetworkProxy(facts.networkSession.id);
-      if (!setupCoordinator.isCurrent(setupOperation)) {
-        return 'operation-superseded';
-      }
-      port.setEnableNetworkMitm(true);
-      await port.startNetworkProxy({ ...networkProxyParams, enableMitm: true });
-    }
-
-    if (!setupCoordinator.isCurrent(setupOperation)) {
-      return 'operation-superseded';
-    }
     if (
-      platform === 'android' &&
-      setupEffectiveAndroidProjectPath &&
-      !facts.androidTrustConfigured
-    ) {
-      const trustResult = await port.prepareAndroidAppTrust({
-        projectId: facts.projectId,
-        taskId: facts.taskId,
-        androidProjectPath: setupEffectiveAndroidProjectPath,
-      });
-      if (!setupCoordinator.isCurrent(setupOperation)) {
-        return 'operation-superseded';
-      }
-      port.setAndroidAppStatus((current) =>
-        current
-          ? { ...current, trustConfigured: true }
-          : {
-              appInstalled: null,
-              packageName: null,
-              trustConfigured: true,
-            },
-      );
-
-      if (
-        buildCommand &&
-        !buildRunning &&
-        !buildStarting &&
-        (trustResult.changed || androidAppMissing)
-      ) {
-        startAndroidBuild(buildCommand);
-      }
-    } else if (
       platform === 'android' &&
       setupEffectiveAndroidProjectPath &&
       androidAppMissing &&

@@ -270,9 +270,6 @@ interface NavigationState {
   mobilePreviewQuality: MobilePreviewQuality;
   mobilePreviewQualityDefaultVersion: number;
 
-  // App-level: include network proxy in mobile preview setup flow
-  mobilePreviewAutoStartProxy: boolean;
-
   // App-level: show pointer gestures over mobile preview
   mobilePreviewShowGestures: boolean;
 
@@ -319,7 +316,6 @@ interface NavigationState {
   setMobilePreviewPaneWidth: (width: number) => void;
   setMobilePreviewFps: (fps: number) => void;
   setMobilePreviewQuality: (quality: MobilePreviewQuality) => void;
-  setMobilePreviewAutoStartProxy: (autoStart: boolean) => void;
   setMobilePreviewShowGestures: (showGestures: boolean) => void;
   toggleMobilePreviewFavoriteDeviceId: (
     platform: MobilePlatform,
@@ -390,7 +386,6 @@ const useStore = create<NavigationState>()(
       mobilePreviewQuality: DEFAULT_MOBILE_PREVIEW_QUALITY,
       mobilePreviewQualityDefaultVersion:
         MOBILE_PREVIEW_QUALITY_DEFAULT_VERSION,
-      mobilePreviewAutoStartProxy: false,
       mobilePreviewShowGestures: true,
       mobilePreviewFavoriteDeviceIdsByPlatform: { ios: [], android: [] },
       mobilePreviewVisibleDeviceIdsByPlatform: { ios: null, android: null },
@@ -470,9 +465,6 @@ const useStore = create<NavigationState>()(
         set({
           mobilePreviewQuality: quality,
         }),
-
-      setMobilePreviewAutoStartProxy: (autoStart) =>
-        set({ mobilePreviewAutoStartProxy: autoStart }),
 
       setMobilePreviewShowGestures: (showGestures) =>
         set({ mobilePreviewShowGestures: showGestures }),
@@ -1673,14 +1665,6 @@ export function useMobilePreviewQuality() {
   const quality = useStore((state) => state.mobilePreviewQuality);
   const setQuality = useStore((state) => state.setMobilePreviewQuality);
   return { quality, setQuality };
-}
-
-export function useMobilePreviewAutoStartProxy() {
-  const autoStartProxy = useStore((state) => state.mobilePreviewAutoStartProxy);
-  const setAutoStartProxy = useStore(
-    (state) => state.setMobilePreviewAutoStartProxy,
-  );
-  return { autoStartProxy, setAutoStartProxy };
 }
 
 export function useMobilePreviewShowGestures() {

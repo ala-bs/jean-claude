@@ -21,7 +21,6 @@ import {
 } from 'lucide-react';
 import {
   type CSSProperties,
-  type MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -45,7 +44,6 @@ import {
   useMobilePreviewDeviceAssignments,
   useMobilePreviewDevices,
   useMobilePreviewNativeLogs,
-  useMobilePreviewNetworkProxy,
   useMobilePreviewSession,
   useReactNativeDevTools,
 } from '@/hooks/use-mobile-preview';
@@ -64,7 +62,6 @@ import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useRunCommands } from '@/hooks/use-run-commands';
 
 import {
-  useMobilePreviewAutoStartProxy,
   useMobilePreviewDeviceSelection,
   useMobilePreviewFps,
   useMobilePreviewPaneWidth,
@@ -83,23 +80,10 @@ import {
   type MobilePreviewAndroidAppStatus,
   type MobilePreviewDevice,
   type MobilePreviewIosAppStatus,
-  type MobilePreviewNetworkRequest,
   type MobilePreviewQuality,
   type MobilePreviewTextSize,
 } from '@shared/mobile-simulator-types';
 
-import {
-  appendNetworkFilterToken,
-  getNetworkHostname,
-  getNetworkMethodClass,
-  getNetworkPath,
-  getNetworkStatusClass,
-  getNetworkStatusLabel,
-  matchesNetworkPreset,
-  type NetworkFilterContextMenuState,
-  type NetworkFilterToken,
-  type NetworkPresetFilter,
-} from './utils-network';
 import {
   applyDeviceToBuildCommand,
   getDeviceBuildCommandNotice,
@@ -143,31 +127,18 @@ import {
   shouldShowRuntimeLaunchNotice,
 } from './utils-runtime-launch-notice';
 import {
-  getVisibleMobilePreviewPaneTab,
-  isMobilePreviewPaneTabVisible,
-  type MobilePreviewPaneTab,
-} from './utils-tabs';
-import {
   NativeLogsTabLabel,
-  NetworkTabLabel,
   PreviewStatusText,
 } from './ui-stream-readouts';
-import {
-  NetworkFacetButton,
-  NetworkFilterAutocomplete,
-  NetworkFilterChip,
-  NetworkFilterContextMenu,
-  NetworkRequestDetails,
-} from './ui-network-inspector';
 import type { CommandRunStatus } from '@shared/run-command-types';
 import { DevServerTab } from './ui-dev-server-tab';
 import { DevToolsTab } from './ui-devtools-tab';
 import { LogsTab } from './ui-logs-tab';
 import { ManageDevicesDialog } from './ui-manage-devices-dialog';
+import type { MobilePreviewPaneTab } from './utils-tabs';
 import type { MobilePreviewProjectConfig } from '@shared/types';
 import { SetupTab } from './ui-setup-tab';
 import { useMobilePreviewInput } from './use-mobile-preview-input';
-import { useNetworkInspector } from './use-network-inspector';
 
 export { buildGestureFeedbackPath } from './ui-preview-surface';
 import {
@@ -299,17 +270,8 @@ export function MobilePreviewPane({
     useState(false);
   const [isManageDevicesOpen, setIsManageDevicesOpen] = useState(false);
   const [isCreateIosDeviceOpen, setIsCreateIosDeviceOpen] = useState(false);
-  const [enableNetworkMitm, setEnableNetworkMitm] = useState(false);
-  const [androidCertGuidanceVisible, setAndroidCertGuidanceVisible] =
-    useState(false);
   const [isRestartingAndroidApp, setIsRestartingAndroidApp] = useState(false);
   const [isRestartingIosApp, setIsRestartingIosApp] = useState(false);
-  const [showTunneledNetworkRequests, setShowTunneledNetworkRequests] =
-    useState(false);
-  const [networkPreset, setNetworkPreset] =
-    useState<NetworkPresetFilter>('all');
-  const [networkFilter, setNetworkFilter] = useState<NetworkFilterToken[]>([]);
-  const [networkFacet, setNetworkFacet] = useState('all');
   const [androidAppStatus, setAndroidAppStatus] =
     useState<MobilePreviewAndroidAppStatus | null>(null);
   const [resolvedIosAppStatus, setResolvedIosAppStatus] = useState<{
@@ -326,23 +288,11 @@ export function MobilePreviewPane({
   >(null);
   const [deviceRailWidth, setDeviceRailWidth] = useState(220);
   const [inspectorPaneWidth, setInspectorPaneWidth] = useState(392);
-  const [networkEndpointRailWidth, setNetworkEndpointRailWidth] =
-    useState(184);
-  const [selectedNetworkRequestId, setSelectedNetworkRequestId] = useState<
-    string | null
-  >(null);
-  const [networkFilterContextMenu, setNetworkFilterContextMenu] =
-    useState<NetworkFilterContextMenuState | null>(null);
   const { width, setWidth, minWidth, maxWidth } = useMobilePreviewPaneWidth();
   const { fps, setFps } = useMobilePreviewFps();
   const { quality, setQuality } = useMobilePreviewQuality();
   const { showGestures, setShowGestures } = useMobilePreviewShowGestures();
-  const { autoStartProxy } = useMobilePreviewAutoStartProxy();
-  const visibleActiveTab = getVisibleMobilePreviewPaneTab({
-    tab: activeTab,
-    networkEnabled: autoStartProxy,
-  });
-  const isDevServerTabVisible = visibleActiveTab === 'dev-server';
+  const isDevServerTabVisible = activeTab === 'dev-server';
   const { isDragging, handleMouseDown } = useHorizontalResize({
     initialWidth: width,
     minWidth,
@@ -350,17 +300,6 @@ export function MobilePreviewPane({
     maxWidthFraction: 0.85,
     direction: 'left',
     onWidthChange: setWidth,
-  });
-  const {
-    isDragging: isDraggingNetworkEndpointRail,
-    handleMouseDown: handleNetworkEndpointRailMouseDown,
-  } = useHorizontalResize({
-    initialWidth: networkEndpointRailWidth,
-    minWidth: 140,
-    maxWidth: 320,
-    maxWidthFraction: 0.35,
-    direction: 'right',
-    onWidthChange: setNetworkEndpointRailWidth,
   });
   const {
     isDragging: isDraggingDeviceRail,
@@ -825,62 +764,12 @@ export function MobilePreviewPane({
   const selectedPreviewDeviceKey = selectedPreviewDevice
     ? getPreviewDeviceKey(selectedPreviewDevice.platform, selectedPreviewDevice.deviceId)
     : null;
-  const networkProxyParams = useMemo(
-    () =>
-      deviceId && !needsAppSelection
-        ? {
-            projectPath,
-            appPath,
-            platform,
-            deviceId,
-            autoConfigureDevice: true,
-          }
-        : null,
-    [appPath, deviceId, needsAppSelection, platform, projectPath],
-  );
-  const networkProxy = useMobilePreviewNetworkProxy(networkProxyParams);
   const androidManagement = useAndroidDeviceManagement(
     platform === 'android' || isManageDevicesOpen,
   );
   const iosManagement = useIosDeviceManagement(
     platform === 'ios' || isManageDevicesOpen || isCreateIosDeviceOpen,
   );
-  const networkCertificateInstalled =
-    networkProxy.certificate?.platform === platform &&
-    networkProxy.certificate.deviceId === deviceId;
-  const networkProxyStartParams = useMemo(
-    () =>
-      networkProxyParams
-        ? {
-            ...networkProxyParams,
-            enableMitm: enableNetworkMitm && networkCertificateInstalled,
-          }
-        : null,
-    [enableNetworkMitm, networkCertificateInstalled, networkProxyParams],
-  );
-  // Only subscribe to the request buffer while the network tab is on screen, so
-  // proxy traffic cannot re-render the pane (and the preview surface) in the
-  // background.
-  const isNetworkTabVisible = visibleActiveTab === 'network';
-  const {
-    pendingNetworkContextMenuRef,
-    suppressNetworkClickRef,
-    networkRequests,
-    displayedNetworkRequests,
-    visibleNetworkRequests,
-    networkFacets,
-    selectedNetworkRequest,
-  } = useNetworkInspector({
-    isNetworkTabVisible,
-    requestsStore: networkProxy.requestsStore,
-    showTunneledNetworkRequests,
-    networkPreset,
-    networkFilter,
-    networkFacet,
-    selectedNetworkRequestId,
-    setSelectedNetworkRequestId,
-    setNetworkFacet,
-  });
 
   const {
     data: iosDevices = [],
@@ -1701,17 +1590,6 @@ export function MobilePreviewPane({
     />
   );
 
-  const networkSession = networkProxy.session;
-  const networkStatus = networkSession?.status ?? 'stopped';
-
-  const handleStartStopNetworkProxy = () => {
-    if (networkSession && networkStatus === 'running') {
-      void networkProxy.stop(networkSession.id);
-      return;
-    }
-    if (!networkProxyStartParams) return;
-    void networkProxy.start(networkProxyStartParams);
-  };
   const handleStopAll = useCallback(async () => {
     iosBuildLaunchCoordinator.cancelAll();
     cancelPendingWorkspaceSetup({
@@ -1751,9 +1629,6 @@ export function MobilePreviewPane({
     if (nativeLogSession && nativeLogStatus === 'running') {
       stops.push(nativeLogs.stop(nativeLogSession.id));
     }
-    if (networkSession && networkStatus === 'running') {
-      stops.push(networkProxy.stop(networkSession.id));
-    }
 
     await Promise.allSettled(stops);
     setLaunchedIosBuildCommandIds([]);
@@ -1770,9 +1645,6 @@ export function MobilePreviewPane({
     nativeLogSession,
     nativeLogStatus,
     nativeLogs,
-    networkProxy,
-    networkSession,
-    networkStatus,
     platform,
     prebuildCommandId,
     prebuildStatus?.status,
@@ -1781,59 +1653,6 @@ export function MobilePreviewPane({
     stop,
     setResumeSetupAfterDependenciesInstall,
   ]);
-  const handleInstallNetworkCertificate = () => {
-    if (!deviceId || !networkProxyParams) return;
-
-    void (async () => {
-      try {
-        if (networkSession && networkStatus === 'running') {
-          await networkProxy.stop(networkSession.id);
-        }
-        await networkProxy.installCertificate({ platform, deviceId });
-        const mitmParams = { ...networkProxyParams, enableMitm: true };
-        setEnableNetworkMitm(true);
-        await networkProxy.start(mitmParams);
-        if (platform === 'android') {
-          setAndroidCertGuidanceVisible(true);
-        } else {
-          showActionNotice('CA installed; HTTPS decrypt enabled');
-        }
-      } catch (error) {
-        setInputNotice(
-          formatError(error) ?? 'Failed to install proxy certificate',
-        );
-      }
-    })();
-  };
-  const handlePrepareAndroidAppTrust = () => {
-    if (platform !== 'android' || !networkProxyParams) return;
-    if (!effectiveAndroidProjectPath) {
-      setInputNotice('Set Android project folder in project settings first');
-      return;
-    }
-
-    void (async () => {
-      try {
-        const result = await networkProxy.prepareAndroidAppTrust({
-          projectId,
-          taskId,
-          androidProjectPath: effectiveAndroidProjectPath,
-        });
-        const editedFiles = result.nativeFiles
-          .map((filePath) =>
-            filePath.startsWith(projectPath)
-              ? filePath.slice(projectPath.length).replace(/^\/+/, '')
-              : filePath,
-          )
-          .join(', ');
-        showActionNotice(`${result.message} Edited: ${editedFiles}`);
-      } catch (error) {
-        setInputNotice(
-          formatError(error) ?? 'Failed to prepare Android app trust',
-        );
-      }
-    })();
-  };
   const handleRestartAndroidApp = () => {
     if (platform !== 'android' || !deviceId || !effectiveAndroidProjectPath) return;
 
@@ -1885,392 +1704,6 @@ export function MobilePreviewPane({
       }
     })();
   };
-  const networkProxySubtitle = networkSession
-    ? `${networkSession.proxyUrl} · HTTPS decrypt ${
-        networkSession.enableMitm ? 'on' : 'off'
-      }`
-    : platform === 'android'
-      ? 'Android emulator proxy auto-configured'
-      : 'iOS simulator proxy routing automatic';
-  const networkPresetCounts = {
-    all: displayedNetworkRequests.length,
-    errors: displayedNetworkRequests.filter((request) =>
-      matchesNetworkPreset(request, 'errors'),
-    ).length,
-    post: displayedNetworkRequests.filter((request) =>
-      matchesNetworkPreset(request, 'post'),
-    ).length,
-    get: displayedNetworkRequests.filter((request) =>
-      matchesNetworkPreset(request, 'get'),
-    ).length,
-  };
-  const handleNetworkRequestContextMenu = (
-    event: ReactMouseEvent<HTMLButtonElement>,
-    request: MobilePreviewNetworkRequest,
-  ) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const host = getNetworkHostname(request.url);
-    const path = getNetworkPath(request.url);
-    setNetworkFilterContextMenu({
-      x: event.clientX,
-      y: event.clientY,
-      title: 'Add filter from request',
-      subtitle: `${host}${path}`,
-      items: [
-        { key: 'method', value: request.method.toUpperCase() },
-        { key: 'status', value: getNetworkStatusLabel(request).toString() },
-        { key: 'host', value: host },
-        { key: 'path', value: path },
-      ],
-    });
-  };
-  const handleNetworkFacetContextMenu = (
-    event: ReactMouseEvent<HTMLButtonElement>,
-    path: string,
-  ) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setNetworkFilterContextMenu({
-      x: event.clientX,
-      y: event.clientY,
-      title: 'Add filter from endpoint',
-      subtitle: path,
-      items: [{ key: 'path', value: path }],
-    });
-  };
-  const openNetworkFilterContextMenu = (
-    event: ReactMouseEvent<HTMLElement>,
-    trigger: HTMLElement,
-  ) => {
-    const path = trigger.dataset.networkFilterPath;
-    if (path) {
-      event.preventDefault();
-      event.stopPropagation();
-      setNetworkFilterContextMenu({
-        x: event.clientX,
-        y: event.clientY,
-        title: 'Add filter from endpoint',
-        subtitle: path,
-        items: [{ key: 'path', value: path }],
-      });
-      return true;
-    }
-
-    const requestId = trigger.dataset.networkRequestId;
-    const request = visibleNetworkRequests.find(
-      (networkRequest) => networkRequest.id === requestId,
-    );
-    if (!request) return false;
-
-    const host = getNetworkHostname(request.url);
-    const requestPath = getNetworkPath(request.url);
-    event.preventDefault();
-    event.stopPropagation();
-    setNetworkFilterContextMenu({
-      x: event.clientX,
-      y: event.clientY,
-      title: 'Add filter from request',
-      subtitle: `${host}${requestPath}`,
-      items: [
-        { key: 'host', value: host },
-        { key: 'path', value: requestPath },
-      ],
-    });
-    return true;
-  };
-  const getNetworkFilterContextTrigger = (target: EventTarget | null) =>
-    target instanceof HTMLElement
-      ? target.closest<HTMLElement>('[data-network-filter-context]')
-      : null;
-  const handleNetworkContextMenuCapture = (event: ReactMouseEvent<HTMLElement>) => {
-    const trigger = getNetworkFilterContextTrigger(event.target);
-    if (!trigger) return;
-    pendingNetworkContextMenuRef.current = null;
-    openNetworkFilterContextMenu(event, trigger);
-  };
-  const handleNetworkMouseDownCapture = (event: ReactMouseEvent<HTMLElement>) => {
-    const isSecondaryClick = event.button === 2 || (event.button === 0 && event.ctrlKey);
-    if (!isSecondaryClick) return;
-    const trigger = getNetworkFilterContextTrigger(event.target);
-    if (!trigger) return;
-    pendingNetworkContextMenuRef.current = trigger;
-    suppressNetworkClickRef.current = true;
-    window.setTimeout(() => {
-      suppressNetworkClickRef.current = false;
-    }, 0);
-    event.preventDefault();
-    event.stopPropagation();
-  };
-  const handleNetworkMouseUpCapture = (event: ReactMouseEvent<HTMLElement>) => {
-    const trigger = pendingNetworkContextMenuRef.current;
-    if (!trigger) return;
-    pendingNetworkContextMenuRef.current = null;
-    openNetworkFilterContextMenu(event, trigger);
-  };
-  const handleNetworkClickCapture = (event: ReactMouseEvent<HTMLElement>) => {
-    if (!suppressNetworkClickRef.current) return;
-    suppressNetworkClickRef.current = false;
-    event.preventDefault();
-    event.stopPropagation();
-  };
-  const renderNetworkBody = () => (
-    <div
-      onContextMenuCapture={handleNetworkContextMenuCapture}
-      onMouseDownCapture={handleNetworkMouseDownCapture}
-      onMouseUpCapture={handleNetworkMouseUpCapture}
-      onClickCapture={handleNetworkClickCapture}
-      className="relative flex h-full min-h-0 flex-col bg-zinc-950"
-    >
-      {networkProxy.error || networkSession?.error ? (
-        <div className="border-status-fail/40 bg-status-fail/10 text-status-fail border-b px-4 py-2 text-xs">
-          {formatError(networkProxy.error) ?? networkSession?.error}
-        </div>
-      ) : null}
-      <div className="flex shrink-0 items-center border-b border-zinc-900/90 bg-zinc-950 px-3 py-1.5">
-        <NetworkFilterAutocomplete
-          tokens={networkFilter}
-          onChange={setNetworkFilter}
-          requests={displayedNetworkRequests}
-          resultCount={visibleNetworkRequests.length}
-        />
-      </div>
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-zinc-900/90 bg-zinc-950 px-3 py-1">
-        <NetworkFilterChip
-          label="All"
-          count={networkPresetCounts.all}
-          active={networkPreset === 'all'}
-          onClick={() => setNetworkPreset('all')}
-        />
-        <NetworkFilterChip
-          label="Errors"
-          count={networkPresetCounts.errors}
-          active={networkPreset === 'errors'}
-          tone="danger"
-          onClick={() => setNetworkPreset('errors')}
-        />
-        <NetworkFilterChip
-          label="POST"
-          count={networkPresetCounts.post}
-          active={networkPreset === 'post'}
-          onClick={() => setNetworkPreset('post')}
-        />
-        <NetworkFilterChip
-          label="GET"
-          count={networkPresetCounts.get}
-          active={networkPreset === 'get'}
-          tone="success"
-          onClick={() => setNetworkPreset('get')}
-        />
-        <label className="text-ink-3 inline-flex h-5 shrink-0 items-center gap-1.5 rounded-[3px] border border-zinc-800 bg-zinc-900/50 px-2 text-[10px]">
-          <input
-            type="checkbox"
-            checked={showTunneledNetworkRequests}
-            onChange={(event) =>
-              setShowTunneledNetworkRequests(event.currentTarget.checked)
-            }
-            className="h-3 w-3"
-          />
-          Tunnels
-        </label>
-        <div className="min-w-0 flex-1" />
-        <div className="text-ink-4 hidden max-w-[260px] truncate font-mono text-[10px] xl:block">
-          {networkProxySubtitle}
-        </div>
-        <label className="text-ink-3 inline-flex h-5 shrink-0 items-center gap-1.5 rounded-[3px] border border-zinc-800 bg-zinc-900/50 px-2 text-[10px]">
-          <input
-            type="checkbox"
-            checked={enableNetworkMitm && networkCertificateInstalled}
-            onChange={(event) =>
-              setEnableNetworkMitm(event.currentTarget.checked)
-            }
-            disabled={
-              !!networkSession ||
-              !networkCertificateInstalled ||
-              networkProxy.isStarting ||
-              networkProxy.isStopping
-            }
-            className="h-3 w-3"
-          />
-          Decrypt
-        </label>
-      </div>
-      {!networkProxyParams ? (
-        <EmptyState
-          title="Network capture unavailable"
-          detail={
-            needsAppSelection ? 'Select an app first' : 'Select a device first'
-          }
-        />
-      ) : networkRequests.length === 0 ? (
-        <div className="flex h-full items-center justify-center p-6 text-center">
-          <div>
-            <div className="text-ink-1 text-sm font-medium">
-              No network requests
-            </div>
-            <div className="text-ink-3 mt-1 max-w-md text-xs">
-              {platform === 'ios'
-                ? 'Start the proxy, then use the app. Jean-Claude routes iOS simulator traffic through macOS proxy settings until stop.'
-                : 'Start the proxy, then use the app. HTTP should show full requests; HTTPS may only show CONNECT tunnels unless the app trusts the Jean-Claude CA.'}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-1">
-          <div
-            style={{ width: networkEndpointRailWidth }}
-            className="relative hidden shrink-0 flex-col border-r border-zinc-900/90 bg-zinc-950 p-1.5 lg:flex"
-          >
-            <div
-              onMouseDown={handleNetworkEndpointRailMouseDown}
-              className={clsx(
-                'hover:bg-acc/40 absolute top-0 right-[-2px] z-20 h-full w-1 cursor-col-resize transition-colors',
-                isDraggingNetworkEndpointRail && 'bg-acc/50',
-              )}
-            />
-            <div className="text-ink-4 px-2 pt-0.5 pb-1.5 text-[9px] font-semibold tracking-wide uppercase">
-              Endpoints
-            </div>
-            <NetworkFacetButton
-              label="All requests"
-              count={displayedNetworkRequests.length}
-              active={networkFacet === 'all'}
-              onClick={() => setNetworkFacet('all')}
-            />
-            {networkFacets.map((facet) => (
-              <NetworkFacetButton
-                key={facet.path}
-                label={facet.path.replace(/^\/api\//, '')}
-                count={facet.count}
-                active={networkFacet === facet.path}
-                failed={facet.failed}
-                onClick={() => setNetworkFacet(facet.path)}
-                onContextMenu={(event) =>
-                  handleNetworkFacetContextMenu(event, facet.path)
-                }
-              />
-            ))}
-          </div>
-          <div className="min-w-0 flex-1 overflow-auto bg-zinc-950">
-            <div className="text-ink-4 sticky top-0 z-10 grid h-[23px] grid-cols-[54px_46px_78px_minmax(0,1fr)] items-center gap-2 border-b border-zinc-900/90 bg-zinc-950 px-2.5 text-[9px] font-semibold tracking-wide uppercase">
-              <span>Method</span>
-              <span>Status</span>
-              <span>Time</span>
-              <span>URL</span>
-            </div>
-            {visibleNetworkRequests.length === 0 ? (
-              <div className="flex h-full items-center justify-center p-6 text-center">
-                <div>
-                  <div className="text-ink-1 text-sm font-medium">
-                    {displayedNetworkRequests.length === 0
-                      ? 'Only tunnel requests'
-                      : 'No matching requests'}
-                  </div>
-                  <div className="text-ink-3 mt-1 max-w-md text-xs">
-                    {displayedNetworkRequests.length === 0
-                      ? 'Enable Tunnels to inspect CONNECT rows'
-                      : 'Adjust the filter or choose another endpoint'}
-                  </div>
-                </div>
-              </div>
-            ) : visibleNetworkRequests.map((request) => {
-              const selected = request.id === selectedNetworkRequestId;
-              const maxDuration = Math.max(
-                1,
-                ...displayedNetworkRequests.map(
-                  (networkRequest) => networkRequest.durationMs ?? 0,
-                ),
-              );
-              const durationWidth =
-                request.durationMs === null
-                  ? 0
-                  : Math.max(10, (request.durationMs / maxDuration) * 100);
-              return (
-                <button
-                  key={`${request.sessionId}:${request.id}`}
-                  type="button"
-                  data-network-filter-context="request"
-                  data-network-request-id={request.id}
-                  className={clsx(
-                    'grid h-[26px] w-full grid-cols-[54px_46px_78px_minmax(0,1fr)] items-center gap-2 border-b border-zinc-900/80 px-2.5 text-left transition-colors',
-                    selected
-                      ? 'bg-acc-soft shadow-[inset_2px_0_0_var(--color-acc)]'
-                      : 'hover:bg-zinc-900/70',
-                  )}
-                  onClick={() => setSelectedNetworkRequestId(request.id)}
-                  onContextMenu={(event) =>
-                    handleNetworkRequestContextMenu(event, request)
-                  }
-                  onMouseDown={(event) => {
-                    if (event.button === 2) {
-                      handleNetworkRequestContextMenu(event, request);
-                    }
-                  }}
-                >
-                  <span
-                    className={clsx(
-                      'font-mono text-[11px] font-semibold',
-                      getNetworkMethodClass(request.method),
-                    )}
-                  >
-                    {request.method}
-                  </span>
-                  <span
-                    className={clsx(
-                      'font-mono text-[11px] font-semibold',
-                      getNetworkStatusClass(request),
-                    )}
-                  >
-                    {getNetworkStatusLabel(request)}
-                  </span>
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="h-1 w-[26px] overflow-hidden rounded-full bg-zinc-900">
-                      <span
-                        className={clsx(
-                          'block h-full rounded-full',
-                          request.error ||
-                            (request.status !== null && request.status >= 400)
-                            ? 'bg-status-fail'
-                            : 'bg-emerald-300',
-                        )}
-                        style={{ width: `${durationWidth}%` }}
-                      />
-                    </span>
-                    <span className="text-ink-4 font-mono text-[10px]">
-                      {request.durationMs === null
-                        ? '-'
-                        : `${request.durationMs}ms`}
-                    </span>
-                  </span>
-                  <span className="min-w-0 truncate font-mono text-[11px]">
-                    <span className="text-ink-4">
-                      {getNetworkHostname(request.url)}
-                    </span>
-                    <span className="text-ink-1">
-                      {getNetworkPath(request.url)}
-                    </span>
-                    {request.error ? (
-                      <span className="text-status-fail ml-2">
-                        {request.error}
-                      </span>
-                    ) : null}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          {selectedNetworkRequest ? (
-            <NetworkRequestDetails
-              request={selectedNetworkRequest}
-              onClose={() => setSelectedNetworkRequestId(null)}
-            />
-          ) : null}
-        </div>
-      )}
-    </div>
-  );
-
-  const networkProxyError = networkProxy.error || networkSession?.error;
   const appReady = !needsAppSelection;
   const deviceReady =
     !!deviceId && (selectedDeviceCanStart || activeSessionDeviceReady);
@@ -2285,13 +1718,6 @@ export function MobilePreviewPane({
       : isStarting ||
           session?.status === 'checking-tools' ||
           session?.status === 'starting'
-        ? 'running'
-        : 'idle';
-  const proxyStatus = networkProxyError
-    ? 'error'
-    : networkStatus === 'running'
-      ? 'ready'
-      : networkProxy.isStarting
         ? 'running'
         : 'idle';
   const effectiveAndroidProjectPath = androidProjectPath
@@ -2341,27 +1767,6 @@ export function MobilePreviewPane({
   const androidAppMissing = androidAppStatus?.appInstalled === false;
   const selectedAppInstalled =
     platform === 'android' ? androidAppInstalled : iosSetupDecision.appReady;
-  const androidTrustConfigured = !!androidAppStatus?.trustConfigured;
-  const androidTrustReady =
-    platform !== 'android' || (androidAppInstalled && androidTrustConfigured);
-  const httpsStatus =
-    proxyStatus === 'error'
-      ? 'idle'
-      : networkProxy.isInstallingCertificate ||
-          networkProxy.isPreparingAndroidAppTrust
-        ? 'running'
-        : networkStatus === 'running' &&
-            networkSession?.enableMitm &&
-            networkCertificateInstalled &&
-            androidTrustReady
-          ? 'ready'
-          : platform === 'android' &&
-              networkStatus === 'running' &&
-              networkSession?.enableMitm &&
-              networkCertificateInstalled &&
-              !androidTrustReady
-            ? 'blocked'
-            : 'idle';
   const dependenciesInstallStatusValue =
     dependenciesInstallStatus?.status === 'stopped'
       ? 'completed'
@@ -2369,14 +1774,12 @@ export function MobilePreviewPane({
 
   const handleStartWorkspace = useCallback(async (options: {
     shouldAutoBuildIos: boolean;
-    shouldPrebuildAndroid: boolean;
     shouldPrebuildIos: boolean;
   }) => {
     await runWorkspaceSetup({
       facts: {
         platform,
         deviceId,
-        autoStartProxy,
         needsAppSelection,
         deviceReady,
         // Recomputed by the saga rather than closed over here: React Compiler
@@ -2401,7 +1804,6 @@ export function MobilePreviewPane({
         buildStarting,
         selectedDeviceIsPhysical,
         androidAppMissing,
-        androidTrustConfigured,
         hasActiveSession,
         session,
         effectiveProjectPath,
@@ -2409,29 +1811,18 @@ export function MobilePreviewPane({
         quality,
         projectId,
         taskId,
-        proxyStatus,
-        networkStatus,
-        networkSession,
-        networkProxyParams,
-        networkCertificateInstalled,
       },
       port: {
         startAdHocCommand: runCommands.startAdHocCommand,
         stopCommand: runCommands.stopCommand,
         ensureMetroReverse: api.mobilePreview.ensureMetroReverse,
         startPreviewSession: start,
-        startNetworkProxy: networkProxy.start,
-        stopNetworkProxy: networkProxy.stop,
-        installCertificate: networkProxy.installCertificate,
-        prepareAndroidAppTrust: networkProxy.prepareAndroidAppTrust,
         setInputNotice,
         showActionNotice,
         setResumeSetupAfterDependenciesInstall,
         setResumeSetupAfterPrebuild,
         setActiveConsoleCommandId,
         setLaunchedIosBuildCommandIds,
-        setEnableNetworkMitm,
-        setAndroidCertGuidanceVisible,
         setAndroidAppStatus,
       },
       coordinator: setupOperationCoordinator,
@@ -2447,8 +1838,6 @@ export function MobilePreviewPane({
     buildRunning,
     buildStarting,
     androidAppMissing,
-    androidTrustConfigured,
-    autoStartProxy,
     devServerCommand,
     devServerCommandId,
     configuredDevServerPort,
@@ -2464,17 +1853,11 @@ export function MobilePreviewPane({
     hasActiveSession,
     iosBuildLaunchCoordinator,
     needsAppSelection,
-    networkCertificateInstalled,
-    networkProxy,
-    networkProxyParams,
-    networkSession,
-    networkStatus,
     platform,
     prebuildCommand,
     prebuildCommandId,
     projectId,
     selectedDeviceIsPhysical,
-    proxyStatus,
     quality,
     runCommands,
     session,
@@ -2498,7 +1881,6 @@ export function MobilePreviewPane({
       }
       void handleStartWorkspace({
         shouldAutoBuildIos: iosSetupDecision.shouldAutoBuild,
-        shouldPrebuildAndroid: needsExpoAndroidPrebuild,
         shouldPrebuildIos: needsExpoIosPrebuild,
       });
     });
@@ -2506,7 +1888,6 @@ export function MobilePreviewPane({
     dependenciesInstallStatusValue,
     handleStartWorkspace,
     iosSetupDecision.shouldAutoBuild,
-    needsExpoAndroidPrebuild,
     needsExpoIosPrebuild,
     resumeSetupAfterDependenciesInstall,
   ]);
@@ -2529,7 +1910,6 @@ export function MobilePreviewPane({
       setResumeSetupAfterPrebuild(false);
       void handleStartWorkspace({
         shouldAutoBuildIos: iosSetupDecision.shouldAutoBuild,
-        shouldPrebuildAndroid: needsExpoAndroidPrebuild,
         shouldPrebuildIos: needsExpoIosPrebuild,
       });
     });
@@ -2548,7 +1928,6 @@ export function MobilePreviewPane({
     deviceId,
     appPath,
     isExpoApp,
-    autoStartProxy,
     needsAppSelection,
     selectedDeviceCanStart,
     activeSessionDeviceReady,
@@ -2584,18 +1963,6 @@ export function MobilePreviewPane({
     iosAppStatus,
     iosAppStatusError,
     isIosAppStatusLoading,
-    androidCertGuidanceVisible,
-    networkStatus,
-    networkProxyErrorRaw: networkProxyError,
-    networkSessionEnableMitm: networkSession?.enableMitm,
-    networkSessionProxyUrl: networkSession?.proxyUrl,
-    networkCertificateInstalled,
-    proxyIsStarting: networkProxy.isStarting,
-    proxyIsStopping: networkProxy.isStopping,
-    proxyIsInstallingCertificate: networkProxy.isInstallingCertificate,
-    proxyIsPreparingAndroidAppTrust: networkProxy.isPreparingAndroidAppTrust,
-    networkRunning: !!(networkSession && networkStatus === 'running'),
-    showTunneledNetworkRequests,
     nativeLogRunning: !!(nativeLogSession && nativeLogStatus === 'running'),
     formatDeviceState,
   };
@@ -2604,16 +1971,12 @@ export function MobilePreviewPane({
     deviceReady,
     metroStatus,
     previewStatus,
-    proxyStatus,
-    httpsStatus,
     prebuildStatusValue,
     dependenciesInstallStatusValue,
     effectiveAndroidProjectPath,
-    needsExpoAndroidPrebuild,
     needsExpoIosPrebuild,
     prebuildDone,
     androidAppInstalled,
-    androidTrustConfigured,
     selectedAppInstalled,
     appNeedsBuild: appSetupDecision.needsBuild,
     iosAppReady: iosSetupDecision.appReady,
@@ -2645,9 +2008,6 @@ export function MobilePreviewPane({
     'build-toggle': handleStartStopBuild,
     'dev-server-toggle': handleStartStopDevServer,
     'preview-toggle': handleStartStop,
-    'proxy-toggle': handleStartStopNetworkProxy,
-    'android-app-trust': handlePrepareAndroidAppTrust,
-    'install-network-certificate': handleInstallNetworkCertificate,
   };
 
   function getStepAction(stepKey: PreviewStepKey) {
@@ -2656,7 +2016,6 @@ export function MobilePreviewPane({
         dependenciesInstallCommandId,
       ),
       hasBuildCommand: !!buildCommand,
-      hasNetworkProxyStartParams: !!networkProxyStartParams,
     });
     if (!action) return null;
     return { ...action, onClick: setupStepActionHandlers[action.intent] };
@@ -2670,22 +2029,14 @@ export function MobilePreviewPane({
       appOptions={appOptions}
       appPath={appPath}
       appSelectionError={appSelectionError}
-      androidCertGuidanceVisible={androidCertGuidanceVisible}
       detectedApps={detectedApps}
-      deviceId={deviceId}
-      effectiveAndroidProjectPath={effectiveAndroidProjectPath}
       hasActiveSession={hasActiveSession}
       iosAppStatus={iosAppStatus}
       iosAppStatusError={iosAppStatusError}
       iosSetupDecision={iosSetupDecision}
-      isRestartingAndroidApp={isRestartingAndroidApp}
       isRestartingIosApp={isRestartingIosApp}
       isSelectingAppPath={isSelectingAppPath}
-      needsExpoAndroidPrebuild={needsExpoAndroidPrebuild}
       needsExpoIosPrebuild={needsExpoIosPrebuild}
-      networkRequestsStore={networkProxy.requestsStore}
-      onHideAndroidCertGuidance={() => setAndroidCertGuidanceVisible(false)}
-      onRestartAndroidApp={handleRestartAndroidApp}
       onRestartIosApp={handleRestartIosApp}
       onRetryIosAppStatus={() =>
         setIosAppStatusRefreshNonce((current) => current + 1)
@@ -2694,7 +2045,6 @@ export function MobilePreviewPane({
       onStartWorkspace={handleStartWorkspace}
       onStopAll={handleStopAll}
       setActiveTab={setActiveTab}
-      showTunneledNetworkRequests={showTunneledNetworkRequests}
       selectedDetectedApp={selectedDetectedApp}
       validSelectedAppPath={validSelectedAppPath}
     />
@@ -2878,15 +2228,13 @@ export function MobilePreviewPane({
   // Only the active tab's element tree is built; the other four would be
   // thrown away on every render.
   const inspectorBody =
-    visibleActiveTab === 'setup'
+    activeTab === 'setup'
       ? renderSetupBody()
-      : visibleActiveTab === 'dev-server'
+      : activeTab === 'dev-server'
         ? renderDevServerBody()
-        : visibleActiveTab === 'network'
-          ? renderNetworkBody()
-          : visibleActiveTab === 'devtools'
-            ? renderDevToolsBody()
-            : renderLogsBody();
+        : activeTab === 'devtools'
+          ? renderDevToolsBody()
+          : renderLogsBody();
 
   let body = null;
   if (fatalSessionError) {
@@ -3218,18 +2566,6 @@ export function MobilePreviewPane({
         </PreviewNoticeStack>
       ) : null}
       {actionTray}
-      {networkFilterContextMenu ? (
-        <NetworkFilterContextMenu
-          state={networkFilterContextMenu}
-          onAddFilter={(token) =>
-            setNetworkFilter((currentTokens) =>
-              appendNetworkFilterToken(currentTokens, token),
-            )
-          }
-          onClose={() => setNetworkFilterContextMenu(null)}
-        />
-      ) : null}
-
       <div
         className={clsx(
           'flex min-h-0 flex-1 overflow-hidden',
@@ -3583,29 +2919,15 @@ export function MobilePreviewPane({
                   ['dev-server', 'Metro'],
                   ['devtools', 'DevTools'],
                   ['logs', <NativeLogsTabLabel store={nativeLogs.logsStore} />],
-                  [
-                    'network',
-                    <NetworkTabLabel
-                      store={networkProxy.requestsStore}
-                      showTunneled={showTunneledNetworkRequests}
-                    />,
-                  ],
                 ] as const
-              )
-                .filter(([tab]) =>
-                  isMobilePreviewPaneTabVisible({
-                    tab,
-                    networkEnabled: autoStartProxy,
-                  }),
-                )
-                .map(([tab, label]) => (
+              ).map(([tab, label]) => (
                 <button
                   key={tab}
                   type="button"
                   onClick={() => setActiveTab(tab)}
                   className={clsx(
                     'rounded px-2.5 py-1 text-xs font-medium transition-colors',
-                    visibleActiveTab === tab
+                    activeTab === tab
                       ? 'bg-bg-3 text-ink-1'
                       : 'text-ink-3 hover:text-ink-1',
                   )}

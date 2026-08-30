@@ -11,7 +11,6 @@ import type { PreviewDerived, PreviewFacts } from './utils-setup-model';
 const baseActionFacts: PreviewActionFacts = {
   dependenciesInstallStarting: false,
   hasBuildCommand: true,
-  hasNetworkProxyStartParams: true,
 };
 
 function action(
@@ -169,55 +168,6 @@ describe('getSetupStepAction — preview', () => {
       disabled: true,
       loading: true,
     });
-  });
-});
-
-describe('getSetupStepAction — proxy', () => {
-  it('toggles on the proxy session', () => {
-    expect(action('proxy')).toMatchObject({ label: 'Start', intent: 'proxy-toggle' });
-    expect(action('proxy', { networkRunning: true })).toMatchObject({
-      label: 'Stop',
-      variant: 'secondary',
-    });
-  });
-
-  it('is disabled without start params or during a transition', () => {
-    expect(action('proxy', {}, {}, { hasNetworkProxyStartParams: false }).disabled).toBe(true);
-    expect(action('proxy', { proxyIsStarting: true })).toMatchObject({
-      disabled: true,
-      loading: true,
-    });
-    expect(action('proxy', { proxyIsInstallingCertificate: true }).disabled).toBe(true);
-  });
-});
-
-describe('getSetupStepAction — https', () => {
-  it('asks to trust the app on android before the cert is trusted', () => {
-    expect(
-      action('https', { platform: 'android' }, { androidTrustConfigured: false }),
-    ).toMatchObject({ label: 'Trust app', intent: 'android-app-trust' });
-  });
-
-  it('installs the certificate once android trust is configured', () => {
-    expect(
-      action('https', { platform: 'android' }, { androidTrustConfigured: true }),
-    ).toMatchObject({ label: 'Install cert', intent: 'install-network-certificate' });
-  });
-
-  it('always installs the certificate on ios', () => {
-    expect(action('https', { platform: 'ios' }).intent).toBe(
-      'install-network-certificate',
-    );
-  });
-
-  it('is disabled without a device or start params', () => {
-    expect(action('https', { deviceId: '' }).disabled).toBe(true);
-    expect(action('https', {}, {}, { hasNetworkProxyStartParams: false }).disabled).toBe(true);
-  });
-
-  it('loads while installing the cert or preparing trust', () => {
-    expect(action('https', { proxyIsInstallingCertificate: true }).loading).toBe(true);
-    expect(action('https', { proxyIsPreparingAndroidAppTrust: true }).loading).toBe(true);
   });
 });
 

@@ -31,7 +31,6 @@ import type {
   MobilePlatform,
   MobilePreviewAndroidAppRestartParams,
   MobilePreviewAndroidAppStatusParams,
-  MobilePreviewAndroidAppTrustParams,
   MobilePreviewAndroidCreateDeviceParams,
   MobilePreviewAndroidInstallSystemImageParams,
   MobilePreviewAttachSessionParams,
@@ -49,15 +48,8 @@ import type {
   MobilePreviewNativeLogEvent,
   MobilePreviewNativeLogSessionEvent,
   MobilePreviewNativeLogStartParams,
-  MobilePreviewNetworkProxyCertificateParams,
-  MobilePreviewNetworkProxyEvent,
-  MobilePreviewNetworkProxySessionEvent,
-  MobilePreviewNetworkProxyStartParams,
   MobilePreviewOpenDeeplinkParams,
   MobilePreviewOpenDevMenuParams,
-  MobilePreviewPacketCaptureEvent,
-  MobilePreviewPacketCaptureSessionEvent,
-  MobilePreviewPacketCaptureStartParams,
   MobilePreviewReloadExpoParams,
   MobilePreviewSessionEvent,
   MobilePreviewSetTextSizeParams,
@@ -1155,14 +1147,6 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('mobilePreview:startNativeLogs', params),
     stopNativeLogs: (sessionId: string) =>
       ipcRenderer.invoke('mobilePreview:stopNativeLogs', sessionId),
-    startNetworkProxy: (params: MobilePreviewNetworkProxyStartParams) =>
-      ipcRenderer.invoke('mobilePreview:startNetworkProxy', params),
-    stopNetworkProxy: (sessionId: string) =>
-      ipcRenderer.invoke('mobilePreview:stopNetworkProxy', sessionId),
-    startPacketCapture: (params: MobilePreviewPacketCaptureStartParams) =>
-      ipcRenderer.invoke('mobilePreview:startPacketCapture', params),
-    stopPacketCapture: (sessionId: string) =>
-      ipcRenderer.invoke('mobilePreview:stopPacketCapture', sessionId),
     resolveReactNativeDevTools: (params: ReactNativeDevToolsResolveParams) =>
       ipcRenderer.invoke('mobilePreview:resolveReactNativeDevTools', params),
     openReactNativeDevTools: (params: ReactNativeDevToolsOpenParams) =>
@@ -1195,15 +1179,6 @@ contextBridge.exposeInMainWorld('api', {
         'mobilePreview:closeEmbeddedReactNativeDevTools',
         params,
       ),
-    installNetworkProxyCertificate: (
-      params: MobilePreviewNetworkProxyCertificateParams,
-    ) =>
-      ipcRenderer.invoke(
-        'mobilePreview:installNetworkProxyCertificate',
-        params,
-      ),
-    prepareAndroidAppTrust: (params: MobilePreviewAndroidAppTrustParams) =>
-      ipcRenderer.invoke('mobilePreview:prepareAndroidAppTrust', params),
     getAndroidAppStatus: (params: MobilePreviewAndroidAppStatusParams) =>
       ipcRenderer.invoke('mobilePreview:getAndroidAppStatus', params),
     restartAndroidApp: (params: MobilePreviewAndroidAppRestartParams) =>
@@ -1223,58 +1198,6 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('mobilePreview:nativeLog', handler);
       return () =>
         ipcRenderer.removeListener('mobilePreview:nativeLog', handler);
-    },
-    onNetworkProxySession: (
-      callback: (event: MobilePreviewNetworkProxySessionEvent) => void,
-    ) => {
-      const handler = (
-        _: unknown,
-        event: MobilePreviewNetworkProxySessionEvent,
-      ) => callback(event);
-      ipcRenderer.on('mobilePreview:networkProxySession', handler);
-      return () =>
-        ipcRenderer.removeListener(
-          'mobilePreview:networkProxySession',
-          handler,
-        );
-    },
-    onNetworkProxyRequest: (
-      callback: (event: MobilePreviewNetworkProxyEvent) => void,
-    ) => {
-      const handler = (_: unknown, event: MobilePreviewNetworkProxyEvent) =>
-        callback(event);
-      ipcRenderer.on('mobilePreview:networkProxyRequest', handler);
-      return () =>
-        ipcRenderer.removeListener(
-          'mobilePreview:networkProxyRequest',
-          handler,
-        );
-    },
-    onPacketCaptureSession: (
-      callback: (event: MobilePreviewPacketCaptureSessionEvent) => void,
-    ) => {
-      const handler = (
-        _: unknown,
-        event: MobilePreviewPacketCaptureSessionEvent,
-      ) => callback(event);
-      ipcRenderer.on('mobilePreview:packetCaptureSession', handler);
-      return () =>
-        ipcRenderer.removeListener(
-          'mobilePreview:packetCaptureSession',
-          handler,
-        );
-    },
-    onPacketCaptureRequest: (
-      callback: (event: MobilePreviewPacketCaptureEvent) => void,
-    ) => {
-      const handler = (_: unknown, event: MobilePreviewPacketCaptureEvent) =>
-        callback(event);
-      ipcRenderer.on('mobilePreview:packetCaptureRequest', handler);
-      return () =>
-        ipcRenderer.removeListener(
-          'mobilePreview:packetCaptureRequest',
-          handler,
-        );
     },
     onFrame: (callback: (event: MobilePreviewFrameEvent) => void) => {
       const handler = (_: unknown, event: MobilePreviewFrameEvent) =>

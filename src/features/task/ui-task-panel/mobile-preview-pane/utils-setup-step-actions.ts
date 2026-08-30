@@ -16,10 +16,7 @@ export type PreviewStepActionIntent =
   | 'ios-app-status-retry'
   | 'build-toggle'
   | 'dev-server-toggle'
-  | 'preview-toggle'
-  | 'proxy-toggle'
-  | 'android-app-trust'
-  | 'install-network-certificate';
+  | 'preview-toggle';
 
 export type PreviewStepAction = {
   label: string;
@@ -36,7 +33,6 @@ export type PreviewStepAction = {
 export type PreviewActionFacts = {
   dependenciesInstallStarting: boolean;
   hasBuildCommand: boolean;
-  hasNetworkProxyStartParams: boolean;
 };
 
 export function getSetupStepAction(
@@ -138,39 +134,6 @@ export function getSetupStepAction(
   // NOTE: there is no 'logs' step in the setup model, so native log capture has
   // no start affordance in this pane. Add a 'logs' step to getSetupModel to
   // bring it back.
-
-  if (stepKey === 'proxy') {
-    return {
-      label: facts.networkRunning ? 'Stop' : 'Start',
-      intent: 'proxy-toggle',
-      disabled:
-        !actionFacts.hasNetworkProxyStartParams ||
-        facts.proxyIsStarting ||
-        facts.proxyIsStopping ||
-        facts.proxyIsInstallingCertificate,
-      loading: facts.proxyIsStarting || facts.proxyIsStopping,
-      variant: facts.networkRunning ? 'secondary' : 'primary',
-    };
-  }
-
-  if (stepKey === 'https') {
-    const needsTrust = platform === 'android' && !derived.androidTrustConfigured;
-    return {
-      label: needsTrust ? 'Trust app' : 'Install cert',
-      intent: needsTrust ? 'android-app-trust' : 'install-network-certificate',
-      disabled:
-        !deviceId ||
-        !actionFacts.hasNetworkProxyStartParams ||
-        facts.proxyIsInstallingCertificate ||
-        facts.proxyIsPreparingAndroidAppTrust ||
-        facts.proxyIsStarting ||
-        facts.proxyIsStopping,
-      loading:
-        facts.proxyIsInstallingCertificate ||
-        facts.proxyIsPreparingAndroidAppTrust,
-      variant: 'secondary',
-    };
-  }
 
   return null;
 }

@@ -22,7 +22,6 @@ import type { getSetupModel, PreviewStepKey } from '../utils-setup-model';
 import type { getMobileAppSetupDecision } from '../utils-setup-operation';
 import type { getSetupStepAction } from '../utils-setup-step-actions';
 import type { MobilePreviewPaneTab } from '../utils-tabs';
-import { NetworkRequestCountDetail } from '../ui-stream-readouts';
 
 type SetupStepAction = NonNullable<ReturnType<typeof getSetupStepAction>> & {
   onClick: () => void;
@@ -35,29 +34,20 @@ export function SetupTab({
   appOptions,
   appPath,
   appSelectionError,
-  androidCertGuidanceVisible,
   detectedApps,
-  deviceId,
-  effectiveAndroidProjectPath,
   hasActiveSession,
   iosAppStatus,
   iosAppStatusError,
   iosSetupDecision,
-  isRestartingAndroidApp,
   isRestartingIosApp,
   isSelectingAppPath,
-  needsExpoAndroidPrebuild,
   needsExpoIosPrebuild,
-  networkRequestsStore,
-  onHideAndroidCertGuidance,
-  onRestartAndroidApp,
   onRestartIosApp,
   onRetryIosAppStatus,
   onSelectAppPath,
   onStartWorkspace,
   onStopAll,
   setActiveTab,
-  showTunneledNetworkRequests,
   selectedDetectedApp,
   validSelectedAppPath,
 }: {
@@ -67,33 +57,23 @@ export function SetupTab({
   appOptions: ComponentProps<typeof Select>['options'];
   appPath: string;
   appSelectionError: string | null;
-  androidCertGuidanceVisible: boolean;
   detectedApps: MobilePreviewProjectConfig['detectedApps'];
-  deviceId: string;
-  effectiveAndroidProjectPath: string | null;
   hasActiveSession: boolean;
   iosAppStatus: MobilePreviewIosAppStatus | null | undefined;
   iosAppStatusError: string | null;
   iosSetupDecision: ReturnType<typeof getMobileAppSetupDecision>;
-  isRestartingAndroidApp: boolean;
   isRestartingIosApp: boolean;
   isSelectingAppPath: boolean;
-  needsExpoAndroidPrebuild: boolean;
   needsExpoIosPrebuild: boolean;
-  networkRequestsStore: ComponentProps<typeof NetworkRequestCountDetail>['store'];
-  onHideAndroidCertGuidance: () => void;
-  onRestartAndroidApp: () => void;
   onRestartIosApp: () => void;
   onRetryIosAppStatus: () => void;
   onSelectAppPath?: (appPath: string | null) => void;
   onStartWorkspace: (args: {
     shouldAutoBuildIos: boolean;
-    shouldPrebuildAndroid: boolean;
     shouldPrebuildIos: boolean;
   }) => void | Promise<void>;
   onStopAll: () => void | Promise<void>;
   setActiveTab: (tab: MobilePreviewPaneTab) => void;
-  showTunneledNetworkRequests: boolean;
   selectedDetectedApp: MobilePreviewProjectConfig['detectedApps'][number] | null;
   validSelectedAppPath: string | null;
 }) {
@@ -176,7 +156,6 @@ export function SetupTab({
                   }
                   void onStartWorkspace({
                     shouldAutoBuildIos: iosSetupDecision.shouldAutoBuild,
-                    shouldPrebuildAndroid: needsExpoAndroidPrebuild,
                     shouldPrebuildIos: needsExpoIosPrebuild,
                   });
                 }}
@@ -321,14 +300,7 @@ export function SetupTab({
                     : 'text-ink-4',
                 )}
               >
-                {typeof step.detail === 'object' && step.detail !== null ? (
-                  <NetworkRequestCountDetail
-                    store={networkRequestsStore}
-                    showTunneled={showTunneledNetworkRequests}
-                  />
-                ) : (
-                  step.detail
-                )}
+                {step.detail}
               </span>
             </span>
             {action ? (
@@ -371,61 +343,6 @@ export function SetupTab({
         </div>
       ) : null}
 
-      {platform === 'android' && androidCertGuidanceVisible ? (
-        <div className="border-line bg-bg-0 mx-3 mt-3 rounded-md border p-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-ink-1 text-xs font-semibold">
-                Finish certificate install on Android
-              </div>
-              <div className="text-ink-4 mt-0.5 text-[10px]">
-                Complete these steps on emulator/device.
-              </div>
-            </div>
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={onHideAndroidCertGuidance}
-            >
-              Hide
-            </Button>
-          </div>
-          <div className="mt-3">
-            <Button
-              size="xs"
-              variant="secondary"
-              disabled={!deviceId || !effectiveAndroidProjectPath || isRestartingAndroidApp}
-              loading={isRestartingAndroidApp}
-              onClick={onRestartAndroidApp}
-            >
-              Restart app
-            </Button>
-          </div>
-          <div className="text-ink-3 mt-3 space-y-2 text-[11px] leading-relaxed">
-            <div className="flex gap-2">
-              <span className="text-ink-4 font-mono">1.</span>
-              <span>
-                If Android did not open settings, go to <span className="text-ink-1">Settings</span> → <span className="text-ink-1">Security & privacy</span> → <span className="text-ink-1">More security settings</span>.
-              </span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-ink-4 font-mono">2.</span>
-              <span>
-                Open <span className="text-ink-1">Encryption & credentials</span> → <span className="text-ink-1">Install a certificate</span> → <span className="text-ink-1">CA certificate</span>.
-              </span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-ink-4 font-mono">3.</span>
-              <span>
-                Choose <span className="text-ink-1">Jean-Claude CA</span>, accept warning, then relaunch app.
-              </span>
-            </div>
-            <div className="border-line-soft text-ink-4 border-t pt-2 text-[10px]">
-              Android app HTTPS also needs <span className="text-ink-2">Trust app</span> + rebuild once so debug builds trust user CAs.
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

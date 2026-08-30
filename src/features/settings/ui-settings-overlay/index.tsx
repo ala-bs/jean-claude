@@ -30,7 +30,6 @@ import {
   Settings,
   Settings2,
   Sliders,
-  Smartphone,
   Sparkles,
   StickyNote,
   TextCursorInput,
@@ -61,7 +60,6 @@ import {
   EditorSettings,
   EureciaSettings,
   MaintenanceSettings,
-  MobilePreviewSettings,
   NotificationsSettings,
   PromptPrefaceSettings,
   UsageDisplaySettings,
@@ -168,7 +166,6 @@ function getGlobalSections(): GlobalSection[] {
   const generalSubs: GlobalSubItem[] = [
     { id: 'appearance', label: 'Appearance', icon: Palette },
     { id: 'auto-review', label: 'Auto File Review', icon: Eye },
-    { id: 'mobile-preview', label: 'Mobile Preview', icon: Smartphone },
     { id: 'editor', label: 'Editor', icon: Settings2 },
     { id: 'notifications', label: 'Notifications', icon: Bell },
     ...(api.platform === 'darwin'
@@ -807,8 +804,6 @@ function getGlobalSubtitle(sectionId: string, subId: string): string {
         return 'Visual effects and motion preferences.';
       case 'auto-review':
         return 'Patterns whose files count as reviewed automatically.';
-      case 'mobile-preview':
-        return 'Mobile preview setup and proxy behavior.';
       case 'notifications':
         return 'How and when jean-claude lets you know about runs.';
       case 'work-activity':
@@ -846,8 +841,6 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <AppearanceSettings />;
       case 'general:auto-review':
         return <AutoReviewSettings />;
-      case 'general:mobile-preview':
-        return <MobilePreviewSettings />;
       case 'general:notifications':
         return <NotificationsSettings />;
       case 'general:work-activity':

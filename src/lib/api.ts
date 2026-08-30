@@ -128,8 +128,6 @@ import type {
   MobilePreviewAndroidAppRestartResult,
   MobilePreviewAndroidAppStatus,
   MobilePreviewAndroidAppStatusParams,
-  MobilePreviewAndroidAppTrustParams,
-  MobilePreviewAndroidAppTrustResult,
   MobilePreviewAndroidCreateDeviceParams,
   MobilePreviewAndroidDeviceProfile,
   MobilePreviewAndroidInstallSystemImageParams,
@@ -159,18 +157,8 @@ import type {
   MobilePreviewNativeLogSession,
   MobilePreviewNativeLogSessionEvent,
   MobilePreviewNativeLogStartParams,
-  MobilePreviewNetworkProxyCertificate,
-  MobilePreviewNetworkProxyCertificateParams,
-  MobilePreviewNetworkProxyEvent,
-  MobilePreviewNetworkProxySession,
-  MobilePreviewNetworkProxySessionEvent,
-  MobilePreviewNetworkProxyStartParams,
   MobilePreviewOpenDeeplinkParams,
   MobilePreviewOpenDevMenuParams,
-  MobilePreviewPacketCaptureEvent,
-  MobilePreviewPacketCaptureSession,
-  MobilePreviewPacketCaptureSessionEvent,
-  MobilePreviewPacketCaptureStartParams,
   MobilePreviewReloadExpoParams,
   MobilePreviewSession,
   MobilePreviewSessionEvent,
@@ -1564,14 +1552,6 @@ export interface Api {
       params: MobilePreviewNativeLogStartParams,
     ) => Promise<MobilePreviewNativeLogSession>;
     stopNativeLogs: (sessionId: string) => Promise<void>;
-    startNetworkProxy: (
-      params: MobilePreviewNetworkProxyStartParams,
-    ) => Promise<MobilePreviewNetworkProxySession>;
-    stopNetworkProxy: (sessionId: string) => Promise<void>;
-    startPacketCapture: (
-      params: MobilePreviewPacketCaptureStartParams,
-    ) => Promise<MobilePreviewPacketCaptureSession>;
-    stopPacketCapture: (sessionId: string) => Promise<void>;
     resolveReactNativeDevTools: (
       params: ReactNativeDevToolsResolveParams,
     ) => Promise<ReactNativeDevToolsResolveResult>;
@@ -1590,12 +1570,6 @@ export interface Api {
     closeEmbeddedReactNativeDevTools: (
       params: ReactNativeDevToolsEmbeddedCloseParams,
     ) => Promise<void>;
-    installNetworkProxyCertificate: (
-      params: MobilePreviewNetworkProxyCertificateParams,
-    ) => Promise<MobilePreviewNetworkProxyCertificate>;
-    prepareAndroidAppTrust: (
-      params: MobilePreviewAndroidAppTrustParams,
-    ) => Promise<MobilePreviewAndroidAppTrustResult>;
     getAndroidAppStatus: (
       params: MobilePreviewAndroidAppStatusParams,
     ) => Promise<MobilePreviewAndroidAppStatus>;
@@ -1607,18 +1581,6 @@ export interface Api {
     ) => UnsubscribeFn;
     onNativeLog: (
       callback: (event: MobilePreviewNativeLogEvent) => void,
-    ) => UnsubscribeFn;
-    onNetworkProxySession: (
-      callback: (event: MobilePreviewNetworkProxySessionEvent) => void,
-    ) => UnsubscribeFn;
-    onNetworkProxyRequest: (
-      callback: (event: MobilePreviewNetworkProxyEvent) => void,
-    ) => UnsubscribeFn;
-    onPacketCaptureSession: (
-      callback: (event: MobilePreviewPacketCaptureSessionEvent) => void,
-    ) => UnsubscribeFn;
-    onPacketCaptureRequest: (
-      callback: (event: MobilePreviewPacketCaptureEvent) => void,
     ) => UnsubscribeFn;
     onFrame: (
       callback: (event: MobilePreviewFrameEvent) => void,
@@ -2797,14 +2759,6 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         stopNativeLogs: async () => {},
-        startNetworkProxy: async () => {
-          throw new Error('API not available');
-        },
-        stopNetworkProxy: async () => {},
-        startPacketCapture: async () => {
-          throw new Error('API not available');
-        },
-        stopPacketCapture: async () => {},
         resolveReactNativeDevTools: async (params) => ({
           metroBaseUrl: `http://localhost:${params.metroPort}`,
           frontendUrl: null,
@@ -2818,12 +2772,6 @@ export const api: Api = hasWindowApi
         setEmbeddedReactNativeDevToolsBounds: async () => {},
         setEmbeddedReactNativeDevToolsVisibility: async () => {},
         closeEmbeddedReactNativeDevTools: async () => {},
-        installNetworkProxyCertificate: async () => {
-          throw new Error('API not available');
-        },
-        prepareAndroidAppTrust: async () => {
-          throw new Error('API not available');
-        },
         getAndroidAppStatus: async () => {
           throw new Error('API not available');
         },
@@ -2832,10 +2780,6 @@ export const api: Api = hasWindowApi
         },
         onNativeLogSession: () => () => {},
         onNativeLog: () => () => {},
-        onNetworkProxySession: () => () => {},
-        onNetworkProxyRequest: () => () => {},
-        onPacketCaptureSession: () => () => {},
-        onPacketCaptureRequest: () => () => {},
         onFrame: () => () => {},
         onSession: () => () => {},
       },

@@ -368,96 +368,6 @@ export type ReactNativeDevToolsResolveResult = {
   error: string | null;
 };
 
-export type MobilePreviewNetworkProxyStatus = 'running' | 'stopped' | 'errored';
-
-export type MobilePreviewNetworkProxyMode =
-  | 'manual'
-  | 'android-emulator'
-  | 'ios-simulator'
-  // A physical iPhone routes through the Mac's LAN address, not its loopback,
-  // and the Mac's own proxy settings are irrelevant to it.
-  | 'ios-device';
-
-export type MobilePreviewNetworkCaptureSource =
-  | 'proxied'
-  | 'mitm'
-  | 'tunneled'
-  | 'packet-only';
-
-export type MobilePreviewNetworkRequest = {
-  id: string;
-  sessionId: string;
-  captureSource: MobilePreviewNetworkCaptureSource;
-  method: string;
-  url: string;
-  status: number | null;
-  requestHeaders: Record<string, string>;
-  responseHeaders: Record<string, string>;
-  requestBodyPreview: string | null;
-  responseBodyPreview: string | null;
-  clientAddress: string | null;
-  clientPort: number | null;
-  startedAt: string;
-  endedAt: string | null;
-  durationMs: number | null;
-  error: string | null;
-  tunnelOnly: boolean;
-  decrypted: boolean;
-};
-
-export type MobilePreviewNetworkProxySession = {
-  id: string;
-  projectPath: string;
-  appPath: string;
-  platform: MobilePlatform;
-  deviceId: string;
-  status: MobilePreviewNetworkProxyStatus;
-  mode: MobilePreviewNetworkProxyMode;
-  port: number;
-  proxyHost: string;
-  proxyUrl: string;
-  androidEmulatorProxyUrl: string;
-  lanProxyUrls: string[];
-  enableMitm: boolean;
-  error: string | null;
-  updatedAt: string;
-};
-
-export type MobilePreviewNetworkProxyStartParams = {
-  projectPath: string;
-  appPath: string;
-  platform: MobilePlatform;
-  deviceId: string;
-  port?: number;
-  autoConfigureDevice?: boolean;
-  enableMitm?: boolean;
-};
-
-export type MobilePreviewNetworkProxyCertificateParams = {
-  platform: MobilePlatform;
-  deviceId: string;
-};
-
-export type MobilePreviewNetworkProxyCertificate = {
-  platform: MobilePlatform;
-  deviceId: string;
-  certPath: string;
-  installedAt: string;
-  /**
-   * `false` when the CA could not be pushed to the device automatically and the
-   * user has to install it by hand (physical iOS). `message` then carries the
-   * actionable instructions.
-   */
-  installed: boolean;
-  message: string | null;
-};
-
-export type MobilePreviewAndroidAppTrustParams = {
-  projectId: string;
-  taskId: string;
-  androidProjectPath: string;
-};
-
 export type MobilePreviewAndroidAppStatusParams = {
   projectId: string;
   taskId: string;
@@ -475,15 +385,6 @@ export type MobilePreviewAndroidAppRestartResult = {
 export type MobilePreviewAndroidAppStatus = {
   appInstalled: boolean | null;
   packageName: string | null;
-  trustConfigured: boolean;
-};
-
-export type MobilePreviewAndroidAppTrustResult = {
-  appPath: string;
-  nativeFiles: string[];
-  message: string;
-  changed: boolean;
-  updatedAt: string;
 };
 
 export type MobilePreviewIosAppStatusParams = {
@@ -523,43 +424,3 @@ export type MobilePreviewIosAppRestartResult = {
   restartedAt: string;
 };
 
-export type MobilePreviewNetworkProxyEvent = {
-  sessionId: string;
-  request: MobilePreviewNetworkRequest;
-};
-
-export type MobilePreviewNetworkProxySessionEvent = {
-  session: MobilePreviewNetworkProxySession;
-};
-
-export type MobilePreviewPacketCaptureStatus =
-  | 'running'
-  | 'setup-needed'
-  | 'stopped'
-  | 'errored';
-
-export type MobilePreviewPacketCaptureSession = {
-  id: string;
-  platform: MobilePlatform;
-  deviceId: string;
-  status: MobilePreviewPacketCaptureStatus;
-  command: string;
-  error: string | null;
-  updatedAt: string;
-};
-
-export type MobilePreviewPacketCaptureStartParams = {
-  platform: MobilePlatform;
-  deviceId: string;
-  command?: string;
-  args?: string[];
-};
-
-export type MobilePreviewPacketCaptureEvent = {
-  sessionId: string;
-  request: MobilePreviewNetworkRequest;
-};
-
-export type MobilePreviewPacketCaptureSessionEvent = {
-  session: MobilePreviewPacketCaptureSession;
-};
