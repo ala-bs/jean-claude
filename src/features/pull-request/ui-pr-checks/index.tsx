@@ -544,15 +544,20 @@ function CheckRow({
           </span>
         )}
 
-        {/* Status label */}
-        <span
+        {/* Status label (hidden for failures on ignored policies) */}
+        {!(
+          isIgnoredForAutoComplete &&
+          (evaluation.status === 'rejected' || evaluation.status === 'broken')
+        ) && (
+          <span
           className={clsx(
             'min-w-[52px] shrink-0 text-right text-xs font-medium',
             getStatusColor(evaluation),
           )}
         >
-          {getStatusLabel(evaluation)}
-        </span>
+            {getStatusLabel(evaluation)}
+          </span>
+        )}
 
         {/* Queue action button */}
         {showQueue && (
