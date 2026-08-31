@@ -136,6 +136,8 @@ import { DevToolsTab } from './ui-devtools-tab';
 import { LogsTab } from './ui-logs-tab';
 import { ManageDevicesDialog } from './ui-manage-devices-dialog';
 import { MetroPortBadge } from './ui-metro-port-badge';
+import { useMobilePreviewWorkspaceStore } from '@/stores/mobile-preview-workspace';
+
 import type { MobilePreviewPaneTab } from './utils-tabs';
 import type { MobilePreviewProjectConfig } from '@shared/types';
 import { SetupTab } from './ui-setup-tab';
@@ -254,11 +256,39 @@ export function MobilePreviewPane({
     useState<string | null>(null);
   const [isStandaloneInspectorOpen, setIsStandaloneInspectorOpen] =
     useState(false);
-  const [activeTab, setActiveTab] = useState<MobilePreviewPaneTab>('setup');
+  // One embedded DevTools view per task *and* device, so switching devices
+  // doesn't reuse (or tear down) another device's debugger session. Declared
+  // here because the persisted pane UI state is keyed by it.
+  const devToolsViewId = `rn-devtools:${taskId}:${platform}:${deviceId || 'none'}`;
+  // Tab and target live in the store, not local state: the embedded DevTools
+  // view survives this pane unmounting, so the selection pointing at it has to
+  // survive too.
+  const activeTab = useMobilePreviewWorkspaceStore(
+    (state) => state.paneTabByViewId[devToolsViewId] ?? 'setup',
+  );
+  const setPaneTab = useMobilePreviewWorkspaceStore(
+    (state) => state.setPaneTab,
+  );
+  const setActiveTab = useCallback(
+    (tab: MobilePreviewPaneTab) => setPaneTab(devToolsViewId, tab),
+    [devToolsViewId, setPaneTab],
+  );
   const [devToolsLaunchError, setDevToolsLaunchError] = useState<string | null>(
     null,
   );
-  const [selectedDevToolsTargetId, setSelectedDevToolsTargetId] = useState('');
+  const selectedDevToolsTargetId = useMobilePreviewWorkspaceStore(
+    (state) => state.devToolsTargetIdByViewId[devToolsViewId] ?? '',
+  );
+  const setDevToolsTargetId = useMobilePreviewWorkspaceStore(
+    (state) => state.setDevToolsTargetId,
+  );
+  const clearPaneUiState = useMobilePreviewWorkspaceStore(
+    (state) => state.clearPaneUiState,
+  );
+  const setSelectedDevToolsTargetId = useCallback(
+    (targetId: string) => setDevToolsTargetId(devToolsViewId, targetId),
+    [devToolsViewId, setDevToolsTargetId],
+  );
   const devToolsViewRef = useRef<HTMLDivElement | null>(null);
   const devToolsOpenedRef = useRef(false);
   const [isDevToolsViewOpen, setIsDevToolsViewOpen] = useState(false);
@@ -515,7 +545,11 @@ export function MobilePreviewPane({
     if (targets.some((target) => target.id === selectedDevToolsTargetId)) return;
     const nextTargetId = targets.at(-1)?.id ?? '';
     queueMicrotask(() => setSelectedDevToolsTargetId(nextTargetId));
-  }, [reactNativeDevTools.data?.targets, selectedDevToolsTargetId]);
+  }, [
+    reactNativeDevTools.data?.targets,
+    selectedDevToolsTargetId,
+    setSelectedDevToolsTargetId,
+  ]);
   useEffect(() => {
     queueMicrotask(() => setActiveConsoleCommandId(null));
   }, [consoleCommandScope]);
@@ -2047,9 +2081,6 @@ export function MobilePreviewPane({
     null;
   const devToolsFrontendUrl =
     devToolsTarget?.devtoolsFrontendUrl ?? devToolsResult?.frontendUrl ?? null;
-  // One embedded DevTools view per task *and* device, so switching devices
-  // doesn't reuse (or tear down) another device's debugger session.
-  const devToolsViewId = `rn-devtools:${taskId}:${platform}:${deviceId || 'none'}`;
   const handleDevToolsTargetMenuOpenChange = useCallback(
     (open: boolean) => {
       devToolsTargetMenuOpenRef.current = open;
@@ -2092,16 +2123,23 @@ export function MobilePreviewPane({
   }, [devToolsViewId]);
 
   // Lifecycle: create the embedded view as soon as a frontend URL exists
-  // (even while another tab is active) and keep it alive across tab switches
-  // so console/network history is preserved. Only destroyed on unmount, task
-  // change, or when the target disappears.
+  // (even while another tab is active) and keep it alive across tab switches,
+  // pane closes and route changes so console/network history is preserved.
+  // The view is only destroyed when it is switched away from (see the
+  // devToolsViewId effect below) or when the main process tears it down
+  // because the preview stopped or the task was completed/deleted.
   useEffect(() => {
     if (!devToolsFrontendUrl) {
+      // The target can vanish on an app reload. Hide rather than dispose so a
+      // reattach keeps the existing console/network history.
       devToolsOpenedRef.current = false;
       queueMicrotask(() => setIsDevToolsViewOpen(false));
-      void api.mobilePreview.closeEmbeddedReactNativeDevTools({
-        viewId: devToolsViewId,
-      });
+      void api.mobilePreview
+        .setEmbeddedReactNativeDevToolsVisibility({
+          viewId: devToolsViewId,
+          visible: false,
+        })
+        .catch(() => {});
       return;
     }
 
@@ -2146,11 +2184,33 @@ export function MobilePreviewPane({
       devToolsOpenRequestRef.current += 1;
       devToolsOpenedRef.current = false;
       queueMicrotask(() => setIsDevToolsViewOpen(false));
-      void api.mobilePreview.closeEmbeddedReactNativeDevTools({
-        viewId: devToolsViewId,
-      });
+      // Hide, never dispose: this cleanup also runs when the pane unmounts
+      // (pane closed, route change, runtime remount) and disposing here is what
+      // used to throw away the whole network/console log.
+      void api.mobilePreview
+        .setEmbeddedReactNativeDevToolsVisibility({
+          viewId: devToolsViewId,
+          visible: false,
+        })
+        .catch(() => {});
     };
   }, [devToolsFrontendUrl, devToolsViewId, updateEmbeddedDevToolsBounds]);
+
+  // Switching task/platform/device points at a different debugger session, so
+  // the view we are leaving behind is genuinely dead and must be released.
+  const previousDevToolsViewIdRef = useRef(devToolsViewId);
+  useEffect(() => {
+    const previousViewId = previousDevToolsViewIdRef.current;
+    if (previousViewId === devToolsViewId) return;
+
+    previousDevToolsViewIdRef.current = devToolsViewId;
+    void api.mobilePreview
+      .closeEmbeddedReactNativeDevTools({ viewId: previousViewId })
+      .catch(() => {});
+    // The view is gone, so the persisted tab/target pointing at it is dead
+    // weight; drop it instead of accumulating an entry per device forever.
+    clearPaneUiState(previousViewId);
+  }, [clearPaneUiState, devToolsViewId]);
 
   // Visibility + bounds: show the (already running) view only on the DevTools
   // tab; hide it otherwise instead of tearing it down.
@@ -2208,7 +2268,14 @@ export function MobilePreviewPane({
       devToolsViewRef={devToolsViewRef}
       isFetching={reactNativeDevTools.isFetching}
       isLoading={reactNativeDevTools.isLoading}
-      onRefresh={() => void reactNativeDevTools.refetch()}
+      onRefresh={() => {
+        void reactNativeDevTools.refetch();
+        // The frontend URL is stable now, so re-resolving alone will not
+        // reload a view left bound to a dead websocket by a Metro restart.
+        void api.mobilePreview
+          .reloadEmbeddedReactNativeDevTools({ viewId: devToolsViewId })
+          .catch(() => {});
+      }}
       setSelectedDevToolsTargetId={setSelectedDevToolsTargetId}
       handleDevToolsTargetMenuOpenChange={handleDevToolsTargetMenuOpenChange}
     />

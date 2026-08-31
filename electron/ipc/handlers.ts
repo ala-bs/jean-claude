@@ -97,6 +97,7 @@ import type {
   ReactNativeDevToolsEmbeddedBoundsParams,
   ReactNativeDevToolsEmbeddedCloseParams,
   ReactNativeDevToolsEmbeddedOpenParams,
+  ReactNativeDevToolsEmbeddedReloadParams,
   ReactNativeDevToolsEmbeddedVisibilityParams,
   ReactNativeDevToolsOpenParams,
   ReactNativeDevToolsResolveParams,
@@ -5876,6 +5877,14 @@ export function registerIpcHandlers() {
     'mobilePreview:setEmbeddedReactNativeDevToolsVisibility',
     (event, params: ReactNativeDevToolsEmbeddedVisibilityParams) =>
       reactNativeDevToolsService.setEmbeddedReactNativeDevToolsVisibility(
+        event.sender,
+        params,
+      ),
+  );
+  ipcMain.handle(
+    'mobilePreview:reloadEmbeddedReactNativeDevTools',
+    (event, params: ReactNativeDevToolsEmbeddedReloadParams) =>
+      reactNativeDevToolsService.reloadEmbeddedReactNativeDevTools(
         event.sender,
         params,
       ),

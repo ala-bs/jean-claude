@@ -371,6 +371,10 @@ export type ReactNativeDevToolsEmbeddedCloseParams = {
   viewId: string;
 };
 
+export type ReactNativeDevToolsEmbeddedReloadParams = {
+  viewId: string;
+};
+
 export type ReactNativeDevToolsResolveResult = {
   metroBaseUrl: string;
   frontendUrl: string | null;
