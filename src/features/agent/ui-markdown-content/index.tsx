@@ -1323,7 +1323,7 @@ function MarkdownTableBlock({
           className={TOOLBAR_BUTTON_CLASS}
         >
           {copied ? (
-            <Check className="h-3 w-3 text-green-500" />
+            <Check className="text-status-done h-3 w-3" />
           ) : (
             <Copy className="h-3 w-3" />
           )}

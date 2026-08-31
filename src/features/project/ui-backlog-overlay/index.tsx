@@ -887,7 +887,7 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
               }
               className={clsx(
                 'hover:bg-glass-medium rounded p-1 transition-colors disabled:opacity-40',
-                isFavorite ? 'text-amber-300' : 'text-ink-3 hover:text-ink-1',
+                isFavorite ? 'text-status-run' : 'text-ink-3 hover:text-ink-1',
               )}
             >
               <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />

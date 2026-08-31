@@ -104,7 +104,7 @@ export function ProjectEnvSettings({ projectId }: { projectId: string }) {
       </div>
 
       {brokenSecrets.length > 0 && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-600 dark:text-amber-400">
+        <p className="border-status-run/30 bg-status-run/10 text-status-run rounded-md border p-3 text-sm">
           {brokenSecrets.length === 1
             ? `The secret ${brokenSecrets[0]!.key} can no longer be decrypted`
             : `${brokenSecrets.length} secrets can no longer be decrypted (${brokenSecrets
@@ -261,14 +261,14 @@ function EnvVarRow({
           }
           className={
             envVar.decryptionFailed
-              ? 'w-full border-amber-500/50 font-mono'
+              ? 'border-status-run/50 w-full font-mono'
               : 'w-full font-mono'
           }
         />
       </div>
       {envVar.decryptionFailed ? (
         <AlertTriangle
-          className="size-4 shrink-0 text-amber-500"
+          className="text-status-run size-4 shrink-0"
           aria-label="This secret can no longer be decrypted"
         />
       ) : (

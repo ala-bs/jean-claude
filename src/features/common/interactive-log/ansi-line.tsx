@@ -3,6 +3,7 @@ import Anser from 'anser';
 
 import { isDefaultAppFile } from '@shared/default-app-extensions';
 
+import { ansiClassToThemeColor } from '@/lib/ansi-theme';
 import { api } from '@/lib/api';
 import { useToastStore } from '@/stores/toasts';
 
@@ -13,8 +14,6 @@ import {
 
 const LINK_CLASS_NAME =
   'underline decoration-current/45 underline-offset-2 hover:decoration-current';
-
-import { ansiClassToThemeColor } from '@/lib/ansi-theme';
 
 /**
  * Cursor-forward (`\x1b[<n>C`) is column padding: many CLIs emit it instead of

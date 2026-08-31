@@ -39,8 +39,8 @@ export class SettingsErrorBoundary extends Component<
     if (!error) return this.props.children;
 
     return (
-      <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4">
-        <div className="text-sm font-semibold text-red-300">
+      <div className="border-status-fail/40 bg-status-fail/10 rounded-lg border p-4">
+        <div className="text-status-fail text-sm font-semibold">
           This settings section crashed
         </div>
         <pre className="text-ink-2 mt-2 max-h-40 overflow-auto rounded bg-black/30 p-3 font-mono text-xs whitespace-pre-wrap">

@@ -44,12 +44,12 @@ export function DeviceRailRow({
     ? 'bg-status-done animate-pulse shadow-[0_0_7px_var(--color-status-done)]'
     : isPhysical
       ? device.connection === 'connected'
-        ? 'bg-emerald-300 shadow-[0_0_7px_var(--color-status-done)]'
+        ? 'bg-status-done shadow-[0_0_7px_var(--color-status-done)]'
         : device.connection === 'unauthorized' || device.connection === 'untrusted'
-          ? 'bg-amber-300'
+          ? 'bg-status-run'
           : 'bg-ink-4'
       : isBooted
-        ? 'bg-emerald-300 shadow-[0_0_7px_var(--color-status-done)]'
+        ? 'bg-status-done shadow-[0_0_7px_var(--color-status-done)]'
         : 'bg-ink-4';
 
   const meta = getDeviceMetaLabel(device, isPhysical);

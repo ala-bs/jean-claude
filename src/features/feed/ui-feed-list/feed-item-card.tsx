@@ -61,8 +61,8 @@ import {
   usePullRequestPolicyEvaluations,
 } from '@/hooks/use-pull-requests';
 import { useCompleteTask, useTask } from '@/hooks/use-tasks';
-import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
 import { api } from '@/lib/api';
+import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
 import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-dialog';
 import { formatRelativeTime } from '@/lib/time';
 import { getRunCommandDisplayName } from '@shared/run-command-types';

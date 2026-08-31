@@ -922,8 +922,8 @@ function EmptySettingsContent({
   detail: string;
 }) {
   return (
-    <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-4">
-      <div className="text-sm font-semibold text-amber-200">
+    <div className="border-status-run/30 bg-status-run/10 rounded-lg border p-4">
+      <div className="text-status-run text-sm font-semibold">
         Nothing to show here
       </div>
       <div className="text-ink-2 mt-1 text-sm">{reason}</div>

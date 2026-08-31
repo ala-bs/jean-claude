@@ -180,7 +180,7 @@ export function FilePreviewPane({
                   <div
                     key={lineNum}
                     data-line={lineNum}
-                    className={`leading-6 ${isHighlighted ? 'bg-yellow-900/30 text-yellow-400' : ''}`}
+                    className={`leading-6 ${isHighlighted ? 'bg-status-run/20 text-status-run' : ''}`}
                   >
                     {lineNum}
                   </div>
@@ -195,7 +195,7 @@ export function FilePreviewPane({
             {/* Highlight overlay */}
             {lineStart && (
               <div
-                className="pointer-events-none absolute right-0 left-0 bg-yellow-500/10"
+                className="bg-status-run/10 pointer-events-none absolute right-0 left-0"
                 style={{
                   top: `${(lineStart - 1) * 24 + 16}px`,
                   height: `${((lineEnd || lineStart) - lineStart + 1) * 24}px`,

@@ -92,7 +92,7 @@ export function SpreadsheetViewer({
 
   if (error) {
     return (
-      <div className="p-6 text-sm text-red-400">
+      <div className="text-status-fail p-6 text-sm">
         Could not read spreadsheet: {error}
       </div>
     );
@@ -138,7 +138,7 @@ export function SpreadsheetViewer({
         }
       />
       {sheet.truncated && (
-        <p className="border-b border-yellow-500/30 bg-yellow-500/10 px-3 py-1.5 text-xs text-yellow-200">
+        <p className="border-status-run/30 bg-status-run/10 text-status-run border-b px-3 py-1.5 text-xs">
           Showing the first {Math.min(sheet.totalRowCount, MAX_ROWS)} of{' '}
           {sheet.totalRowCount} rows and{' '}
           {Math.min(sheet.totalColCount, MAX_COLS)} of {sheet.totalColCount}{' '}
@@ -189,13 +189,13 @@ function SheetTabs({
             >
               <span className="max-w-40 truncate">{sheet.name}</span>
               {showChangeCounts && sheet.status === 'added' && (
-                <span className="text-green-400">new</span>
+                <span className="text-status-done">new</span>
               )}
               {showChangeCounts && sheet.status === 'removed' && (
-                <span className="text-red-400">removed</span>
+                <span className="text-status-fail">removed</span>
               )}
               {showChangeCounts && sheet.status === 'modified' && (
-                <span className="text-orange-400">
+                <span className="text-status-run">
                   {sheet.changedCellCount}
                 </span>
               )}
@@ -210,9 +210,9 @@ function SheetTabs({
 
 const CELL_STATUS_CLASS: Record<DiffCell['status'], string> = {
   unchanged: '',
-  added: 'bg-green-500/15 text-green-200',
-  removed: 'bg-red-500/15 text-red-200',
-  changed: 'bg-orange-500/15 text-orange-100',
+  added: 'bg-status-done/15 text-status-done',
+  removed: 'bg-status-fail/15 text-status-fail',
+  changed: 'bg-status-run/15 text-status-run',
 };
 
 function SheetGrid({
@@ -302,7 +302,7 @@ function SheetGrid({
                 >
                   {isDiff && cell.status === 'changed' ? (
                     <span className="flex items-baseline gap-1.5">
-                      <span className="text-red-300/70 line-through">
+                      <span className="text-status-fail/70 line-through">
                         {cell.oldText}
                       </span>
                       <span>{cell.newText}</span>

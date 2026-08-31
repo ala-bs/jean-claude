@@ -21,20 +21,20 @@ const typeMeta = {
   feature: {
     label: 'New',
     Icon: Sparkles,
-    dot: 'bg-blue-300',
-    chip: 'bg-blue-400/10 text-blue-200',
+    dot: 'bg-status-azure',
+    chip: 'bg-status-azure/10 text-status-azure',
   },
   improvement: {
     label: 'Improvement',
     Icon: Zap,
-    dot: 'bg-emerald-300',
-    chip: 'bg-emerald-400/10 text-emerald-200',
+    dot: 'bg-status-done',
+    chip: 'bg-status-done/10 text-status-done',
   },
   fix: {
     label: 'Fix',
     Icon: Wrench,
-    dot: 'bg-amber-300',
-    chip: 'bg-amber-400/10 text-amber-200',
+    dot: 'bg-status-run',
+    chip: 'bg-status-run/10 text-status-run',
   },
 } as const;
 
@@ -351,7 +351,7 @@ export function ChangelogModal() {
                   <span
                     className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                       index === 0
-                        ? 'bg-blue-300'
+                        ? 'bg-status-azure'
                         : active
                           ? 'bg-ink-1'
                           : 'bg-ink-4'
@@ -395,7 +395,7 @@ export function ChangelogModal() {
                   <div className="border-glass-border bg-bg-0 flex h-[15px] w-[15px] items-center justify-center rounded-full border">
                     <div
                       className={`h-[5px] w-[5px] rounded-full ${
-                        dayIndex === 0 ? 'bg-blue-300' : 'bg-ink-3'
+                        dayIndex === 0 ? 'bg-status-azure' : 'bg-ink-3'
                       }`}
                     />
                   </div>

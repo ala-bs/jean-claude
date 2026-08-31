@@ -291,8 +291,8 @@ function UnusedWorktreesModal({
       ariaLabel="Unused worktrees"
     >
       {scanErrors.length > 0 && (
-        <div className="border-glass-border border-b bg-amber-400/10 px-4 py-2">
-          <div className="text-xs font-semibold text-amber-200">
+        <div className="border-glass-border bg-status-run/10 border-b px-4 py-2">
+          <div className="text-status-run text-xs font-semibold">
             {scanErrors.length} project
             {scanErrors.length === 1 ? '' : 's'} could not be scanned
           </div>
