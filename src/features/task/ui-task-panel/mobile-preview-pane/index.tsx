@@ -171,7 +171,6 @@ import {
   isNoticeDismissed,
   markNoticeDismissed,
 } from '@/features/mobile-preview/mobile-preview-dismissed-notices-store';
-import { useMobilePreviewAutoStart } from '@/features/mobile-preview/use-mobile-preview-auto-start';
 import { useMobilePreviewExpoLaunch } from '@/features/mobile-preview/use-mobile-preview-expo-launch';
 
 const FPS_OPTIONS = [
@@ -1229,44 +1228,8 @@ export function MobilePreviewPane({
   });
 
 
-  const autoPreviewStartAttemptKey = selectedPreviewDeviceKey
-    ? [
-        taskId,
-        appPath,
-        effectiveDevServerPort,
-        devServerStatus?.pid ?? 'unknown-process',
-        selectedPreviewDeviceKey,
-      ].join('\0')
-    : null;
-  const {
-    error: autoPreviewStartError,
-    retry: retryAutoPreviewStart,
-    clearError: clearAutoPreviewStartError,
-    dismissError: dismissAutoPreviewStartError,
-  } = useMobilePreviewAutoStart({
-    enabled:
-      autoLaunchRunningRuntime &&
-      !needsAppSelection &&
-      !hasActiveSession &&
-      !isHydratingRetainedSessions &&
-      !!deviceId &&
-      selectedDeviceCanStart &&
-      // Physical iPhones have no screen-stream API (simctl/idb are
-      // simulator-only), so `mobilePreview:start` would always reject with the
-      // "Live screen streaming is not supported..." guard and paint an error
-      // banner the user can do nothing about. Do NOT re-enable this: the fix is
-      // a real device-streaming backend, not retrying the doomed call.
-      !physicalIosStreamingUnsupported,
-    attemptKey: autoPreviewStartAttemptKey,
-    start: () =>
-      start({
-        projectPath: effectiveProjectPath,
-        platform,
-        deviceId,
-        fps,
-        quality,
-      }),
-  });
+  // Streaming never starts on its own: opening/focusing the pane or clicking a
+  // device only selects it. The user starts the stream explicitly via Start.
 
   const handleStartStop = useCallback(async () => {
     try {
@@ -1276,8 +1239,9 @@ export function MobilePreviewPane({
         return;
       }
 
-      // Same simulator-only limitation as the auto-start gate above: starting a
-      // stream on a physical iPhone can only ever fail, so it is a no-op here.
+      // Physical iPhones have no screen-stream API (simctl/idb are
+      // simulator-only), so starting a stream there can only ever fail. Treat
+      // it as a no-op instead of surfacing an unactionable error.
       if (
         !deviceId ||
         !selectedDeviceCanStart ||
@@ -1292,7 +1256,6 @@ export function MobilePreviewPane({
         fps,
         quality,
       });
-      clearAutoPreviewStartError();
     } catch {
       // Hook exposes start/stop errors for rendering.
     }
@@ -1309,7 +1272,6 @@ export function MobilePreviewPane({
     start,
     stop,
     setupOperationCoordinator,
-    clearAutoPreviewStartError,
   ]);
 
   const handleSelectDevice = useCallback(
@@ -2518,7 +2480,6 @@ export function MobilePreviewPane({
         />
       ) : null}
       {inputNotice ||
-      autoPreviewStartError ||
       showRuntimeLaunchNotice ||
       degradedReason ? (
         <PreviewNoticeStack insetLeft={!isStandalone}>
@@ -2539,20 +2500,6 @@ export function MobilePreviewPane({
               onDismiss={() => setInputNotice(null)}
             >
               {inputNotice}
-            </PreviewNotice>
-          ) : null}
-          {autoPreviewStartError ? (
-            <PreviewNotice
-              tone="error"
-              role="alert"
-              action={
-                <Button variant="ghost" size="xs" onClick={retryAutoPreviewStart}>
-                  Retry preview
-                </Button>
-              }
-              onDismiss={dismissAutoPreviewStartError}
-            >
-              {autoPreviewStartError}
             </PreviewNotice>
           ) : null}
           {showRuntimeLaunchNotice ? (
