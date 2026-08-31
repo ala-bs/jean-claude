@@ -34,6 +34,7 @@ import type {
   PromptPart,
 } from '@shared/agent-backend-types';
 import type {
+  AgentBackgroundTask,
   AgentMessage,
   AgentQuestion,
   QuestionResponseMetadata,
@@ -152,6 +153,15 @@ interface ClaudeSession {
   // they don't finalize the turn while background work keeps streaming. Pushed
   // at stream end if no real result arrives after them.
   deferredResultEvents: AgentEvent[] | null;
+  // Ends the streaming-input generator, which lets the SDK close the CLI's
+  // stdin. Held open for the whole turn so the `canUseTool` control channel
+  // survives background-task `result` messages.
+  closePromptStream: (() => void) | null;
+  // Task ids of background work (subagents, background bash, Monitor) still
+  // live, from the latest `background_tasks_changed` snapshot. While non-empty,
+  // no `result` can end the run — the agent will be resumed to handle their
+  // notifications, and closing stdin would kill the `canUseTool` channel.
+  backgroundTaskIds: Set<string>;
 }
 
 /**
@@ -160,6 +170,14 @@ interface ClaudeSession {
  * the end of the user's turn — finalizing on it marks the step completed while
  * the agent is still working.
  */
+/**
+ * How long the SDK stream may stay silent after a withheld background-task
+ * `result` before we assume nothing more is coming and close the input stream.
+ * Generous on purpose: background work (long builds, Monitor polls) reports
+ * back sporadically, and closing early would truncate a live run.
+ */
+const WITHHELD_RESULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+
 function isBackgroundNotificationResult(message: AgentMessage): boolean {
   if (message.type !== 'result') return false;
   // Origins other than a human prompt (`task-notification`, `auto-continuation`,
@@ -169,6 +187,83 @@ function isBackgroundNotificationResult(message: AgentMessage): boolean {
   // A notification-triggered turn that actually did work still reports a real
   // turn end; only the zero-turn no-op is withheld.
   return !message.num_turns;
+}
+
+/**
+ * Grace period between a `result` and closing the CLI's stdin.
+ *
+ * NO property of a `result` message reliably means "the run is over". Both
+ * directions are disproven by one real transcript:
+ *
+ *   idx 427  result, `origin` ABSENT, num_turns 17, 11 background tasks live
+ *            -> looked like a human end-of-turn; the run continued 25 minutes
+ *   idx 1164 result, origin `task-notification`, num_turns 1, 0 tasks live
+ *            -> looked like a real end-of-turn; the run continued 20 minutes
+ *
+ * stdin is the `canUseTool` control channel, so closing it early kills every
+ * later permission request ("Tool permission request failed: AbortError:
+ * Stream closed" — 44 of them in that transcript, none before idx 427).
+ *
+ * So stop classifying. Silence is the only trustworthy end-of-run signal: after
+ * a `result`, wait a beat, and let ANY further message cancel the close. A run
+ * that is genuinely finished emits nothing more and closes on schedule; a run
+ * that keeps working keeps its control channel. This costs a short-lived idle
+ * CLI process at the end of a turn and nothing else — the `result` events are
+ * still emitted immediately, so the step finalizes in the UI exactly as before.
+ */
+const POST_RESULT_CLOSE_GRACE_MS = 30 * 1000;
+
+/**
+ * Longer grace while background work (subagents, background bash, Monitor) is
+ * live: those report back sporadically, and a notification can resume the agent
+ * long after the `result`. Bounded on purpose — an unbounded wait would hang a
+ * run whose background task never terminates.
+ *
+ * 10 minutes, not 5: every message re-arms this timer, so the cap only bites on
+ * TOTAL silence, and a real transcript already showed a 4m21s quiet stretch
+ * mid-run (a Monitor on a long poll or a subagent on a slow build goes quiet for
+ * longer still). Closing early kills the `canUseTool` channel, so the resumed
+ * agent fails every later tool call with "AbortError: Stream closed" — the cost
+ * of waiting longer is one idle CLI process, which is far cheaper. Matches
+ * WITHHELD_RESULT_IDLE_TIMEOUT_MS so both silence-based exits agree.
+ */
+const BACKGROUND_WORK_CLOSE_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * Live background tasks reported by a `background_tasks_changed` system
+ * message.
+ *
+ * The SDK documents this as REPLACE semantics ("swap your set for this
+ * payload"), so it replaces the tracked set wholesale. A malformed or missing
+ * `tasks` array is treated as an empty snapshot rather than "no update":
+ * retaining a stale non-empty set would silently extend every close grace to
+ * the maximum for the rest of the run.
+ */
+function readBackgroundTaskSnapshot(
+  message: AgentMessage,
+): AgentBackgroundTask[] | null {
+  if (message.type !== 'system') return null;
+  const system = message as unknown as {
+    subtype?: string;
+    tasks?: Array<{
+      task_id?: string;
+      description?: string;
+      task_type?: string;
+    }>;
+  };
+  if (system.subtype !== 'background_tasks_changed') return null;
+  if (!Array.isArray(system.tasks)) return [];
+  return system.tasks
+    .filter((task) => typeof task.task_id === 'string')
+    .map((task) => ({
+      taskId: task.task_id as string,
+      ...(typeof task.description === 'string'
+        ? { description: task.description }
+        : {}),
+      ...(typeof task.task_type === 'string'
+        ? { taskType: task.task_type }
+        : {}),
+    }));
 }
 
 export class ClaudeCodeBackend implements AgentBackend {
@@ -214,10 +309,12 @@ export class ClaudeCodeBackend implements AgentBackend {
       normalizationCtx: {
         sessionIdEmitted: false,
         pendingToolUses: new Map(),
-        pendingToolPermissionDecisions: [],
+        permissionRules: rules,
       },
       messageIndex: this.taskContext.sessionStartIndex,
       deferredResultEvents: null,
+      backgroundTaskIds: new Set<string>(),
+      closePromptStream: null,
     };
     this.sessions.set(sessionKey, session);
 
@@ -236,6 +333,7 @@ export class ClaudeCodeBackend implements AgentBackend {
     if (!session) return;
 
     session.abortController.abort();
+    session.closePromptStream?.();
 
     // Reject all pending resolvers
     for (const [, resolver] of session.pendingResolvers) {
@@ -348,7 +446,26 @@ export class ClaudeCodeBackend implements AgentBackend {
   }): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
+    // A mid-run snapshot that collapses to (near) nothing is the signature of a
+    // failed settings read upstream: every previously-allowed tool would start
+    // prompting or denying at once. Loud enough to spot in the logs.
+    const before = session.permissionRules.length;
+    if (before > 0 && rules.length < before / 2) {
+      dbg.agentPermission(
+        'Permission rule snapshot for session %s shrank sharply: %d -> %d rules',
+        sessionId,
+        before,
+        rules.length,
+      );
+    }
+    dbg.agentPermission(
+      'Permission rules for session %s updated: %d -> %d rules',
+      sessionId,
+      before,
+      rules.length,
+    );
     session.permissionRules = rules;
+    session.normalizationCtx.permissionRules = rules;
   }
 
   /**
@@ -396,7 +513,7 @@ export class ClaudeCodeBackend implements AgentBackend {
 
     const queryOptions: NonNullable<Parameters<typeof query>[0]['options']> = {
       cwd: config.cwd,
-      env: getChildProcessEnv(),
+      env: getChildProcessEnv({ overrides: config.env }),
       allowedTools: [],
       // Disable the built-in question tool: we expose our own
       // `mcp__jean-claude-mcp__ask_question` which renders in the task UI.
@@ -413,9 +530,13 @@ export class ClaudeCodeBackend implements AgentBackend {
       abortController: session.abortController,
     };
 
-    const additionalDirectories = getAllowedDirectories(
-      flattenScope(config.persistedSessionRules ?? {}),
-    );
+    // `permissionRules` already carries global + project + worktree + session
+    // rules in last-match-wins order; the persisted session scope is appended
+    // as a fallback for callers that only supply that one.
+    const additionalDirectories = getAllowedDirectories([
+      ...(config.permissionRules ?? []),
+      ...flattenScope(config.persistedSessionRules ?? {}),
+    ]);
     if (additionalDirectories.length > 0) {
       queryOptions.additionalDirectories = additionalDirectories;
     }
@@ -444,50 +565,125 @@ export class ClaudeCodeBackend implements AgentBackend {
     const promptText = getPromptText(parts);
     const images = getPromptImages(parts);
 
-    // When images are present, construct an SDKUserMessage with multimodal
-    // content blocks (text + base64 images) so Claude can see the images.
-    // Otherwise, pass the plain text string for simplicity.
-    let prompt: string | AsyncIterable<SDKUserMessage>;
-    if (images.length > 0) {
-      const content: Array<
-        | { type: 'text'; text: string }
-        | {
-            type: 'image';
-            source: { type: 'base64'; media_type: string; data: string };
-          }
-      > = [];
+    // The prompt is ALWAYS sent as a streaming AsyncIterable, never as a bare
+    // string. A string prompt puts the SDK in `isSingleUserTurn` mode, where it
+    // closes the CLI's stdin as soon as the *first* `result` message arrives.
+    // stdin is also the control channel that carries `canUseTool` responses, so
+    // once a background task (background bash, Monitor, background subagent)
+    // triggers an early zero-turn `result`, every later permission prompt dies
+    // with "Tool permission request failed: AbortError: Stream closed".
+    // Keeping the input stream open until the real end-of-turn result keeps the
+    // control channel alive for the whole run.
+    const content: Array<
+      | { type: 'text'; text: string }
+      | {
+          type: 'image';
+          source: { type: 'base64'; media_type: string; data: string };
+        }
+    > = [];
 
-      if (promptText) {
-        content.push({ type: 'text', text: promptText });
-      }
-
-      for (const img of images) {
-        content.push({
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: img.mimeType,
-            data: img.data,
-          },
-        });
-      }
-
-      const userMessage: SDKUserMessage = {
-        type: 'user',
-        message: {
-          role: 'user',
-          content: content as SDKUserMessage['message']['content'],
-        },
-        parent_tool_use_id: null,
-        session_id: session.sessionId ?? '',
-      };
-
-      prompt = (async function* () {
-        yield userMessage;
-      })();
-    } else {
-      prompt = promptText;
+    // Always emit the text block, even when empty: this mirrors what the SDK
+    // itself writes for a bare-string prompt, and an empty `content` array is a
+    // different wire shape that the CLI may reject.
+    if (promptText || images.length === 0) {
+      content.push({ type: 'text', text: promptText });
     }
+
+    for (const img of images) {
+      content.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: img.mimeType,
+          data: img.data,
+        },
+      });
+    }
+
+    const userMessage: SDKUserMessage = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: content as SDKUserMessage['message']['content'],
+      },
+      parent_tool_use_id: null,
+      session_id: session.sessionId ?? '',
+    };
+
+    // Resolved once the turn genuinely ends (real `result`, error, or abort).
+    // Until then the input generator stays suspended, which keeps stdin — and
+    // therefore the permission control channel — open.
+    let closePromptStream!: () => void;
+    const promptStreamClosed = new Promise<void>((resolve) => {
+      closePromptStream = resolve;
+    });
+    session.closePromptStream = closePromptStream;
+
+    const prompt = (async function* () {
+      yield userMessage;
+      await promptStreamClosed;
+    })();
+
+    // Holding stdin open costs us the SDK's implicit liveness guarantee: with a
+    // string prompt the CLI exited on its own at the first `result`, which is
+    // what let the deferred-result replay below finalize a run that never
+    // produced a real result. Now that we keep the channel open past that
+    // point, an agent that goes silent after a background notification would
+    // idle forever. The watchdog restores the old terminating behaviour: after
+    // a withheld result, a long enough silence closes the input stream, the CLI
+    // exits, and the replay path finalizes the step as before.
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearIdleWatchdog = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = null;
+    };
+    const syncIdleWatchdog = () => {
+      clearIdleWatchdog();
+      // Only armed while a withheld result is outstanding — a normal run in
+      // progress may legitimately be silent for a long time (a slow tool call).
+      if (!session.deferredResultEvents) return;
+      idleTimer = setTimeout(() => {
+        dbg.agent(
+          'Session %s idle for %dms after a withheld background result — closing input stream',
+          sessionKey,
+          WITHHELD_RESULT_IDLE_TIMEOUT_MS,
+        );
+        closePromptStream();
+      }, WITHHELD_RESULT_IDLE_TIMEOUT_MS);
+      idleTimer.unref?.();
+    };
+
+    // Deferred close of the input stream after a `result`. Any subsequent
+    // message proves the run wasn't over and cancels it, which is what keeps
+    // the `canUseTool` control channel alive for misclassified results.
+    let closeTimer: ReturnType<typeof setTimeout> | null = null;
+    const cancelScheduledClose = () => {
+      if (closeTimer) clearTimeout(closeTimer);
+      closeTimer = null;
+    };
+    const schedulePromptStreamClose = () => {
+      cancelScheduledClose();
+      const graceMs =
+        session.backgroundTaskIds.size > 0
+          ? BACKGROUND_WORK_CLOSE_GRACE_MS
+          : POST_RESULT_CLOSE_GRACE_MS;
+      dbg.agentPermission(
+        'Result for session %s — closing stdin in %dms unless more activity arrives (%d background task(s) live, %d pending permission request(s))',
+        sessionKey,
+        graceMs,
+        session.backgroundTaskIds.size,
+        session.pendingResolvers.size,
+      );
+      closeTimer = setTimeout(() => {
+        closeTimer = null;
+        dbg.agentPermission(
+          'Session %s stayed silent after its result — closing input stream',
+          sessionKey,
+        );
+        closePromptStream();
+      }, graceMs);
+      closeTimer.unref?.();
+    };
 
     const generator = query({ prompt, options: queryOptions });
     session.queryInstance = generator;
@@ -500,6 +696,10 @@ export class ClaudeCodeBackend implements AgentBackend {
         }
 
         const message = rawMessage as AgentMessage;
+
+        // Any message at all proves the previous `result` did not end the run,
+        // so stand down the pending stdin close and keep `canUseTool` alive.
+        cancelScheduledClose();
 
         // 1. Persist raw message
         const rawMessageId = await this.taskContext.persistRaw({
@@ -531,14 +731,45 @@ export class ClaudeCodeBackend implements AgentBackend {
             : (event as AgentEvent),
         );
 
+        // Track live background work. The SDK documents REPLACE semantics, so
+        // the payload swaps the set rather than merging into it. Used only to
+        // pick how long to wait before closing stdin — never to decide whether
+        // the run is over, which would hang a run whose background task never
+        // terminates (a leftover `run_in_background` shell, a Monitor).
+        const taskSnapshot = readBackgroundTaskSnapshot(message);
+        if (taskSnapshot) {
+          session.backgroundTaskIds = new Set(
+            taskSnapshot.map((task) => task.taskId),
+          );
+          dbg.agentPermission(
+            'Session %s background tasks: %d live %o',
+            sessionKey,
+            session.backgroundTaskIds.size,
+            taskSnapshot,
+          );
+          // Surface the snapshot to the UI so a turn that "finished" while
+          // background work is still live doesn't look idle.
+          session.eventChannel.push({
+            type: 'background-tasks',
+            tasks: taskSnapshot,
+          });
+        }
+
         // A background-task notification produces a no-op `result`. Withhold it
         // (it would finalize the turn while the agent keeps working) and replay
         // it only if the run ends without ever emitting a real result.
         if (isBackgroundNotificationResult(message)) {
           if (!sawRealResult) session.deferredResultEvents = agentEvents;
+          syncIdleWatchdog();
+          // Re-arm the close: silence after a result still ends the run, even
+          // when the last thing we saw was a withheld notification.
+          if (sawRealResult) schedulePromptStreamClose();
           continue;
         }
         if (message.type === 'result') {
+          // Do NOT close stdin here. No property of a `result` reliably means
+          // "the run is over" (see POST_RESULT_CLOSE_GRACE_MS), and closing
+          // early kills the `canUseTool` channel for every later tool call.
           sawRealResult = true;
           session.deferredResultEvents = null;
         }
@@ -546,6 +777,14 @@ export class ClaudeCodeBackend implements AgentBackend {
         for (const event of agentEvents) {
           session.eventChannel.push(event);
         }
+
+        // Re-arm (or drop) the idle watchdog after every message.
+        syncIdleWatchdog();
+
+        // Once a result has been seen, the run ends on silence, not on the
+        // result itself. Every message re-arms this, so the stream closes a
+        // grace period after the LAST message rather than the first result.
+        if (sawRealResult) schedulePromptStreamClose();
       }
     } catch (error) {
       // SDK threw an unexpected error — push it as an error event so
@@ -566,13 +805,52 @@ export class ClaudeCodeBackend implements AgentBackend {
         error: errorMessage,
       });
     } finally {
+      // Never leave the input generator suspended — it would hold stdin (and
+      // the CLI process) open forever.
+      clearIdleWatchdog();
+      cancelScheduledClose();
+      closePromptStream();
+      session.closePromptStream = null;
       // The stream ended on a withheld background-notification result and no
       // real result ever arrived: replay it so the step isn't stuck `running`.
+      // The run is over, so nothing is still working in the background —
+      // clear the UI indicator even if the SDK never sent a final empty
+      // snapshot (it stops streaming once the process exits).
+      if (
+        session.backgroundTaskIds.size > 0 &&
+        !session.abortController.signal.aborted
+      ) {
+        session.backgroundTaskIds = new Set();
+        session.eventChannel.push({ type: 'background-tasks', tasks: [] });
+      }
       const deferred = session.deferredResultEvents;
       session.deferredResultEvents = null;
       if (deferred && !session.abortController.signal.aborted) {
         for (const event of deferred) session.eventChannel.push(event);
       }
+      // The stream is gone, so nobody can answer a still-open permission card.
+      // Settle the resolvers here — otherwise they dangle forever and the later
+      // `stop()` short-circuits on the already-deleted session key.
+      //
+      // This is the mass-denial path: if the generator ends while tool requests
+      // are still outstanding, EVERY one of them fails at once and every
+      // still-rendered permission card in the UI then throws "No Claude
+      // session" on click. Log it — it is the prime suspect for reports of
+      // "randomly all tool permissions fail".
+      if (session.pendingResolvers.size > 0) {
+        dbg.agentPermission(
+          'Session %s ended with %d unanswered permission request(s) — denying all. aborted=%s sawRealResult=%s pendingTools=%o',
+          sessionKey,
+          session.pendingResolvers.size,
+          session.abortController.signal.aborted,
+          sawRealResult,
+          [...session.pendingResolvers.values()].map((r) => r.toolName),
+        );
+      }
+      for (const [, resolver] of session.pendingResolvers) {
+        resolver.resolve({ behavior: 'deny', message: 'Session ended' });
+      }
+      session.pendingResolvers.clear();
       session.eventChannel.close();
       this.sessions.delete(sessionKey);
     }
@@ -630,19 +908,10 @@ export class ClaudeCodeBackend implements AgentBackend {
     const action = permissionDecision.action;
     if (action === 'allow' && !options.blockedPath) {
       dbg.agentPermission('Tool %s auto-allowed by permission rules', toolName);
-      (session.normalizationCtx.pendingToolPermissionDecisions ??= []).push(
-        permissionDecision.matchedRule
-          ? {
-              allowedBy: 'system',
-              tool,
-              matchValue,
-              rule: {
-                tool: permissionDecision.matchedRule.tool,
-                pattern: permissionDecision.matchedRule.pattern,
-              },
-            }
-          : { allowedBy: 'system', tool, matchValue },
-      );
+      // No decision is recorded here: the SDK already yielded (and we already
+      // normalized) the assistant tool_use block before this callback runs, so
+      // a decision pushed now would be consumed by the *next* identical tool
+      // call. The normalizer re-evaluates the same rules itself instead.
       return Promise.resolve({ behavior: 'allow', updatedInput: input });
     }
     if (action === 'deny') {
@@ -662,11 +931,8 @@ export class ClaudeCodeBackend implements AgentBackend {
         (matchValue && session.sessionAllowedTools.includes(tool)))
     ) {
       dbg.agentPermission('Tool %s is session-allowed', toolName);
-      (session.normalizationCtx.pendingToolPermissionDecisions ??= []).push({
-        allowedBy: 'agent',
-        tool,
-        matchValue,
-      });
+      // Same ordering caveat as above; session-allowed tools resolve to
+      // "allowed by agent", which is the normalizer's fallback anyway.
       return Promise.resolve({ behavior: 'allow', updatedInput: input });
     }
 

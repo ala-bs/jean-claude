@@ -106,56 +106,6 @@ describe('getFeedQueryKeyForCacheEvent', () => {
     ).toEqual([feedQueryKeys.tasks, ['tasks', 'allCompleted']]);
   });
 
-  it('invalidates pending workspace decisions only for PR workspace task events', () => {
-    const prTask = {
-      ...createTaskForDecisionTest(),
-      type: 'pr-review' as const,
-      pullRequestId: '42',
-      prWorkspaceState: 'cleanup-pending' as const,
-    };
-
-    expect(
-      getReactQueryKeysForCacheEvent({ type: 'task.upsert', task: prTask }),
-    ).toContainEqual(['pr-workspace-decisions']);
-    expect(
-      getReactQueryKeysForCacheEvent({
-        type: 'task.upsert',
-        task: { ...prTask, type: 'agent', pullRequestId: null },
-      }),
-    ).not.toContainEqual(['pr-workspace-decisions']);
-  });
-
-  it('invalidates decisions only when PR workspace state enters or leaves pending', () => {
-    const activeTask = {
-      ...createTaskForDecisionTest(),
-      type: 'pr-review' as const,
-      pullRequestId: '42',
-      prWorkspaceState: 'active' as const,
-    };
-    cache$.tasks[activeTask.id].set(activeTask);
-
-    expect(
-      getReactQueryKeysForCacheEvent({
-        type: 'task.upsert',
-        task: { ...activeTask, updatedAt: '2026-01-02T00:00:00.000Z' },
-      }),
-    ).not.toContainEqual(['pr-workspace-decisions']);
-    expect(
-      getReactQueryKeysForCacheEvent({
-        type: 'task.upsert',
-        task: { ...activeTask, prWorkspaceState: 'cleanup-pending' },
-      }),
-    ).toContainEqual(['pr-workspace-decisions']);
-
-    cache$.tasks[activeTask.id].prWorkspaceState.set('cleanup-pending');
-    expect(
-      getReactQueryKeysForCacheEvent({
-        type: 'task.upsert',
-        task: { ...activeTask, prWorkspaceState: 'kept' },
-      }),
-    ).toContainEqual(['pr-workspace-decisions']);
-  });
-
   it('maps project deletes to all project-backed feed keys', () => {
     expect(
       getReactQueryKeysForCacheEvent({
@@ -166,7 +116,6 @@ describe('getFeedQueryKeyForCacheEvent', () => {
       feedQueryKeys.tasks,
       feedQueryKeys.pullRequests,
       feedQueryKeys.workItems,
-      ['pr-workspace-decisions'],
       ['tasks', 'allCompleted'],
     ]);
   });
@@ -307,7 +256,7 @@ describe('handleCacheEvent', () => {
     });
   });
 
-  it('invalidates decisions from a PR task delete even without active cache subscriptions', () => {
+  it('applies a PR workspace task delete even without active cache subscriptions', () => {
     const queryClient = { invalidateQueries: vi.fn() };
     applyPrTaskForDecisionTest();
 
@@ -316,28 +265,26 @@ describe('handleCacheEvent', () => {
       queryClient,
     );
 
-    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ['pr-workspace-decisions'],
-    });
     expect(cache$.tasks['pr-task'].get()).toBeUndefined();
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: feedQueryKeys.tasks,
+    });
   });
 
-  it('recognizes queued PR task deletes when no task snapshot is cached', () => {
-    const queryClient = {
-      getQueryData: vi.fn().mockReturnValue([
-        { projectId: 'project-1', pullRequestId: 42, taskIds: ['pr-task'] },
-      ]),
-      invalidateQueries: vi.fn(),
-    };
+  it('ignores deletes for non-PR tasks without active cache subscriptions', () => {
+    const queryClient = { invalidateQueries: vi.fn() };
+    cache$.tasks['agent-task'].set({
+      ...createTaskForDecisionTest(),
+      id: 'agent-task',
+    });
 
     handleCacheEvent(
-      { type: 'task.delete', taskId: 'pr-task', projectId: 'project-1' },
+      { type: 'task.delete', taskId: 'agent-task', projectId: 'project-1' },
       queryClient,
     );
 
-    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ['pr-workspace-decisions'],
-    });
+    expect(cache$.tasks['agent-task'].get()).toBeDefined();
+    expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
   });
 });
 
@@ -381,7 +328,7 @@ function applyPrTaskForDecisionTest() {
     ...createTaskForDecisionTest(),
     type: 'pr-review',
     pullRequestId: '42',
-    prWorkspaceState: 'cleanup-pending',
+    prWorkspaceState: 'kept',
   });
 }
 

@@ -42,6 +42,11 @@ import {
 import {
   MOBILE_PREVIEW_DEEPLINK_OPEN_TIMEOUT_MS,
 } from './mobile-preview-process';
+import {
+  rememberPhysicalIosDevices,
+  resetDevicectlAvailabilityForTests,
+  resetKnownPhysicalIosDevicesForTests,
+} from './mobile-preview-ios-devicectl';
 import { tmpdir } from 'node:os';
 
 describe('mobile preview iOS idb adapter', () => {
@@ -762,18 +767,20 @@ describe('mobile preview iOS idb adapter', () => {
     const nativeStarted = new Promise<void>((resolve) => {
       notifyNativeStarted = resolve;
     });
-    runCommandMock.mockImplementation(
-      async (_command, _args, options) =>
-        new Promise((_resolve, reject) => {
-          nativeSignal = options?.signal;
-          notifyNativeStarted();
-          options?.signal?.addEventListener(
-            'abort',
-            () => reject(options.signal?.reason),
-            { once: true },
-          );
-        }),
-    );
+    runCommandMock.mockImplementation(async (_command, args, options) => {
+      // Only the simctl open hangs; the simulator-only guard's devicectl
+      // refresh must not be what this test observes.
+      if (args[0] !== 'simctl') return { stdout: '', stderr: '' };
+      return new Promise((_resolve, reject) => {
+        nativeSignal = options?.signal;
+        notifyNativeStarted();
+        options?.signal?.addEventListener(
+          'abort',
+          () => reject(options.signal?.reason),
+          { once: true },
+        );
+      });
+    });
     const controller = new AbortController();
 
     const opening = iosIdbAdapter.openDeeplink(
@@ -859,5 +866,211 @@ describe('mobile preview iOS idb adapter', () => {
       }),
     ).rejects.toThrow(/not ready to stream.*Only booted or shutdown/s);
     expect(spawnManagedMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('physical iOS device app status and restart', () => {
+  installIosPreviewTestHooks();
+
+  const PHYSICAL_DEVICE_ID = 'D0C5D914-4D28-5A76-9B8E-686DB0B06995';
+
+  function registerPhysicalDevice() {
+    resetKnownPhysicalIosDevicesForTests();
+    resetDevicectlAvailabilityForTests();
+    rememberPhysicalIosDevices({
+      devices: [
+        {
+          id: PHYSICAL_DEVICE_ID,
+          name: 'iPhone de Patrick',
+          platform: 'ios',
+          kind: 'physical',
+          state: 'booted',
+          connection: 'connected',
+        },
+      ],
+      listingSucceeded: true,
+    });
+  }
+
+  async function withExpoApp(
+    run: (appPath: string) => Promise<void>,
+  ): Promise<void> {
+    const appPath = await mkdtemp(join(tmpdir(), 'jc-ios-physical-status-'));
+    try {
+      await writeFile(
+        join(appPath, 'app.json'),
+        JSON.stringify({
+          expo: { ios: { bundleIdentifier: 'com.example.expo' } },
+        }),
+      );
+      await run(appPath);
+    } finally {
+      await rm(appPath, { recursive: true, force: true });
+    }
+  }
+
+  /** Answers the devicectl availability probe and writes `payload` as JSON. */
+  function mockDevicectl(payload: unknown) {
+    runCommandMock.mockImplementation(async (_command, args) => {
+      if (args[1] === '--version') return { stdout: '518.33', stderr: '' };
+      const index = args.indexOf('--json-output');
+      if (index >= 0) await writeFile(args[index + 1], JSON.stringify(payload));
+      return { stdout: '', stderr: '' };
+    });
+  }
+
+  it('reports installed=true from a well-formed devicectl app listing', async () => {
+    registerPhysicalDevice();
+    mockDevicectl({
+      result: {
+        apps: [
+          { bundleIdentifier: 'com.apple.Preferences' },
+          { bundleIdentifier: 'com.example.expo' },
+        ],
+      },
+    });
+
+    await withExpoApp(async (appPath) => {
+      await expect(
+        iosIdbAdapter.getIosAppStatus({
+          appPath,
+          deviceId: PHYSICAL_DEVICE_ID,
+        }),
+      ).resolves.toEqual({
+        appInstalled: true,
+        bundleId: 'com.example.expo',
+        nativeProjectExists: false,
+      });
+      expect(runCommandMock).toHaveBeenCalledWith(
+        'xcrun',
+        expect.arrayContaining([
+          'devicectl',
+          'device',
+          'info',
+          'apps',
+          '--device',
+          PHYSICAL_DEVICE_ID,
+        ]),
+        expect.anything(),
+      );
+      // Never reaches CoreSimulator for a physical device.
+      expect(
+        runCommandMock.mock.calls.some(([, args]) => args[0] === 'simctl'),
+      ).toBe(false);
+    });
+  });
+
+  it('reports installed=false when the app is genuinely absent from a queryable device', async () => {
+    registerPhysicalDevice();
+    mockDevicectl({
+      result: { apps: [{ bundleIdentifier: 'com.apple.Preferences' }] },
+    });
+
+    await withExpoApp(async (appPath) => {
+      await expect(
+        iosIdbAdapter.getIosAppStatus({
+          appPath,
+          deviceId: PHYSICAL_DEVICE_ID,
+        }),
+      ).resolves.toMatchObject({ appInstalled: false });
+    });
+  });
+
+  it('reports appInstalled=null (never false) on an unexpected payload shape', async () => {
+    registerPhysicalDevice();
+    mockDevicectl({ result: { applications: [] } });
+
+    await withExpoApp(async (appPath) => {
+      await expect(
+        iosIdbAdapter.getIosAppStatus({
+          appPath,
+          deviceId: PHYSICAL_DEVICE_ID,
+        }),
+      ).resolves.toEqual({
+        appInstalled: null,
+        bundleId: 'com.example.expo',
+        nativeProjectExists: false,
+      });
+    });
+  });
+
+  it('reports appInstalled=null (never false) when devicectl fails', async () => {
+    registerPhysicalDevice();
+    runCommandMock.mockImplementation(async (_command, args) => {
+      if (args[1] === '--version') return { stdout: '518.33', stderr: '' };
+      throw new Error('device is locked');
+    });
+
+    await withExpoApp(async (appPath) => {
+      await expect(
+        iosIdbAdapter.getIosAppStatus({
+          appPath,
+          deviceId: PHYSICAL_DEVICE_ID,
+        }),
+      ).resolves.toMatchObject({ appInstalled: null });
+    });
+  });
+
+  it('refuses a deeplink on a physical device with a COLD registry', async () => {
+    // No prior successful listDevices(): the synchronous guard would pass and
+    // `xcrun simctl openurl <CoreDevice udid>` would surface a raw
+    // "Invalid device:" string to the user.
+    resetKnownPhysicalIosDevicesForTests();
+    resetDevicectlAvailabilityForTests();
+    mockDevicectl({
+      result: {
+        devices: [
+          {
+            identifier: PHYSICAL_DEVICE_ID,
+            connectionProperties: {
+              pairingState: 'paired',
+              tunnelState: 'connected',
+            },
+            deviceProperties: {
+              name: 'iPhone de Patrick',
+              osVersionNumber: '26.5.2',
+            },
+            hardwareProperties: { platform: 'iOS', reality: 'physical' },
+          },
+        ],
+      },
+    });
+
+    await expect(
+      iosIdbAdapter.openDeeplink(PHYSICAL_DEVICE_ID, 'exp://192.168.1.24:19001'),
+    ).rejects.toThrow(/not supported on physical iOS devices/);
+    expect(
+      runCommandMock.mock.calls.some(([, args]) => args[0] === 'simctl'),
+    ).toBe(false);
+  });
+
+  it('restarts a physical app through devicectl instead of simctl', async () => {
+    registerPhysicalDevice();
+    mockDevicectl({ result: { process: { processIdentifier: 10684 } } });
+
+    await withExpoApp(async (appPath) => {
+      await expect(
+        iosIdbAdapter.restartIosApp({
+          appPath,
+          deviceId: PHYSICAL_DEVICE_ID,
+        }),
+      ).resolves.toMatchObject({ bundleId: 'com.example.expo' });
+      const launchCall = runCommandMock.mock.calls.find(
+        ([, args]) => args[3] === 'launch',
+      );
+      expect(launchCall?.[1].slice(0, 8)).toEqual([
+        'devicectl',
+        'device',
+        'process',
+        'launch',
+        '--device',
+        PHYSICAL_DEVICE_ID,
+        '--terminate-existing',
+        'com.example.expo',
+      ]);
+      expect(
+        runCommandMock.mock.calls.some(([, args]) => args[0] === 'simctl'),
+      ).toBe(false);
+    });
   });
 });

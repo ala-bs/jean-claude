@@ -136,8 +136,20 @@ export function ChangelogModal() {
   const [daysShown, setDaysShown] = useState(DAYS_PER_PAGE);
   const [activeDate, setActiveDate] = useState<string | null>(null);
   const [filter, setFilter] = useState<ChangelogFilter>('all');
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // These are state, not refs, on purpose. <Modal> defers mounting its children
+  // by one render while it wins modal arbitration, so a ref read during this
+  // component's effects is still null on the render where `isOpen` flips true —
+  // and nothing in the dep arrays would ever re-run those effects afterwards.
+  // Callback refs make the node's arrival a state change the effects can depend on.
+  const [sentinelEl, setSentinelEl] = useState<HTMLDivElement | null>(null);
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  // Mirrored as a ref so imperative scrolling can read the node without making
+  // the node's arrival a dependency — see the reset effect below.
+  const scrollElRef = useRef<HTMLDivElement | null>(null);
+  const setScrollNode = useCallback((el: HTMLDivElement | null) => {
+    scrollElRef.current = el;
+    setScrollEl(el);
+  }, []);
   const dayRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const counts = useMemo(() => {
@@ -183,36 +195,46 @@ export function ChangelogModal() {
     if (!isOpen) return;
     startTransition(() => setDaysShown(DAYS_PER_PAGE));
     startTransition(() => setActiveDate(filteredDays[0]?.date ?? null));
-    scrollContainerRef.current?.scrollTo({ top: 0 });
+    scrollElRef.current?.scrollTo({ top: 0 });
+    // `scrollEl` is deliberately NOT a dependency: <Modal> unmounts and remounts
+    // its children whenever it loses and regains arbitration to another modal,
+    // and depending on the node would re-run this reset and throw away every
+    // page the user had already scrolled through.
   }, [filter, filteredDays, isOpen]);
 
-  // Infinite scroll: load more when sentinel visible.
+  // Infinite scroll: load more when sentinel is near the bottom of the viewport.
+  // `daysShown` is a dependency on purpose: the observer must be re-created after
+  // every page so it re-evaluates intersection. Otherwise, if the sentinel stays
+  // visible after new content renders (short pages that don't fill the viewport),
+  // no new intersection event fires and loading stalls forever.
   useEffect(() => {
-    if (!isOpen || !hasMore) return;
-    const sentinel = sentinelRef.current;
-    if (!sentinel) return;
+    if (!isOpen || !hasMore || !sentinelEl || !scrollEl) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting) {
-          setDaysShown((n) => Math.min(n + DAYS_PER_PAGE, filteredDays.length));
+        if (entries.some((entry) => entry.isIntersecting)) {
+          startTransition(() =>
+            setDaysShown((n) => Math.min(n + DAYS_PER_PAGE, filteredDays.length)),
+          );
         }
       },
-      { root: scrollContainerRef.current, threshold: 0.1 },
+      // rootMargin pre-loads the next page before the user hits the very bottom,
+      // so scrolling feels continuous instead of stopping at a hard edge. Pages
+      // chain-load until rendered height exceeds root + margin, which is how a
+      // short filtered view fills the viewport instead of stopping under-full.
+      { root: scrollEl, rootMargin: '300px 0px', threshold: 0 },
     );
 
-    observer.observe(sentinel);
+    observer.observe(sentinelEl);
     return () => observer.disconnect();
-  }, [filteredDays.length, hasMore, isOpen]);
+  }, [daysShown, filteredDays.length, hasMore, isOpen, scrollEl, sentinelEl]);
 
   // Track closest day marker for sidebar highlight.
   useEffect(() => {
-    if (!isOpen) return;
-    const container = scrollContainerRef.current;
-    if (!container) return;
+    if (!isOpen || !scrollEl) return;
 
     const handleScroll = () => {
-      const containerTop = container.getBoundingClientRect().top;
+      const containerTop = scrollEl.getBoundingClientRect().top;
       let bestDate = visibleDays[0]?.date ?? null;
       let bestDistance = Number.POSITIVE_INFINITY;
 
@@ -231,9 +253,9 @@ export function ChangelogModal() {
     };
 
     handleScroll();
-    container.addEventListener('scroll', handleScroll, { passive: true });
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [isOpen, visibleDays]);
+    scrollEl.addEventListener('scroll', handleScroll, { passive: true });
+    return () => scrollEl.removeEventListener('scroll', handleScroll);
+  }, [isOpen, scrollEl, visibleDays]);
 
   useEffect(() => {
     if (!isOpen || !activeDate) return;
@@ -253,7 +275,7 @@ export function ChangelogModal() {
 
   const scrollToDate = useCallback((date: string) => {
     const el = dayRefs.current.get(date);
-    const container = scrollContainerRef.current;
+    const container = scrollElRef.current;
     if (!el || !container) return;
     container.scrollTo({
       top: Math.max(0, el.offsetTop - 8),
@@ -355,7 +377,7 @@ export function ChangelogModal() {
           </nav>
 
           <div
-            ref={scrollContainerRef}
+            ref={setScrollNode}
             className="min-w-0 flex-1 overflow-y-auto px-[18px] pb-2"
           >
             {visibleDays.length === 0 && <EmptyState filter={filter} />}
@@ -428,7 +450,25 @@ export function ChangelogModal() {
               </section>
             ))}
 
-            {hasMore && <div ref={sentinelRef} className="h-4" aria-hidden />}
+            {hasMore && (
+              // Pagination is synchronous state, not a fetch — this is a scroll
+              // affordance, not a loading indicator, so it stays decorative.
+              <div
+                ref={setSentinelEl}
+                className="text-ink-4 flex items-center justify-center gap-2 py-4 text-[11px]"
+              >
+                <span className="h-1 w-1 rounded-full bg-current" aria-hidden />
+                More releases below
+              </div>
+            )}
+
+            {!hasMore && visibleDays.length > 0 && (
+              <div className="text-ink-4 py-4 text-center text-[11px]">
+                {filter === 'all'
+                  ? `That's the whole changelog — ${filteredDays.length} releases`
+                  : `End of ${filterLabels[filter].toLowerCase()} — ${filteredDays.length} of ${changelog.length} releases`}
+              </div>
+            )}
           </div>
         </div>
       </div>

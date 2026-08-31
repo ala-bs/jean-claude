@@ -75,6 +75,7 @@ const {
   normalizeToolRequestMock,
   openCodeCompactRawMessagesForTaskMock,
   pathExistsMock,
+  projectEnvVarRepositoryMock,
   projectRepositoryMock,
   providerCalls,
   providerState,
@@ -235,6 +236,11 @@ const {
       notify: vi.fn(),
     },
     pathExistsMock: vi.fn(),
+    projectEnvVarRepositoryMock: {
+      getResolvedEnv: vi
+        .fn()
+        .mockResolvedValue({ env: {}, undecryptableKeys: [] }),
+    },
     projectRepositoryMock: {
       findById: vi.fn(),
     },
@@ -297,6 +303,7 @@ vi.mock('electron', () => ({
 
 vi.mock('../database/repositories', () => ({
   AgentMessageRepository: agentMessageRepositoryMock,
+  ProjectEnvVarRepository: projectEnvVarRepositoryMock,
   ProjectRepository: projectRepositoryMock,
   RawMessageRepository: rawMessageRepositoryMock,
   TaskRepository: taskRepositoryMock,
@@ -1497,6 +1504,59 @@ describe('agentService provider runtime', () => {
     expect(stepServiceMock.syncTaskStatus).not.toHaveBeenCalled();
   });
 
+  it("passes the project's resolved env vars to the backend config", async () => {
+    projectEnvVarRepositoryMock.getResolvedEnv.mockResolvedValueOnce({
+      env: {
+        API_URL: 'https://example.test',
+        SECRET_TOKEN: 'decrypted-value',
+      },
+      undecryptableKeys: [],
+    });
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    expect(projectEnvVarRepositoryMock.getResolvedEnv).toHaveBeenCalledWith(
+      'project-1',
+    );
+    expect(providerCalls.runStarts[0]).toMatchObject({
+      config: {
+        env: {
+          API_URL: 'https://example.test',
+          SECRET_TOKEN: 'decrypted-value',
+        },
+      },
+    });
+  });
+
+  it('warns by name but still runs when a project secret cannot be decrypted', async () => {
+    projectEnvVarRepositoryMock.getResolvedEnv.mockResolvedValueOnce({
+      env: { API_URL: 'https://example.test' },
+      undecryptableKeys: ['SECRET_TOKEN'],
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('SECRET_TOKEN'),
+    );
+    // The run proceeds with whatever did resolve rather than failing outright.
+    expect(providerCalls.runStarts[0]).toMatchObject({
+      config: { env: { API_URL: 'https://example.test' } },
+    });
+    warnSpy.mockRestore();
+  });
+
   it('starts active runs through the provider without constructing legacy backend classes', async () => {
     const handle = createHandle({ events: [completeEvent()] });
     providerState.runStartImplementation = async () => handle;
@@ -2074,6 +2134,31 @@ describe('agentService provider runtime', () => {
       'status-sync-end',
       'interrupt',
     ]);
+    expect(stepServiceMock.errorStep).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `performSendMessage` rethrows without surfacing anything when it never got
+   * a session (`if (!session) throw error`) — no timeline entry, no errored
+   * status, no notification. The renderer clears the composer as soon as
+   * `started` resolves, so if `started` resolved here the user's prompt would
+   * be destroyed with zero feedback.
+   */
+  it('rejects `started` when the session is never created', async () => {
+    taskStepRepositoryMock.findById.mockResolvedValueOnce(undefined);
+
+    const { started, completion } = await agentService.beginSendMessage(
+      'step-1',
+      [{ type: 'text', text: 'follow up' }],
+    );
+    // Both settle from the same chain; observe completion so the rejection
+    // isn't reported as unhandled.
+    const completionResult = completion.catch((error: unknown) => error);
+
+    await expect(started).rejects.toThrow();
+    await completionResult;
+
+    // Nothing surfaced it, which is exactly why `started` must reject.
     expect(stepServiceMock.errorStep).not.toHaveBeenCalled();
   });
 
@@ -2718,7 +2803,6 @@ describe('agentService provider runtime', () => {
         closeEditorWindowsForTaskWorktree: vi.fn(),
           cleanupPrWorkspaceGit: gitCleanup,
         deleteTasks: vi.fn(),
-        keepPrWorkspaces: vi.fn(),
         emitTaskUpsert: vi.fn(),
         emitTaskDelete: vi.fn(),
       },
@@ -5252,6 +5336,45 @@ describe('agentService provider runtime', () => {
     expect(taskStepRepositoryMock.update).not.toHaveBeenCalledWith('step-1', {
       interactionMode: 'auto',
     });
+  });
+
+  it('forwards background-task snapshots to the renderer and clears them when the run ends', async () => {
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      {
+        isDestroyed: () => false,
+        webContents: {
+          isDestroyed: () => false,
+          send: webContentsSendMock,
+        },
+      },
+    ] as never);
+    const handle = createHandle({
+      events: [
+        {
+          type: 'background-tasks',
+          tasks: [{ taskId: 'bg-1', description: 'Review: regressions' }],
+        },
+        completeEvent(),
+      ],
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalledWith('step-1');
+    });
+
+    const snapshots = webContentsSendMock.mock.calls
+      .map(([, payload]) => payload)
+      .filter((payload) => payload?.type === 'background-tasks');
+
+    // The live snapshot reaches the UI...
+    expect(snapshots[0]).toMatchObject({
+      stepId: 'step-1',
+      tasks: [{ taskId: 'bg-1', description: 'Review: regressions' }],
+    });
+    // ...and the session teardown clears it, so no stale indicator survives.
+    expect(snapshots.at(-1)).toMatchObject({ stepId: 'step-1', tasks: [] });
   });
 
   it('syncs session allowed tools through the provider only when supported', async () => {

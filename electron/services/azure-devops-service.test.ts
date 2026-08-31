@@ -27,6 +27,7 @@ import {
   getWorkItemById,
   getWorkItemsByIds,
   getWorkItemComments,
+  getPullRequestChanges,
   getPullRequestFileContent,
   getPullRequestStatuses,
   getPullRequestThreads,
@@ -779,6 +780,98 @@ describe('board column configuration and updates', () => {
   });
 });
 
+describe('getPullRequestChanges', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('follows nextSkip so deleted files on later pages are not dropped', async () => {
+    const fetchMock = vi
+      .fn()
+      // iterations
+      .mockResolvedValueOnce(
+        jsonResponse({ count: 1, value: [{ id: 3 }] }, { ok: true }),
+      )
+      // changes page 1 — more to come
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            changeEntries: [
+              { changeType: 'edit', item: { path: '/src/kept.ts' } },
+            ],
+            nextSkip: 1,
+          },
+          { ok: true },
+        ),
+      )
+      // changes page 2 — holds the delete, and a folder entry to ignore
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            changeEntries: [
+              { changeType: 'delete', item: { path: '/src/gone.ts' } },
+              { changeType: 'delete', item: { path: '/src', isFolder: true } },
+            ],
+          },
+          { ok: true },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const changes = await getPullRequestChanges({
+      providerId: 'provider-1',
+      projectId: 'proj',
+      repoId: 'repo',
+      pullRequestId: 7,
+    });
+
+    expect(changes).toEqual([
+      { path: '/src/kept.ts', changeType: 'edit', originalPath: undefined },
+      { path: '/src/gone.ts', changeType: 'delete', originalPath: undefined },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[2][0])).toContain('$skip=1');
+  });
+
+  it('stops paging when nextSkip does not advance', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ count: 1, value: [{ id: 1 }] }, { ok: true }),
+      )
+      .mockResolvedValue(
+        jsonResponse(
+          {
+            changeEntries: [
+              { changeType: 'delete', item: { path: '/a.ts' } },
+            ],
+            nextSkip: 0,
+          },
+          { ok: true },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const changes = await getPullRequestChanges({
+      providerId: 'provider-1',
+      projectId: 'proj',
+      repoId: 'repo',
+      pullRequestId: 7,
+    });
+
+    expect(changes).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
 function jsonResponse(
   body: unknown,
   init: { ok: boolean; status?: number; headers?: HeadersInit },
@@ -954,6 +1047,61 @@ describe('uploadPullRequestAttachment', () => {
     expect(urls).toContain(
       'https://dev.azure.com/org/project/_apis/git/repositories/repo/pullRequests/123/attachments/image-6105d6cc-1.png?api-version=7.1-preview.1',
     );
+  });
+
+  it('allows uploading an attachment to a pull request owned by someone else', async () => {
+    const dataBase64 = Buffer.from('image').toString('base64');
+
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes('/_apis/profile/profiles/me')) {
+        return jsonResponse(
+          {
+            id: 'profile-id',
+            displayName: 'Other User',
+            emailAddress: 'other@example.com',
+          },
+          { ok: true },
+        );
+      }
+
+      if (url.includes('/_apis/connectionData')) {
+        return jsonResponse(
+          { authenticatedUser: { id: 'other-id' } },
+          { ok: true },
+        );
+      }
+
+      if (url.includes('/attachments/')) {
+        return jsonResponse(
+          {
+            url: 'https://dev.azure.com/org/project/_apis/attachment/image-6105d6cc.png',
+          },
+          { ok: true },
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await expect(
+      uploadPullRequestAttachment({
+        providerId: 'provider-1',
+        projectId: 'project',
+        repoId: 'repo',
+        pullRequestId: 123,
+        fileName: 'image.png',
+        mimeType: 'image/png',
+        dataBase64,
+      }),
+    ).resolves.toEqual({
+      url: 'https://dev.azure.com/org/project/_apis/attachment/image-6105d6cc.png',
+    });
+
+    // Uploading must not depend on a pull request ownership lookup.
+    const urls = vi.mocked(fetch).mock.calls.map(([input]) => String(input));
+    expect(urls.some((url) => url.includes('/pullrequests/123?'))).toBe(false);
   });
 });
 
@@ -1717,6 +1865,7 @@ describe('getPullRequestStatuses', () => {
     expect(statuses.get('project:repo:123')).toMatchObject({
       status: 'active',
       activeThreadCount: 1,
+      resolvedThreadCount: 1,
       isWaitingForAuthor: true,
     });
   });

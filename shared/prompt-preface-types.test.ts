@@ -2,9 +2,67 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyPromptPrefaceToParts,
+  isProjectPromptPrefaceSetting,
+  mergePromptPreface,
   normalizeProjectPromptPrefaceSetting,
   normalizePromptPrefaceSetting,
+  type PromptPrefaceEntry,
 } from './prompt-preface-types';
+
+function prefaceEntry(id: string, text: string): PromptPrefaceEntry {
+  return {
+    id,
+    name: id,
+    enabled: true,
+    text,
+    placement: 'before',
+    frequency: 'each',
+  };
+}
+
+describe('mergePromptPreface', () => {
+  const global = [prefaceEntry('g1', 'Global one'), prefaceEntry('g2', 'Two')];
+  const project = [prefaceEntry('p1', 'Project one')];
+
+  it('uses global entries when the project inherits', () => {
+    expect(
+      mergePromptPreface({
+        global,
+        project: { mode: 'inherit', entries: project },
+      }),
+    ).toEqual(global);
+  });
+
+  it('appends project entries after global ones when extending', () => {
+    expect(
+      mergePromptPreface({
+        global,
+        project: { mode: 'extend', entries: project },
+      }),
+    ).toEqual([...global, ...project]);
+  });
+
+  it('keeps only global entries when extending with no project entries', () => {
+    expect(
+      mergePromptPreface({ global, project: { mode: 'extend', entries: [] } }),
+    ).toEqual(global);
+  });
+
+  it('drops global entries when the project overrides', () => {
+    expect(
+      mergePromptPreface({
+        global,
+        project: { mode: 'override', entries: project },
+      }),
+    ).toEqual(project);
+  });
+
+  it('yields an empty preface when overriding with no entries', () => {
+    expect(
+      mergePromptPreface({ global, project: { mode: 'override', entries: [] } }),
+    ).toEqual([]);
+  });
+});
 
 describe('prompt preface settings', () => {
   it('normalizes legacy global preface into a generic enabled entry', () => {
@@ -26,7 +84,13 @@ describe('prompt preface settings', () => {
     ]);
   });
 
-  it('normalizes legacy project extend to preserve old effective behavior', () => {
+  it('accepts a native extend setting', () => {
+    expect(
+      isProjectPromptPrefaceSetting({ mode: 'extend', entries: [] }),
+    ).toBe(true);
+  });
+
+  it('normalizes legacy project extend to native extend mode', () => {
     expect(
       normalizeProjectPromptPrefaceSetting({
         value: {
@@ -35,28 +99,10 @@ describe('prompt preface settings', () => {
           placement: 'after',
           frequency: 'each',
         },
-        globalEntries: [
-          {
-            id: 'legacy-1',
-            name: 'Preface 1',
-            enabled: true,
-            text: 'Global rules',
-            placement: 'before',
-            frequency: 'initial',
-          },
-        ],
       }),
     ).toEqual({
-      mode: 'override',
+      mode: 'extend',
       entries: [
-        {
-          id: 'legacy-1',
-          name: 'Preface 1',
-          enabled: true,
-          text: 'Global rules',
-          placement: 'after',
-          frequency: 'each',
-        },
         {
           id: 'legacy-2',
           name: 'Preface 2',
@@ -78,16 +124,6 @@ describe('prompt preface settings', () => {
           placement: 'after',
           frequency: 'each',
         },
-        globalEntries: [
-          {
-            id: 'legacy-1',
-            name: 'Preface 1',
-            enabled: true,
-            text: 'Global rules',
-            placement: 'before',
-            frequency: 'initial',
-          },
-        ],
       }),
     ).toEqual({ mode: 'inherit', entries: [] });
   });

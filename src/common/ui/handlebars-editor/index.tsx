@@ -10,6 +10,8 @@ import {
   flattenProjectFeatures,
   getFeatureReferenceText,
 } from '@/lib/prompt-feature-context';
+import { computePasteCursorPlacement } from './paste-cursor';
+
 import type { ProjectFeatureMap } from '@shared/types';
 
 const monacoGlobal = globalThis as typeof globalThis & {
@@ -241,6 +243,7 @@ export function HandlebarsEditor({
   maxHeight = '300px',
   featureMap = null,
   onPaste,
+  moveCursorBelowPaste = false,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -254,6 +257,11 @@ export function HandlebarsEditor({
    * intercept it (e.g. attach large pasted content as a file).
    */
   onPaste?: (event: ClipboardEvent) => void;
+  /**
+   * When true, pasted text that Monaco inserts leaves the cursor on a new line
+   * below the pasted content.
+   */
+  moveCursorBelowPaste?: boolean;
 }) {
   const { colorScheme } = useColorScheme();
   const editorTheme = getHandlebarsEditorTheme(colorScheme);
@@ -262,11 +270,16 @@ export function HandlebarsEditor({
   const featureMapRef = useRef<ProjectFeatureMap | null>(featureMap);
   const isInternalChange = useRef(false);
   const onPasteRef = useRef(onPaste);
+  const moveCursorBelowPasteRef = useRef(moveCursorBelowPaste);
   const [isEmpty, setIsEmpty] = useState(!value);
 
   useEffect(() => {
     onPasteRef.current = onPaste;
   }, [onPaste]);
+
+  useEffect(() => {
+    moveCursorBelowPasteRef.current = moveCursorBelowPaste;
+  }, [moveCursorBelowPaste]);
 
   useEffect(() => {
     featureMapRef.current = featureMap;
@@ -578,6 +591,54 @@ export function HandlebarsEditor({
         monacoEditor.onDidContentSizeChange(updateHeight);
       disposablesRef.current.push(contentDisposable);
       updateHeight();
+
+      // After Monaco inserts pasted content, drop the cursor onto a fresh line
+      // below it so the user can keep typing without manually pressing Enter.
+      const pasteDisposable = monacoEditor.onDidPaste((e) => {
+        if (!moveCursorBelowPasteRef.current) return;
+        const model = monacoEditor.getModel();
+        if (!model) return;
+        // Multi-cursor paste inserts at several places but reports one range;
+        // repositioning would silently collapse the other cursors.
+        if ((monacoEditor.getSelections()?.length ?? 1) > 1) return;
+
+        const endLine = e.range.endLineNumber;
+        const lineCount = model.getLineCount();
+        const placement = computePasteCursorPlacement({
+          endLineNumber: endLine,
+          lineCount,
+          endLineContent: model.getLineContent(endLine),
+          nextLineContent:
+            endLine < lineCount ? model.getLineContent(endLine + 1) : null,
+        });
+
+        if (placement.action === 'insert-newline') {
+          const insertColumn = model.getLineMaxColumn(placement.lineNumber);
+          monacoEditor.executeEdits('paste-cursor', [
+            {
+              range: {
+                startLineNumber: placement.lineNumber,
+                startColumn: insertColumn,
+                endLineNumber: placement.lineNumber,
+                endColumn: insertColumn,
+              },
+              text: '\n',
+            },
+          ]);
+        }
+
+        const targetLine =
+          placement.action === 'insert-newline'
+            ? placement.lineNumber + 1
+            : placement.lineNumber;
+        const position = {
+          lineNumber: targetLine,
+          column: model.getLineMaxColumn(targetLine),
+        };
+        monacoEditor.setPosition(position);
+        monacoEditor.revealPositionInCenterIfOutsideViewport(position);
+      });
+      disposablesRef.current.push(pasteDisposable);
     },
     [minHeight, maxHeight],
   );

@@ -1,4 +1,5 @@
 import {
+  type ClipboardEvent,
   type KeyboardEvent,
   type PointerEvent,
   type RefObject,
@@ -8,25 +9,11 @@ import {
   type WheelEvent,
 } from 'react';
 
-import type {
-  MobilePlatform,
-  MobilePreviewSession,
-  MobileRotationDirection,
-} from '@shared/mobile-simulator-types';
-import type { MobilePreviewInputEvent } from '@shared/mobile-simulator-types';
-import type { GestureFeedbackStore } from './gesture-feedback-store';
-import { GESTURE_FEEDBACK_FADE_MS } from './gesture-feedback-store';
-import { clamp, getSurfaceIntrinsicSize } from './utils-surface';
-import { resolveDeviceSize } from './utils-device-setup';
-import { formatError } from './utils-preview-error';
-import {
-  mapRotatedSurfacePoint,
-  normalizeRotationDegrees,
-} from './utils-rotation';
 import {
   canStartPointerInteraction,
   createWheelGestureFeedback,
   getNextGestureFeedbackId,
+  getPasteInputs,
   getPointerDownInput,
   getPointerMoveInputs,
   getPointerUpInput,
@@ -34,6 +21,21 @@ import {
   matchesActivePointer,
   restartGestureFeedbackTimer,
 } from './utils-input';
+import { clamp, getSurfaceIntrinsicSize } from './utils-surface';
+import {
+  mapRotatedSurfacePoint,
+  normalizeRotationDegrees,
+} from './utils-rotation';
+import type {
+  MobilePlatform,
+  MobilePreviewSession,
+  MobileRotationDirection,
+} from '@shared/mobile-simulator-types';
+import { formatError } from './utils-preview-error';
+import { GESTURE_FEEDBACK_FADE_MS } from './gesture-feedback-store';
+import type { GestureFeedbackStore } from './gesture-feedback-store';
+import type { MobilePreviewInputEvent } from '@shared/mobile-simulator-types';
+import { resolveDeviceSize } from './utils-device-setup';
 
 const SWIPE_THRESHOLD_PX = 8;
 const LONG_PRESS_THRESHOLD_MS = 500;
@@ -636,6 +638,36 @@ export function useMobilePreviewInput({
     [isRunning, sendInputSafe, session?.platform],
   );
 
+  const handlePaste = useCallback(
+    (event: ClipboardEvent<HTMLDivElement>) => {
+      if (!isRunning) return;
+      event.preventDefault();
+
+      const result = getPasteInputs({
+        text: event.clipboardData.getData('text/plain'),
+        platform: session?.platform,
+      });
+      if (!result.ok) {
+        setInputNotice(result.reason);
+        return;
+      }
+      // Sent sequentially rather than via sendInputSafe: that helper is
+      // fire-and-forget, and pasted characters must reach the device in order.
+      const { inputs } = result;
+      void (async () => {
+        try {
+          for (const input of inputs) {
+            await sendInput(input);
+          }
+          setInputNotice(null);
+        } catch (pasteError) {
+          setInputNotice(formatError(pasteError) ?? 'Paste failed');
+        }
+      })();
+    },
+    [isRunning, sendInput, session?.platform, setInputNotice],
+  );
+
   const handleHomeButton = useCallback(() => {
     if (!isRunning) return;
     sendInputSafe({ type: 'key', key: 'home' });
@@ -709,6 +741,7 @@ export function useMobilePreviewInput({
     handleBackButton,
     handleHomeButton,
     handleKeyDown,
+    handlePaste,
     handlePointerCancel,
     handlePointerDown,
     handlePointerMove,

@@ -12,6 +12,11 @@ import type {
   QuestionResponse,
   QueuedPrompt,
 } from '@shared/agent-types';
+import {
+  clearStepScrollPosition,
+  getStepScrollPosition,
+  setStepScrollPosition,
+} from '@/stores/task-messages';
 import { CompactingEntry, TimelineEntry } from './ui-timeline-entry';
 import {
   memo,
@@ -46,11 +51,6 @@ import { QueuedPromptEntry } from './ui-queued-prompt-entry';
 import { SkillEntry } from './ui-skill-entry';
 import { SubagentEntry } from './ui-subagent-entry';
 import type { ToolUseByName } from '@shared/normalized-message-v2';
-import {
-  clearStepScrollPosition,
-  getStepScrollPosition,
-  setStepScrollPosition,
-} from '@/stores/task-messages';
 
 // Threshold in pixels - if user is within this distance from bottom, auto-scroll
 const SCROLL_THRESHOLD = 10;

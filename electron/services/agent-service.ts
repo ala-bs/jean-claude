@@ -11,6 +11,7 @@ import { nanoid } from 'nanoid';
 
 import {
   AGENT_CHANNELS,
+  type AgentBackgroundTask,
   type AgentQuestion,
   DECIDE_FOR_ME,
   getStableQuestionKeys,
@@ -63,19 +64,20 @@ import {
   type ThinkingEffort,
 } from '@shared/types';
 import type {
-  NormalizedEntry,
-} from '@shared/normalized-message-v2';
-import type {
   PermissionsChangedEvent,
   PermissionScope,
   ResolvedPermissionRule,
 } from '@shared/permission-types';
-import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
 import type { AgentUIEventPayload } from '@shared/agent-ui-events';
 import type { AiUsageFeature } from '@shared/ai-usage-types';
+import type {
+  NormalizedEntry,
+} from '@shared/normalized-message-v2';
+import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
 
 import {
   AgentMessageRepository,
+  ProjectEnvVarRepository,
   ProjectRepository,
   RawMessageRepository,
   TaskRepository,
@@ -515,6 +517,13 @@ interface ActiveSession {
   }>;
   hasTerminalError: boolean;
   /**
+   * Live background jobs (background subagents, `run_in_background` shells,
+   * Monitor) the agent is still waiting on. Kept so a renderer that reloads
+   * mid-run can re-hydrate the indicator via `getBackgroundTasks()` — the SDK
+   * only reports this set on change, never periodically.
+   */
+  backgroundTasks: AgentBackgroundTask[];
+  /**
    * True once a terminal `result`/`error` event was handled for the current
    * turn while the backend stream is still open. Background subagents keep
    * streaming after the main turn reports a result, so activity arriving after
@@ -919,6 +928,16 @@ class AgentService {
       shellEditTracker.end(stepId, session.shellEditToken);
     }
     if (this.sessions.get(stepId) === session) {
+      // The run is gone; any background-job indicator for it is stale. Only
+      // broadcast when there was something to clear — most steps never run
+      // background work at all.
+      if (session.backgroundTasks.length > 0) {
+        session.backgroundTasks = [];
+        this.emitEvent(session.taskId, stepId, {
+          type: 'background-tasks',
+          tasks: [],
+        });
+      }
       this.sessions.delete(stepId);
       this.autoAcceptSteps.delete(stepId);
       this.permissionRefreshGeneration.delete(stepId);
@@ -1359,6 +1378,7 @@ class AgentService {
       abortController: new AbortController(),
       pendingRequests: [],
       hasTerminalError: false,
+      backgroundTasks: [],
       turnFinalized: false,
       lastTerminalStatus: null,
       stopRequested: false,
@@ -1689,6 +1709,28 @@ class AgentService {
         }
       }
 
+      // Project-scoped env vars (secrets decrypted here, in main) are layered
+      // over the inherited process env by each backend's spawn call.
+      const { env: projectEnv, undecryptableKeys } =
+        await ProjectEnvVarRepository.getResolvedEnv(task.projectId);
+      const projectEnvKeys = Object.keys(projectEnv);
+      if (projectEnvKeys.length > 0) {
+        // Names only — values may be secrets and must never reach the logs.
+        dbg.agentSession(
+          'Injecting %d project env var(s) for step %s: %s',
+          projectEnvKeys.length,
+          stepId,
+          projectEnvKeys.join(', '),
+        );
+      }
+      if (undecryptableKeys.length > 0) {
+        // The run continues without these, so say so loudly and by name —
+        // a missing credential otherwise surfaces as a confusing agent failure.
+        console.warn(
+          `[project-env-vars] Skipping ${undecryptableKeys.length} project secret(s) that could not be decrypted for project ${task.projectId}: ${undecryptableKeys.join(', ')}. Re-enter them in Project Settings > Environment Variables.`,
+        );
+      }
+
       const config = {
         type: session.backendType,
         cwd: workingDir,
@@ -1711,6 +1753,7 @@ class AgentService {
         persistedSessionRules: sessionRules,
         permissionRules: rules,
         mcpServers,
+        env: projectEnv,
       };
 
       const runCapability = requireCapability(
@@ -2439,6 +2482,22 @@ class AgentService {
           isSynthetic: true,
           type: 'assistant-message',
           value: message,
+        });
+        break;
+      }
+
+      case 'background-tasks': {
+        // Forward the live snapshot so the UI can show that the agent is
+        // still waiting on background work even after the turn "ended".
+        dbg.agent(
+          'Background tasks for step %s: %d live',
+          stepId,
+          event.tasks.length,
+        );
+        session.backgroundTasks = event.tasks;
+        this.emitEvent(taskId, stepId, {
+          type: 'background-tasks',
+          tasks: event.tasks,
         });
         break;
       }
@@ -3206,11 +3265,23 @@ class AgentService {
       }
 
       let markStarted!: () => void;
-      const started = new Promise<void>((resolve) => {
+      let markStartFailed!: (error: unknown) => void;
+      const started = new Promise<void>((resolve, reject) => {
         markStarted = resolve;
+        markStartFailed = reject;
       });
       this.startingSteps.add(stepId);
-      this.stepStartPromises.set(stepId, started);
+      // Internal waiters (see `stop`) only care that the start settled, never
+      // how. Store a neutralized view so a rejected start can't make `stop`
+      // throw.
+      //
+      // Attaching this synchronously ALSO makes it the universal rejection
+      // handler for `started`: callers are free to ignore the returned
+      // `started` (see `sendMessage` below) without producing an unhandled
+      // rejection in the main process. Keep the `.catch` here if you ever
+      // change what goes into `stepStartPromises`.
+      const startSettled = started.catch(() => undefined);
+      this.stepStartPromises.set(stepId, startSettled);
       await this.waitForPreviousBackendRun(stepId);
       const completion = this.trackBackendRun(stepId, () =>
         this.performSendMessage(
@@ -3219,14 +3290,25 @@ class AgentService {
           markStarted,
           completeRegistration,
           captureContext,
-        ).finally(() => {
-          completeRegistration();
-          markStarted();
-          if (this.stepStartPromises.get(stepId) === started) {
-            this.startingSteps.delete(stepId);
-            this.stepStartPromises.delete(stepId);
-          }
-        }),
+        )
+          .catch((error) => {
+            // performSendMessage only rethrows when it never got a session, in
+            // which case it has surfaced NOTHING to the user - no timeline
+            // entry, no errored status, no notification. Reporting through
+            // `started` is the only way the caller learns the prompt died, so
+            // the composer can keep the text instead of silently dropping it.
+            markStartFailed(error);
+            throw error;
+          })
+          .finally(() => {
+            completeRegistration();
+            // No-op if the start already settled as a failure above.
+            markStarted();
+            if (this.stepStartPromises.get(stepId) === startSettled) {
+              this.startingSteps.delete(stepId);
+              this.stepStartPromises.delete(stepId);
+            }
+          }),
       );
       return { started, completion };
     } catch (error) {
@@ -3608,6 +3690,14 @@ class AgentService {
   getQueuedPrompts(stepId: string): QueuedPrompt[] {
     const session = this.sessions.get(stepId);
     return session?.queuedPrompts ?? [];
+  }
+
+  /**
+   * Live background jobs for a step. Empty when the step has no active session
+   * (a finished run can't still be waiting on background work).
+   */
+  getBackgroundTasks(stepId: string): AgentBackgroundTask[] {
+    return this.sessions.get(stepId)?.backgroundTasks ?? [];
   }
 
   /**

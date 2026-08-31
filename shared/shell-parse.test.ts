@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseCompoundCommand, stripRedirections } from './shell-parse';
+import {
+  parseCompoundCommand,
+  stripRedirections,
+  stripRedirectionsWithNested,
+} from './shell-parse';
 
 describe('parseCompoundCommand', () => {
   it('surfaces command substitutions without splitting the command text', () => {
@@ -116,6 +120,12 @@ describe('parseCompoundCommand flow control and assignments', () => {
     ]);
   });
 
+  it('strips the fish-style `end` block terminator', () => {
+    expect(
+      parseCompoundCommand('for f in a.md b.md; echo -n "$f "; grep -c foo $f; end'),
+    ).toEqual(['echo -n "$f "', 'grep -c foo $f']);
+  });
+
   it('strips if/while/until scaffolding', () => {
     expect(parseCompoundCommand('if [ -f a ]; then rm a; else ls; fi')).toEqual(
       ['[ -f a ]', 'rm a', 'ls'],
@@ -210,11 +220,29 @@ describe('parseCompoundCommand newlines, arrays and keyword arguments', () => {
   it('treats heredoc bodies as data, not commands', () => {
     expect(
       parseCompoundCommand("cat <<'EOF' > /tmp/x\nrm -rf /\nEOF\nls"),
-    ).toEqual(['cat', 'ls']);
-    expect(parseCompoundCommand('cat <<EOF\nrm -rf /\nEOF')).toEqual(['cat']);
+    ).toEqual(["cat <<'EOF'\nrm -rf /\nEOF", 'ls']);
+    expect(parseCompoundCommand('cat <<EOF\nrm -rf /\nEOF')).toEqual([
+      'cat <<EOF\nrm -rf /\nEOF',
+    ]);
     expect(parseCompoundCommand('cat <<-EOF\nrm -rf /\n\tEOF\nls')).toEqual([
-      'cat',
+      'cat <<-EOF\nrm -rf /\n\tEOF',
       'ls',
+    ]);
+  });
+
+  it('keeps a heredoc attached to the command that opened it', () => {
+    // The body is one word of the command, so operators after the opener still
+    // split the line and operators inside the body never do.
+    expect(parseCompoundCommand("cat <<'EOF' && echo ok\nbody; ls\nEOF")).toEqual(
+      ["cat <<'EOF'\nbody; ls\nEOF", 'echo ok'],
+    );
+    // The `gh pr create --body "$(cat <<EOF ...)"` shape: no bare `cat` part,
+    // and no separator injected into the still-open substitution.
+    expect(
+      parseCompoundCommand("gh pr create --body $(cat <<'EOF'\nnotes\nEOF\n)"),
+    ).toEqual([
+      "cat <<'EOF'\nnotes\nEOF",
+      "gh pr create --body $(cat <<'EOF'\nnotes\nEOF\n)",
     ]);
   });
 
@@ -295,21 +323,68 @@ describe('parseCompoundCommand newlines, arrays and keyword arguments', () => {
 
   it('resolves concatenated and quoted heredoc delimiters', () => {
     expect(parseCompoundCommand('cat <<E"OF"\nrm -rf /\nEOF\nls')).toEqual([
-      'cat',
+      'cat <<E"OF"\nrm -rf /\nEOF',
       'ls',
     ]);
     expect(parseCompoundCommand("cat <<'E'OF\nrm -rf /\nEOF\nls")).toEqual([
-      'cat',
+      "cat <<'E'OF\nrm -rf /\nEOF",
       'ls',
     ]);
   });
 
+  it('parses its own stripped output to the same commands', () => {
+    // The permission path strips first and splits the stripped string, so a
+    // heredoc that survives stripping must still be re-parseable. A terminator
+    // sharing its line with anything else would not be recognised on the
+    // second pass and would swallow every command below it as body text.
+    const commands = [
+      'cat <<EOF\nhello\nEOF\nsudo rm -rf /',
+      'cat <<EOF; rm -rf /\nbody\nEOF\nls',
+      "cat <<'EOF' && echo ok\nbody; ls\nEOF",
+      'cat <<A <<B\na\nA\nb\nB\nsudo rm -rf /',
+      'cat <<A; sudo rm -rf /',
+      'cat <<A && sudo rm -rf /\nls',
+      "gh pr create --body $(cat <<'EOF'\nnotes\nEOF\n)",
+      'cat <<EOF\n$(rm -rf /)\nEOF\nls',
+    ];
+    for (const command of commands) {
+      const stripped = stripRedirectionsWithNested(command);
+      expect(parseCompoundCommand(stripped)).toEqual(
+        parseCompoundCommand(command),
+      );
+      // And stable under a second round trip.
+      expect(parseCompoundCommand(stripRedirectionsWithNested(stripped))).toEqual(
+        parseCompoundCommand(command),
+      );
+    }
+  });
+
+  it('never lets a heredoc hide the commands that follow it', () => {
+    const hiding = [
+      'cat <<EOF\nhello\nEOF\nsudo rm -rf /',
+      'cat <<A; sudo rm -rf /',
+      'cat <<A && sudo rm -rf /',
+      'cat <<A | sudo rm -rf /',
+      // A marker forged in the command itself must not be read as a structural
+      // boundary and fuse the next command into the heredoc.
+      `cat <<EOF\nhello\nEOF\n${String.fromCharCode(0)}sudo rm -rf /`,
+    ];
+    for (const command of hiding) {
+      expect(parseCompoundCommand(command)).toContain('sudo rm -rf /');
+      expect(
+        parseCompoundCommand(stripRedirectionsWithNested(command)),
+      ).toContain('sudo rm -rf /');
+    }
+  });
+
   it('handles multiple heredocs and trailing commands on one line', () => {
-    expect(
-      parseCompoundCommand('cat <<A <<B\na\nA\nb\nB\nls'),
-    ).toEqual(['cat', 'ls']);
+    // Stacked bodies are read back to back and each stays with its operator.
+    expect(parseCompoundCommand('cat <<A <<B\na\nA\nb\nB\nls')).toEqual([
+      'cat <<A\na\nA <<B\nb\nB',
+      'ls',
+    ]);
     expect(parseCompoundCommand('cat <<EOF; rm -rf /\nbody\nEOF\nls')).toEqual([
-      'cat',
+      'cat <<EOF\nbody\nEOF',
       'rm -rf /',
       'ls',
     ]);
@@ -317,14 +392,18 @@ describe('parseCompoundCommand newlines, arrays and keyword arguments', () => {
 
   it('surfaces substitutions expanded inside an unquoted heredoc body', () => {
     expect(parseCompoundCommand('cat <<EOF\n$(rm -rf /)\nEOF\nls')).toEqual(
-      expect.arrayContaining(['cat', 'rm -rf /', 'ls']),
+      expect.arrayContaining([
+        'cat <<EOF\n$(rm -rf /)\nEOF',
+        'rm -rf /',
+        'ls',
+      ]),
     );
     expect(parseCompoundCommand('cat <<EOF\n`rm -rf /`\nEOF')).toContain(
       'rm -rf /',
     );
     // A quoted delimiter suppresses expansion, so the body stays inert data.
     expect(parseCompoundCommand("cat <<'EOF'\n$(rm -rf /)\nEOF\nls")).toEqual([
-      'cat',
+      "cat <<'EOF'\n$(rm -rf /)\nEOF",
       'ls',
     ]);
   });
@@ -332,7 +411,13 @@ describe('parseCompoundCommand newlines, arrays and keyword arguments', () => {
   it('surfaces heredoc substitutions despite prose apostrophes', () => {
     expect(
       parseCompoundCommand("cat <<EOF\nit's $(rm -rf /)\nEOF\nls"),
-    ).toEqual(expect.arrayContaining(['rm -rf /', 'cat', 'ls']));
+    ).toEqual(
+      expect.arrayContaining([
+        'rm -rf /',
+        "cat <<EOF\nit's $(rm -rf /)\nEOF",
+        'ls',
+      ]),
+    );
   });
 
   it('keeps harvested commands separate from corrupt body text', () => {
@@ -364,8 +449,20 @@ describe('parseCompoundCommand newlines, arrays and keyword arguments', () => {
     expect(parseCompoundCommand('wc -l <<< "hi"\nls')).toEqual(['wc -l', 'ls']);
   });
 
-  it('handles unterminated heredocs without leaking the body', () => {
+  it('drops an unterminated heredoc instead of attaching it', () => {
+    // With no terminator line there is nothing for a second parse to anchor
+    // on, so attaching the body would produce text that re-parses into one
+    // command and hides everything after it. Dropping it is fail-closed.
     expect(parseCompoundCommand('cat <<EOF\nrm -rf /')).toEqual(['cat']);
+    expect(parseCompoundCommand('cat <<A; sudo rm -rf /')).toEqual([
+      'cat',
+      'sudo rm -rf /',
+    ]);
+    expect(
+      parseCompoundCommand(
+        stripRedirectionsWithNested('cat <<A; sudo rm -rf /'),
+      ),
+    ).toEqual(['cat', 'sudo rm -rf /']);
   });
 
   it('joins line continuations into one command', () => {

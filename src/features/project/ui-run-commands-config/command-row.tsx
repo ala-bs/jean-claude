@@ -4,6 +4,7 @@ import {
   HelpCircle,
   Plus,
   Settings,
+  Star,
   Terminal,
   Trash2,
   X,
@@ -34,6 +35,7 @@ import { useDropdownPosition } from '@/common/hooks/use-dropdown-position';
 
 
 import { PortChipInput } from './port-chip-input';
+import { useDebouncedUpdate } from './use-debounced-update';
 
 const ENV_SOURCE_OPTIONS = RUN_COMMAND_ENV_SOURCES.map((source) => ({
   value: source.key,
@@ -114,6 +116,32 @@ export function CommandRow({
       : null);
 
   const {
+    schedule: scheduleUpdate,
+    flush: flushUpdate,
+    discard: discardUpdate,
+    cancel: cancelUpdate,
+    hasPending,
+  } = useDebouncedUpdate<UpdateProjectCommand>(onUpdate);
+
+  // Only queue a save when the value actually differs from what is stored.
+  const scheduleFieldUpdate = <K extends keyof UpdateProjectCommand>(
+    key: K,
+    value: UpdateProjectCommand[K],
+    savedValue: UpdateProjectCommand[K],
+  ) => {
+    if (value === savedValue) {
+      discardUpdate(key);
+      return;
+    }
+    scheduleUpdate({ [key]: value } as UpdateProjectCommand);
+  };
+
+  const handleDelete = () => {
+    cancelUpdate();
+    onDelete();
+  };
+
+  const {
     attributes,
     listeners,
     setNodeRef,
@@ -129,16 +157,19 @@ export function CommandRow({
   };
 
   useEffect(() => {
+    if (hasPending('name', command.name ?? null)) return;
     startTransition(() => setLocalName(command.name ?? ''));
-  }, [command.name]);
+  }, [command.name, hasPending]);
 
   useEffect(() => {
+    if (hasPending('command', command.command)) return;
     startTransition(() => setLocalCommand(command.command));
-  }, [command.command]);
+  }, [command.command, hasPending]);
 
   useEffect(() => {
+    if (hasPending('confirmMessage', command.confirmMessage ?? null)) return;
     startTransition(() => setLocalConfirmMessage(command.confirmMessage ?? ''));
-  }, [command.confirmMessage]);
+  }, [command.confirmMessage, hasPending]);
 
   useEffect(() => {
     if (lastPortDraftCommandIdRef.current === command.id) {
@@ -146,12 +177,24 @@ export function CommandRow({
     }
 
     lastPortDraftCommandIdRef.current = command.id;
+    const isEnvVarPending = hasPending(
+      'portOverrideEnvVar',
+      command.portOverrideEnvVar ?? null,
+    );
+    const isArgsPending = hasPending(
+      'portOverrideArgs',
+      command.portOverrideArgs ?? null,
+    );
     startTransition(() => {
       setPortOverrideEditError(null);
       setLocalPortConflictStrategy(command.portConflictStrategy);
       setLocalPortOverrideProvider(command.portOverrideProvider);
-      setLocalPortOverrideEnvVar(command.portOverrideEnvVar ?? 'PORT');
-      setLocalPortOverrideArgs(command.portOverrideArgs ?? '');
+      if (!isEnvVarPending) {
+        setLocalPortOverrideEnvVar(command.portOverrideEnvVar ?? 'PORT');
+      }
+      if (!isArgsPending) {
+        setLocalPortOverrideArgs(command.portOverrideArgs ?? '');
+      }
     });
   }, [
     command.id,
@@ -159,6 +202,7 @@ export function CommandRow({
     command.portOverrideArgs,
     command.portOverrideEnvVar,
     command.portOverrideProvider,
+    hasPending,
   ]);
 
   useEffect(() => {
@@ -188,11 +232,7 @@ export function CommandRow({
   });
 
   const handleNameBlur = () => {
-    const trimmed = localName.trim();
-    const newValue = trimmed || null;
-    if (newValue !== (command.name ?? null)) {
-      onUpdate({ name: newValue });
-    }
+    flushUpdate();
   };
 
   const emitDraftChange = (update: Partial<ProjectSuggestionCommand>) => {
@@ -214,26 +254,27 @@ export function CommandRow({
   const handleNameChange = (value: string) => {
     setLocalName(value);
     emitDraftChange({ name: value.trim() || null });
+    scheduleFieldUpdate('name', value.trim() || null, command.name ?? null);
   };
 
   const handleCommandChange = (value: string) => {
     setLocalCommand(value);
     emitDraftChange({ command: value });
+    scheduleFieldUpdate('command', value, command.command);
     setShowSuggestions(true);
   };
 
   const handleCommandBlur = () => {
     setTimeout(() => setShowSuggestions(false), 150);
-    if (localCommand !== command.command) {
-      onUpdate({ command: localCommand });
-    }
+    flushUpdate();
   };
 
   const handleSelectSuggestion = (suggestion: string) => {
     setLocalCommand(suggestion);
     emitDraftChange({ command: suggestion });
     setShowSuggestions(false);
-    onUpdate({ command: suggestion });
+    scheduleFieldUpdate('command', suggestion, command.command);
+    flushUpdate();
   };
 
   const handlePortsChange = (ports: number[]) => {
@@ -307,25 +348,29 @@ export function CommandRow({
   const handlePortOverrideEnvVarChange = (value: string) => {
     setLocalPortOverrideEnvVar(value);
     emitDraftChange({ portOverrideEnvVar: value.trim() || null });
+    scheduleFieldUpdate(
+      'portOverrideEnvVar',
+      value.trim() || null,
+      command.portOverrideEnvVar ?? null,
+    );
   };
 
   const handlePortOverrideEnvVarBlur = () => {
-    const portOverrideEnvVar = localPortOverrideEnvVar.trim() || null;
-    if (portOverrideEnvVar !== command.portOverrideEnvVar) {
-      onUpdate({ portOverrideEnvVar });
-    }
+    flushUpdate();
   };
 
   const handlePortOverrideArgsChange = (value: string) => {
     setLocalPortOverrideArgs(value);
     emitDraftChange({ portOverrideArgs: value.trim() || null });
+    scheduleFieldUpdate(
+      'portOverrideArgs',
+      value.trim() || null,
+      command.portOverrideArgs ?? null,
+    );
   };
 
   const handlePortOverrideArgsBlur = () => {
-    const portOverrideArgs = localPortOverrideArgs.trim() || null;
-    if (portOverrideArgs !== command.portOverrideArgs) {
-      onUpdate({ portOverrideArgs });
-    }
+    flushUpdate();
   };
 
   const handleEnvVarsChange = (envVars: RunCommandEnvVar[]) => {
@@ -383,14 +428,15 @@ export function CommandRow({
   const handleConfirmMessageChange = (value: string) => {
     setLocalConfirmMessage(value);
     emitDraftChange({ confirmMessage: value.trim() || null });
+    scheduleFieldUpdate(
+      'confirmMessage',
+      value.trim() || null,
+      command.confirmMessage ?? null,
+    );
   };
 
   const handleConfirmMessageBlur = () => {
-    const trimmed = localConfirmMessage.trim();
-    const newValue = trimmed || null;
-    if (newValue !== (command.confirmMessage ?? null)) {
-      onUpdate({ confirmMessage: newValue });
-    }
+    flushUpdate();
   };
 
   return (
@@ -508,6 +554,25 @@ export function CommandRow({
         )}
         <button
           type="button"
+          onClick={() => onUpdate({ isFavorite: !command.isFavorite })}
+          aria-label={
+            command.isFavorite ? 'Remove from favorites' : 'Add to favorites'
+          }
+          aria-pressed={command.isFavorite}
+          title={
+            command.isFavorite
+              ? 'Favorite — runnable from the project root in the Running Commands overlay'
+              : 'Favorite this command to run it from the project root'
+          }
+          className={`hover:bg-glass-light rounded-md p-1.5 ${command.isFavorite ? 'text-status-warn' : 'text-ink-4'}`}
+        >
+          <Star
+            className="h-3.5 w-3.5"
+            fill={command.isFavorite ? 'currentColor' : 'none'}
+          />
+        </button>
+        <button
+          type="button"
           onClick={() => setIsOpen((open) => !open)}
           className={`hover:bg-glass-light rounded-md p-1.5 ${isOpen ? 'bg-acc-soft text-acc-ink' : 'text-ink-3'}`}
           aria-label="Ports and options"
@@ -518,7 +583,7 @@ export function CommandRow({
         <IconButton
           variant="ghost"
           size="md"
-          onClick={onDelete}
+          onClick={handleDelete}
           icon={<Trash2 />}
           tooltip="Delete command"
         />

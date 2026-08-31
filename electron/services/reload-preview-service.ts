@@ -28,6 +28,22 @@ const RELOAD_PREVIEW_LOCK_RECOVERY_MAX_ATTEMPTS = 21;
 const RELOAD_PREVIEW_LOG_CHECK_INTERVAL_MS = 5000;
 const RELOAD_PREVIEW_LOG_MAX_BYTES = 1024 * 1024;
 
+/**
+ * How long the replacement waits for the outgoing process to actually exit
+ * before giving up and opening its window anyway.
+ *
+ * The outgoing side only has to notice the ready marker, flush, and call
+ * `app.exit(0)`, so this is generous. Exceeding it means something is wrong
+ * with the outgoing process, and a visible window with possibly-empty
+ * localStorage still beats no window at all — so this expires rather than
+ * blocking forever.
+ */
+const RELOAD_PREVIEW_PREDECESSOR_EXIT_INTERVAL_MS = 50;
+const RELOAD_PREVIEW_PREDECESSOR_EXIT_MAX_ATTEMPTS = 200;
+
+/** Set on the replacement so it can wait for its predecessor to release the LOCK. */
+export const RELOAD_PREVIEW_PREVIOUS_PID_ENV = 'JC_PREVIEW_RESTART_PREV_PID';
+
 type SpawnedProcess = Pick<
   ChildProcess,
   'off' | 'once' | 'pid' | 'unref'
@@ -74,6 +90,7 @@ type ReloadPreviewLogLimiterDependencies = {
 type LaunchReloadedPreviewDependencies = {
   acknowledgeReady: (readyFilePath: string, ackFilePath: string) => Promise<void>;
   closeLogFile: (fileDescriptor: number) => void;
+  currentPid: () => number;
   markerExists: (path: string) => Promise<boolean>;
   now: () => number;
   openLogFile: (path: string) => number;
@@ -339,6 +356,7 @@ export async function terminateReloadPreviewProcessTree(params: {
 const launchReloadedPreviewDependencies: LaunchReloadedPreviewDependencies = {
   acknowledgeReady: rename,
   closeLogFile: closeSync,
+  currentPid: () => process.pid,
   markerExists,
   now: Date.now,
   openLogFile: (path) => openSync(path, 'a'),
@@ -469,7 +487,9 @@ export function createReloadPreviewReadinessRegistrar(params: {
   lifecycle: ReloadPreviewLifecycle;
   onError: (message: string, error: unknown) => void;
   dependencies?: Partial<CreateReloadPreviewReadinessRegistrarDependencies>;
-}): (webContents: ReloadPreviewWebContents) => void {
+}): ((webContents: ReloadPreviewWebContents) => void) & {
+  signalNow: () => void;
+} {
   const dependencies = {
     ...createReloadPreviewReadinessRegistrarDependencies,
     ...params.dependencies,
@@ -532,13 +552,49 @@ export function createReloadPreviewReadinessRegistrar(params: {
       });
   };
 
-  return (webContents) => {
+  const register = (webContents: ReloadPreviewWebContents) => {
     if (signalComplete || !params.readyFilePath) return;
 
     webContents.once('did-finish-load', () => {
       attemptSignal();
     });
   };
+
+  /**
+   * Signals readiness *before* the first window exists.
+   *
+   * The `did-finish-load` path above cannot be the gate any more. It fires
+   * after the window has loaded, which is long after Chromium has opened the
+   * LocalStorage LevelDB — but the outgoing process only exits once it sees
+   * this signal, so it was still holding that store's LOCK at the moment we
+   * read it. Ready-after-load therefore *guaranteed* the overlap it was meant
+   * to sequence, and the replacement came up with an empty store.
+   *
+   * Signalling here inverts the order: we announce ourselves, the predecessor
+   * exits and releases the LOCK, and only then do we touch the store
+   * (`waitForPreviousPreviewExit` enforces the "only then").
+   *
+   * Call this at the very top of `app.whenReady()`. "Before we touch the
+   * store" is earlier than window creation — `protocol.handle()` opens the
+   * LevelDB by itself, measured on Electron 42.7.0 with no window ever
+   * created. Placing this after the protocol registrations makes it inert.
+   *
+   * The tradeoff is deliberate: readiness now means "the main process
+   * initialized", not "the renderer painted". A replacement that dies before
+   * `whenReady` still leaves no marker and is still caught by the launch
+   * timeout, so a broken build cannot silently take the app down — but a
+   * renderer that fails *after* this point is no longer covered by the
+   * outgoing process's lock-recovery fallback.
+   *
+   * `register` stays as a backstop for paths that never call this (and
+   * `signalComplete` makes the second call a no-op).
+   */
+  register.signalNow = () => {
+    if (!params.readyFilePath) return;
+    attemptSignal();
+  };
+
+  return register;
 }
 
 export async function launchReloadedPreview(params: {
@@ -585,6 +641,10 @@ export async function launchReloadedPreview(params: {
             JC_PREVIEW_RESTART_ACK_FILE: ackFilePath,
             JC_PREVIEW_RESTART_LOG_FILE: logFilePath,
             JC_PREVIEW_RESTART_READY_FILE: readyFilePath,
+            // Lets the replacement wait for us to release Chromium's
+            // LocalStorage LOCK before it opens its window. See
+            // `waitForPreviousPreviewExit`.
+            [RELOAD_PREVIEW_PREVIOUS_PID_ENV]: String(dependencies.currentPid()),
           },
         }),
         shell: true,
@@ -681,6 +741,50 @@ export async function launchReloadedPreview(params: {
   );
 }
 
+/**
+ * Hands the preview over to a freshly built replacement process.
+ *
+ * Ordering is load-bearing for persisted renderer state. All ~21 zustand
+ * `persist` stores (feed pins, Azure board config, UI settings) live in
+ * localStorage, which Chromium buffers in memory and commits to its LevelDB
+ * store asynchronously. The replacement reads that LevelDB while booting — and
+ * `launchPreview` only resolves once it has *finished* booting — so any flush
+ * performed around `exitCurrentApp` is already too late: the new process read
+ * the old bytes. Worse, the outgoing process then dies via `app.exit(0)`, which
+ * skips graceful renderer teardown entirely, so the buffered writes are simply
+ * dropped. That is why config loss was intermittent — it turned on whether a
+ * background commit happened to land before the reload.
+ *
+ * So we flush *first*, before the replacement is even spawned.
+ *
+ * `flushStorage` (`session.flushStorageData()`) returns `void` and does not
+ * await the commit — it posts the work to Chromium's storage sequence — hence
+ * the short settle delay afterwards. Best-effort by nature: a flush failure is
+ * reported and the handoff continues, since the alternative is stranding the
+ * user with no running app.
+ *
+ * Known residual gaps, deliberately not addressed here:
+ *
+ * - The outgoing renderer stays alive until `exitCurrentApp`, so anything the
+ *   user changes *during* the rebuild is buffered after our flush and still
+ *   dies with `app.exit(0)`. This covers the common flow (change something,
+ *   then hit Reload), not that tail.
+ * Both processes still share one `userData` dir during the overlap, and the
+ * single-instance lock is released while Chromium's LocalStorage LevelDB LOCK
+ * is not. That used to mean the replacement could open the locked store and get
+ * an empty one — which no amount of flushing fixes. It is now sequenced instead
+ * of tolerated: the replacement signals ready as the first act of
+ * `app.whenReady()`, then blocks in `waitForPreviousPreviewExit` until this
+ * process is really gone, so the LOCK is free before it touches the store.
+ *
+ * Both halves are load-bearing, and so is their *position*. `protocol.handle()`
+ * opens the LevelDB on its own — verified on Electron 42.7.0 with no window
+ * ever created — so the gate has to sit above the protocol registrations in
+ * `main.ts`, not merely above `createWindow()`.
+ */
+/** Empirical, not derived: `flushStorageData()` reports no completion. */
+export const RELOAD_PREVIEW_FLUSH_SETTLE_MS = 250;
+
 export async function orchestrateReloadedPreview(params: {
   cwd: string;
   timeoutMs: number;
@@ -688,11 +792,26 @@ export async function orchestrateReloadedPreview(params: {
   reacquireSingleInstanceLock: () => boolean;
   launchPreview?: typeof launchReloadedPreview;
   exitCurrentApp: () => void;
+  flushStorage?: () => void;
+  onFlushError?: (error: unknown) => void;
+  flushSettleMs?: number;
+  waitForFlush?: (durationMs: number) => Promise<void>;
   lockRecoveryIntervalMs?: number;
   lockRecoveryMaxAttempts?: number;
   waitForLockRecovery?: (durationMs: number) => Promise<void>;
 }): Promise<void> {
   const launchPreview = params.launchPreview ?? launchReloadedPreview;
+
+  if (params.flushStorage) {
+    try {
+      params.flushStorage();
+      await (params.waitForFlush ?? wait)(
+        params.flushSettleMs ?? RELOAD_PREVIEW_FLUSH_SETTLE_MS,
+      );
+    } catch (error) {
+      params.onFlushError?.(error);
+    }
+  }
 
   params.releaseSingleInstanceLock();
   try {
@@ -758,6 +877,69 @@ export async function orchestrateReloadedPreview(params: {
   }
 
   params.exitCurrentApp();
+}
+
+/**
+ * Blocks the replacement until its predecessor is really gone.
+ *
+ * This is the half of the handoff that keeps localStorage intact. Chromium's
+ * `Local Storage/leveldb` admits one process at a time via an `fcntl` LOCK held
+ * by the *browser* process, and a process that cannot open the store comes up
+ * with an **empty** one — every persisted zustand store then rehydrates to
+ * defaults, which reads to the user as "the restart wiped my settings".
+ *
+ * The single-instance lock does not help: `orchestrateReloadedPreview` releases
+ * it precisely so the replacement can boot, and the two locks are independent.
+ * Nor does the `.ack` marker, which the outgoing process writes *before* it
+ * calls `app.exit(0)` — the LOCK survives until the process actually dies. So
+ * the only sound gate is the predecessor's pid disappearing.
+ *
+ * Signal 0 checks for existence without signalling. `EPERM` means the pid
+ * exists but belongs to another user, which still counts as alive.
+ */
+export async function waitForPreviousPreviewExit(params: {
+  pid: number;
+  intervalMs?: number;
+  maxAttempts?: number;
+  dependencies?: {
+    isAlive?: (pid: number) => boolean;
+    wait?: (durationMs: number) => Promise<void>;
+  };
+}): Promise<{ exited: boolean; attempts: number }> {
+  const isAlive =
+    params.dependencies?.isAlive ??
+    ((pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'EPERM';
+      }
+    });
+  const waitFor = params.dependencies?.wait ?? wait;
+  const intervalMs = Math.max(
+    0,
+    params.intervalMs ?? RELOAD_PREVIEW_PREDECESSOR_EXIT_INTERVAL_MS,
+  );
+  const maxAttempts = Math.max(
+    1,
+    Math.floor(
+      params.maxAttempts ?? RELOAD_PREVIEW_PREDECESSOR_EXIT_MAX_ATTEMPTS,
+    ),
+  );
+
+  // A pid we cannot make sense of is not worth stalling the window for.
+  if (!Number.isInteger(params.pid) || params.pid <= 0) {
+    return { exited: true, attempts: 0 };
+  }
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (!isAlive(params.pid)) return { exited: true, attempts: attempt };
+    if (attempt === maxAttempts) break;
+    await waitFor(intervalMs);
+  }
+
+  return { exited: false, attempts: maxAttempts };
 }
 
 export function exitCurrentPreviewAfterReload(params: {

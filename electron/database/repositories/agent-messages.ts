@@ -428,6 +428,9 @@ export const AgentMessageRepository = {
     const formats = new Set(rawRows.map((r) => r.rawFormat));
 
     if (formats.has('claude-code')) {
+      // NOTE: no `permissionRules` here (same for the vibe branch below) — the
+      // repository layer has no project/worktree context to resolve them from,
+      // so reprocessed tool uses fall back to "allowed by agent" attribution.
       const claudeCtx: NormalizationContext = {
         sessionIdEmitted: false,
         pendingToolUses: new Map(),

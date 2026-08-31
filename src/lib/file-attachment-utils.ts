@@ -1,6 +1,5 @@
 import type { PromptFilePart } from '@shared/agent-backend-types';
 
-export const MAX_FILES = 10;
 export const MAX_FILE_ATTACHMENT_SIZE = 50 * 1024 * 1024; // 50 MB
 export const MAX_INLINE_PASTED_PROMPT_LENGTH = 10_000;
 export const PASTED_PROMPT_ATTACHMENT_FILENAME = 'pasted-content.md';

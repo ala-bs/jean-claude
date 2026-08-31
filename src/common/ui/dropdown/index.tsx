@@ -54,6 +54,7 @@ export function Dropdown({
   variant = 'default',
   onOpen,
   initialFocusIndex = 0,
+  preferredMaxHeight,
 }: {
   variant?: 'default' | 'bright';
   trigger:
@@ -77,6 +78,8 @@ export function Dropdown({
       } | null) => void);
   onOpen?: () => void;
   initialFocusIndex?: number;
+  /** Overrides the default 320px cap on the menu's max height */
+  preferredMaxHeight?: number;
 }) {
   const id = useId();
   const menuId = `dropdown-menu-${id}`;
@@ -102,6 +105,7 @@ export function Dropdown({
     triggerRef,
     side,
     align,
+    preferredMaxHeight,
   });
 
   useEffect(() => {

@@ -94,7 +94,7 @@ describe('CodexBackend', () => {
       [{ type: 'text', text: 'Hello Codex' }],
     );
 
-    expect(mocks.getOrCreateCodexAppServer).toHaveBeenCalledWith();
+    expect(mocks.getOrCreateCodexAppServer).toHaveBeenCalledWith(undefined);
     expect(client.request).toHaveBeenCalledWith('thread/start', {
       cwd: '/tmp/project',
       model: undefined,
@@ -132,7 +132,7 @@ describe('CodexBackend', () => {
       [{ type: 'text', text: 'Continue' }],
     );
 
-    expect(mocks.getOrCreateCodexAppServer).toHaveBeenCalledWith();
+    expect(mocks.getOrCreateCodexAppServer).toHaveBeenCalledWith(undefined);
     expect(client.request).toHaveBeenCalledWith('thread/resume', {
       threadId: 'thread-existing',
       cwd: '/tmp/project',
@@ -181,6 +181,65 @@ describe('CodexBackend', () => {
         },
         serviceName: 'jean_claude',
       });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('makes granted external directories writable in the sandbox', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-codex-external-'));
+    try {
+      const projectGrant = fs.realpathSync.native(root);
+      const sessionDirectory = path.join(projectGrant, 'session');
+      fs.mkdirSync(sessionDirectory);
+      const sessionGrant = fs.realpathSync.native(sessionDirectory);
+      const revokedDirectory = path.join(projectGrant, 'revoked');
+      fs.mkdirSync(revokedDirectory);
+      const revokedGrant = fs.realpathSync.native(revokedDirectory);
+
+      const { backend, client } = createBackend();
+      await backend.start(
+        createConfig({
+          permissionRules: [
+            {
+              tool: 'external_directory',
+              pattern: `${projectGrant}/**`,
+              action: 'allow',
+            },
+            // Revoked by the later rule, so it must not reach the sandbox.
+            {
+              tool: 'external_directory',
+              pattern: `${revokedGrant}/**`,
+              action: 'allow',
+            },
+            {
+              tool: 'external_directory',
+              pattern: `${revokedGrant}/**`,
+              action: 'ask',
+            },
+          ],
+          persistedSessionRules: {
+            external_directory: { [`${sessionGrant}/**`]: 'allow' },
+          },
+        }),
+        [{ type: 'text', text: 'Write outside the project' }],
+      );
+
+      expect(client.request).toHaveBeenCalledWith(
+        'thread/start',
+        expect.objectContaining({
+          config: {
+            sandbox_workspace_write: {
+              network_access: true,
+              writable_roots: [
+                ...expectedPackageManagerCacheRoots(),
+                projectGrant,
+                sessionGrant,
+              ],
+            },
+          },
+        }),
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

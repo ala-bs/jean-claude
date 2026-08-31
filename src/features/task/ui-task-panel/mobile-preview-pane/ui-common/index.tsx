@@ -1,8 +1,8 @@
 import { AlertTriangle, Terminal } from 'lucide-react';
 import type { SVGProps } from 'react';
 
-import type { MobilePlatform } from '@shared/mobile-simulator-types';
 import { getPreviewErrorInfo } from '../utils-preview-error';
+import type { MobilePlatform } from '@shared/mobile-simulator-types';
 
 export function IconAppleLogo(props: SVGProps<SVGSVGElement>) {
   return (

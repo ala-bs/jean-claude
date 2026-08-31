@@ -6,13 +6,13 @@ import type {
   AiUsageFeature,
   AiUsagePricingStatus,
 } from '@shared/ai-usage-types';
-import type { MobilePlatform } from '@shared/mobile-simulator-types';
 import type {
   ProjectType,
   ProviderType,
   PrWorkspaceState,
   TaskStatus,
 } from '@shared/types';
+import type { MobilePlatform } from '@shared/mobile-simulator-types';
 
 // Re-export shared types for convenience
 export type {
@@ -66,6 +66,26 @@ export interface Database {
   work_activity_events: WorkActivityEventTable;
   work_item_summaries: WorkItemSummaryTable;
   mobile_preview_device_usage: MobilePreviewDeviceUsageTable;
+  project_env_vars: ProjectEnvVarTable;
+}
+
+/**
+ * Per-project environment variables injected into every agent backend process.
+ *
+ * Exactly one of `value` / `valueEncrypted` is set: plain vars keep `value` so
+ * the UI can display and edit them, secrets keep `valueEncrypted` (safeStorage,
+ * base64) and are never returned to the renderer.
+ */
+export interface ProjectEnvVarTable {
+  id: string;
+  projectId: string;
+  key: string;
+  value: string | null;
+  valueEncrypted: string | null;
+  isSecret: number;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TokenTable {
@@ -267,9 +287,14 @@ export interface ProjectCommandTable {
   envVars: string; // JSON array stored as text
   confirmBeforeRun: Generated<number>; // 0 or 1
   confirmMessage: string | null;
+  isFavorite: Generated<number>; // 0 or 1
   sortOrder: Generated<number>;
   createdAt: Generated<string>;
 }
+
+export type ProjectEnvVarRow = Selectable<ProjectEnvVarTable>;
+export type NewProjectEnvVarRow = Insertable<ProjectEnvVarTable>;
+export type UpdateProjectEnvVarRow = Updateable<ProjectEnvVarTable>;
 
 export type ProjectCommandRow = Selectable<ProjectCommandTable>;
 export type NewProjectCommandRow = Insertable<ProjectCommandTable>;

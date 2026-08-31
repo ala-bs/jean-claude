@@ -1,6 +1,7 @@
-import type {
-  MobilePreviewDevice,
-  MobilePreviewExpoLaunchParams,
+import {
+  isPhysicalMobilePreviewDevice,
+  type MobilePreviewDevice,
+  type MobilePreviewExpoLaunchParams,
 } from '@shared/mobile-simulator-types';
 
 export type MobilePreviewAutoLaunchDecision =
@@ -16,10 +17,19 @@ export type MobilePreviewAutoLaunchDecision =
       params: Omit<MobilePreviewExpoLaunchParams, 'requestId'>;
     };
 
+/**
+ * Auto-start never fires for physical hardware: booting or installing on
+ * someone's real handset must always be an explicit, deliberate click.
+ */
 export function canAutoStartMobilePreviewDevice(
-  device: Pick<MobilePreviewDevice, 'id' | 'platform' | 'state'> | null | undefined,
+  device:
+    | Pick<MobilePreviewDevice, 'id' | 'platform' | 'state' | 'kind'>
+    | null
+    | undefined,
 ): boolean {
-  return !!device && device.state !== 'unknown';
+  if (!device) return false;
+  if (isPhysicalMobilePreviewDevice(device)) return false;
+  return device.state !== 'unknown';
 }
 
 export function getMobilePreviewAutoLaunchDecision({

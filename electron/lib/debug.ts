@@ -112,6 +112,9 @@ export const dbg = {
   // IPC
   ipc: createLogger('ipc'),
 
+  // Renderer-forwarded logs (via the `debug:log` IPC channel)
+  renderer: createLogger('renderer'),
+
   // Agent service
   agent: createLogger('agent'),
   agentSession: createLogger('agent:session'),
@@ -120,6 +123,7 @@ export const dbg = {
 
   // Other services
   worktree: createLogger('worktree'),
+  ssh: createLogger('ssh'),
   notification: createLogger('notification'),
   azure: createLogger('azure'),
   azureImageProxy: createLogger('azure:image-proxy'),

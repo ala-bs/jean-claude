@@ -210,26 +210,62 @@ export function getSettingsPath(rootDir: string): string {
 }
 
 /**
+ * Last successfully parsed settings per project root. Survives a transient
+ * read/parse failure so `readSettings` can fall back to it instead of
+ * returning empty defaults.
+ *
+ * Falling back to `createDefaultSettings()` is only correct when the file
+ * genuinely does not exist. For any other error the real permissions are
+ * *unknown*, and empty defaults are the worst possible guess:
+ * `refreshPermissionRules` pushes the resolved snapshot into every live agent
+ * session, so a single failed read drops every previously-allowed tool to
+ * `ask`/deny at once — for the rest of the run.
+ */
+const lastKnownGoodSettings = new Map<string, JeanClaudeSettings>();
+
+/**
  * Reads the `.jean-claude/settings.local.json` file.
- * Returns default settings if the file doesn't exist or is invalid.
+ * Returns default settings if the file doesn't exist; on a transient
+ * read/parse failure, falls back to the last known good settings.
  */
 export async function readSettings(
   rootDir: string,
 ): Promise<JeanClaudeSettings> {
+  let content: string;
   try {
-    const content = await fs.readFile(getSettingsPath(rootDir), 'utf-8');
+    content = await fs.readFile(getSettingsPath(rootDir), 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      const cached = lastKnownGoodSettings.get(rootDir);
+      dbg.agentPermission(
+        'Failed reading settings for %s (%O) — %s',
+        rootDir,
+        error,
+        cached ? 'reusing last known good' : 'no cached settings, falling back',
+      );
+      if (cached) return structuredClone(cached);
+    }
+    return (await readLegacySettings(rootDir)) ?? createDefaultSettings();
+  }
+
+  try {
     const parsed = JSON.parse(content) as JeanClaudeSettings;
     if (parsed.version !== 1 || !parsed.permissions) {
       throw new Error('Invalid .jean-claude settings format');
     }
-
-    return normalizeSettingsShape(parsed);
-  } catch {
-    const legacySettings = await readLegacySettings(rootDir);
-    if (legacySettings) {
-      return legacySettings;
-    }
-    return createDefaultSettings();
+    const normalized = normalizeSettingsShape(parsed);
+    lastKnownGoodSettings.set(rootDir, normalized);
+    return structuredClone(normalized);
+  } catch (error) {
+    const cached = lastKnownGoodSettings.get(rootDir);
+    dbg.agentPermission(
+      'Failed parsing settings for %s (%O) — %s',
+      rootDir,
+      error,
+      cached ? 'reusing last known good' : 'no cached settings, falling back',
+    );
+    if (cached) return structuredClone(cached);
+    return (await readLegacySettings(rootDir)) ?? createDefaultSettings();
   }
 }
 
@@ -248,6 +284,10 @@ export async function writeSettings(
   await writeFileAtomic(filePath, JSON.stringify(settings, null, 2) + '\n', {
     encoding: 'utf-8',
   });
+  // Advance the fallback with the write. Leaving it on the pre-write settings
+  // would make a failed read immediately after a *revocation* serve the rule
+  // the user just removed — wider than both disk and the old behaviour.
+  lastKnownGoodSettings.set(rootDir, normalizeSettingsShape(settings));
 }
 
 /**
@@ -307,21 +347,18 @@ export async function seedDefaultProjectPermissions(
 
 export async function readProjectPromptPreface(
   rootDir: string,
-  globalEntries: import('@shared/prompt-preface-types').PromptPrefaceEntry[] = [],
 ): Promise<import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting> {
   const settings = await readSettings(rootDir);
   if (!settings.promptPreface) return DEFAULT_PROJECT_PROMPT_PREFACE_SETTING;
   return (
     normalizeProjectPromptPrefaceSetting({
       value: settings.promptPreface,
-      globalEntries,
     }) ?? DEFAULT_PROJECT_PROMPT_PREFACE_SETTING
   );
 }
 
 export async function migrateProjectPromptPreface(
   rootDir: string,
-  globalEntries: import('@shared/prompt-preface-types').PromptPrefaceEntry[] = [],
 ): Promise<boolean> {
   return withProjectWriteLock(rootDir, async () => {
     const settings = await readSettings(rootDir);
@@ -330,7 +367,6 @@ export async function migrateProjectPromptPreface(
 
     const normalized = normalizeProjectPromptPrefaceSetting({
       value: settings.promptPreface,
-      globalEntries,
     });
     if (!normalized) return false;
 
@@ -466,9 +502,10 @@ function expandSubpathPlaceholders(
 /**
  * Match a bash command against a glob-like pattern.
  *
- * Unlike file-path matching, `*` matches ANY character (including `/`)
- * so that patterns like `pnpm *` match commands whose arguments contain
- * paths (e.g. `pnpm install /path/to/pkg`).
+ * Unlike file-path matching, `*` matches ANY character (including `/` and
+ * newlines) so that patterns like `pnpm *` match commands whose arguments
+ * contain paths (e.g. `pnpm install /path/to/pkg`), and `cat*` still matches a
+ * command whose heredoc body spans several lines.
  */
 function matchBashPattern(pattern: string, value: string): boolean {
   let regexStr = '';
@@ -484,7 +521,9 @@ function matchBashPattern(pattern: string, value: string): boolean {
       regexStr += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
     }
   }
-  return new RegExp(`^${regexStr}$`).test(value);
+  // `s` so `*` spans newlines; the lookahead anchors the end exactly, since a
+  // bare `$` would also match just before a trailing newline.
+  return new RegExp(`^${regexStr}(?![\\s\\S])`, 's').test(value);
 }
 
 function escapeExactBashPattern(value: string): string {
@@ -572,6 +611,17 @@ function evaluateBasePermission(
     const subCommands = parseCompoundCommand(matchValue);
     if (subCommands.length > 1) {
       return evaluateCompoundPermission(rules, subCommands);
+    }
+
+    // A single sub-command may only span lines because it carries a heredoc
+    // body. Anything else means the split failed to separate the lines, and
+    // `*` matches across newlines — so a wildcard rule would allow the whole
+    // blob, hiding whatever the split missed. Fail closed instead.
+    if (matchValue.includes('\n') && !subCommands[0]?.includes('<<')) {
+      const details = evaluateSinglePermission(rules, toolKey, matchValue);
+      return details.action === 'allow'
+        ? { ...details, action: 'ask', matchedRule: undefined }
+        : details;
     }
   }
 

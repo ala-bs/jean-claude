@@ -4,10 +4,6 @@ import {
   WebGLVideoFrameRenderer,
 } from '@yume-chan/scrcpy-decoder-webcodecs';
 import {
-  type ScrcpyMediaStreamPacket,
-  ScrcpyVideoCodecId,
-} from '@yume-chan/scrcpy';
-import {
   type CSSProperties,
   memo,
   type RefObject,
@@ -17,21 +13,25 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
+import {
+  type ScrcpyMediaStreamPacket,
+  ScrcpyVideoCodecId,
+} from '@yume-chan/scrcpy';
 import { motion } from 'framer-motion';
 
-import type { MobilePreviewH264Chunk } from '@/hooks/use-mobile-preview';
+import { containsH264Keyframe, createH264AccessUnitParser } from '../utils-h264';
 import {
   GESTURE_FEEDBACK_FADE_MS,
   type GestureFeedbackStore,
 } from '../gesture-feedback-store';
-import { base64ToBytes } from '../utils-surface';
-import { containsH264Keyframe, createH264AccessUnitParser } from '../utils-h264';
-import { logMobilePreviewDebug } from '../utils-debug-log';
 import {
   notifyH264FrameRendered,
   notifyImageFrameRendered,
   notifyRawRgbaFrameRendered,
 } from '../utils-frame-readiness';
+import { base64ToBytes } from '../utils-surface';
+import { logMobilePreviewDebug } from '../utils-debug-log';
+import type { MobilePreviewH264Chunk } from '@/hooks/use-mobile-preview';
 
 export function buildGestureFeedbackPath(
   points: Array<{ x: number; y: number }>,

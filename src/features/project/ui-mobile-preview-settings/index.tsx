@@ -12,13 +12,13 @@ import {
   migrateDetectedCommand,
   migrateIosBundleId,
 } from '@/lib/mobile-preview-config';
-import { api } from '@/lib/api';
 import {
   type MobilePreviewDetectedApp,
   type MobilePreviewProjectConfig,
   type MobilePreviewProjectStack,
 } from '@shared/types';
 import { useEffect, useRef, useState } from 'react';
+import { api } from '@/lib/api';
 import clsx from 'clsx';
 
 const ALL_STACKS: MobilePreviewProjectStack[] = [

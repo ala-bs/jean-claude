@@ -227,7 +227,7 @@ export class CopilotBackend implements AgentBackend {
     config: AgentBackendConfig,
     parts: PromptPart[],
   ): Promise<AgentSession> {
-    const client = createCopilotClient({ cwd: config.cwd });
+    const client = createCopilotClient({ cwd: config.cwd, env: config.env });
     const sessionId = nanoid();
     const persistedRules = flattenScope(config.persistedSessionRules ?? {});
     const persistedAllow = persistedRules
@@ -462,6 +462,10 @@ export class CopilotBackend implements AgentBackend {
     cwd: string;
     model?: string;
   }): Promise<string> {
+    // NOTE: summarization runs without project env vars — this path receives a
+    // cwd but no project/task id, so there is nothing to resolve them from. If
+    // a project supplies Copilot credentials or proxy settings via env, this
+    // call will not see them. Threading a projectId here is a follow-up.
     const client = createCopilotClient({ cwd });
     let session: CopilotSdkSession | null = null;
     let unsubscribe: (() => void) | null = null;

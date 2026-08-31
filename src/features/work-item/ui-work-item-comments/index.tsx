@@ -3,6 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 
+import {
+  ALLOWED_IMAGE_TYPES,
+  getAttachmentFileName,
+  getAzureAttachmentPayload,
+  MAX_IMAGES,
+  processImageFile,
+} from '@/lib/image-utils';
 import { api, type WorkItemComment } from '@/lib/api';
 import {
   AzureHtmlContent,
@@ -20,27 +27,20 @@ import {
   type MentionOption,
   MentionTextarea,
 } from '@/common/ui/mention-textarea';
-import { Button } from '@/common/ui/button';
-import { Dropdown } from '@/common/ui/dropdown';
-import {
-  ALLOWED_IMAGE_TYPES,
-  getAttachmentFileName,
-  getAzureAttachmentPayload,
-  MAX_IMAGES,
-  processImageFile,
-} from '@/lib/image-utils';
 import {
   getPromptImageMarkdownSize,
   markdownImagePlaceholderPattern,
 } from '@/lib/markdown-image-size';
-import { createPromptImageUploadCache } from '@/lib/prompt-image-upload-cache';
-import { uploadImagesIntoMarkdown } from '@/features/pull-request/ui-pr-comment-form';
-import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
-import type { PromptImagePart } from '@shared/agent-backend-types';
 import {
   isVideoFile,
   VideoGifConverter,
 } from '@/features/common/ui-video-gif-converter';
+import { Button } from '@/common/ui/button';
+import { createPromptImageUploadCache } from '@/lib/prompt-image-upload-cache';
+import { Dropdown } from '@/common/ui/dropdown';
+import type { PromptImagePart } from '@shared/agent-backend-types';
+import { uploadImagesIntoMarkdown } from '@/features/pull-request/ui-pr-comment-form';
+import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
 import { useSetWorkItemCommentReaction } from '@/hooks/use-work-items';
 import type { WorkItemCommentReactionType } from '@/lib/api';
 

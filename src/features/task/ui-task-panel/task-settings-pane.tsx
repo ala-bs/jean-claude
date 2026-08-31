@@ -7,6 +7,7 @@ import {
   GitBranch,
   GitCommitHorizontal,
   Loader2,
+  Pencil,
   Shield,
   Wand2,
   X,
@@ -17,13 +18,18 @@ import clsx from 'clsx';
 
 
 import { isPrReviewChatStepMeta, type TaskStep } from '@shared/types';
+import {
+  useSetTaskBranchName,
+  useSetTaskSourceBranch,
+} from '@/hooks/use-tasks';
 import { BranchSelect } from '@/common/ui/branch-select';
 import { Button } from '@/common/ui/button';
+import { cleanIpcError } from '@/lib/ipc-error';
 import { IconButton } from '@/common/ui/icon-button';
+import { Input } from '@/common/ui/input';
 import { Separator } from '@/common/ui/separator';
 import type { Skill } from '@shared/skill-types';
 import { useProjectBranches } from '@/hooks/use-projects';
-import { useSetTaskSourceBranch } from '@/hooks/use-tasks';
 import { useSkills } from '@/hooks/use-skills';
 
 
@@ -161,6 +167,102 @@ function SkillsList({ taskId, stepId }: { taskId: string; stepId?: string }) {
   );
 }
 
+function TaskBranchEditor({
+  taskId,
+  taskBranchName,
+}: {
+  taskId: string;
+  taskBranchName: string;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [value, setValue] = useState(taskBranchName);
+  const [error, setError] = useState<string | null>(null);
+  const setBranchName = useSetTaskBranchName();
+
+  const startEditing = () => {
+    setValue(taskBranchName);
+    setError(null);
+    setIsEditing(true);
+  };
+
+  const cancel = () => {
+    setIsEditing(false);
+    setError(null);
+  };
+
+  const submit = () => {
+    const next = value.trim();
+    if (!next || next === taskBranchName) {
+      cancel();
+      return;
+    }
+    setBranchName.mutate(
+      { taskId, branchName: next },
+      {
+        onSuccess: () => {
+          setError(null);
+          setIsEditing(false);
+        },
+        onError: (mutationError) =>
+          setError(cleanIpcError(mutationError) || 'Failed to rename branch'),
+      },
+    );
+  };
+
+  if (!isEditing) {
+    return (
+      <div className="bg-bg-1 flex items-center gap-2 rounded-md px-3 py-2.5">
+        <GitBranch className="text-ink-3 h-4 w-4 shrink-0" />
+        <span className="text-ink-1 min-w-0 flex-1 truncate text-sm">
+          {taskBranchName}
+        </span>
+        <IconButton
+          onClick={startEditing}
+          size="sm"
+          icon={<Pencil />}
+          tooltip="Rename task branch"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1">
+        <Input
+          size="sm"
+          autoFocus
+          value={value}
+          error={Boolean(error)}
+          disabled={setBranchName.isPending}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') submit();
+            if (event.key === 'Escape') cancel();
+          }}
+          className="min-w-0 flex-1"
+          placeholder="Task branch name..."
+        />
+        <IconButton
+          onClick={submit}
+          size="sm"
+          disabled={setBranchName.isPending}
+          icon={setBranchName.isPending ? <Loader2 /> : <Check />}
+          tooltip="Rename branch"
+        />
+        <IconButton
+          onClick={cancel}
+          size="sm"
+          disabled={setBranchName.isPending}
+          icon={<X />}
+          tooltip="Cancel"
+        />
+      </div>
+      {error && <p className="text-status-fail text-[11px]">{error}</p>}
+    </div>
+  );
+}
+
 export function TaskSettingsPane({
   activeStep,
   sourceBranch,
@@ -209,9 +311,7 @@ export function TaskSettingsPane({
       {
         onSuccess: () => setBranchError(null),
         onError: (error) =>
-          setBranchError(
-            error instanceof Error ? error.message : 'Failed to update branch',
-          ),
+          setBranchError(cleanIpcError(error) || 'Failed to update branch'),
       },
     );
   };
@@ -250,8 +350,23 @@ export function TaskSettingsPane({
               Source
             </h4>
             <div className="space-y-2">
+              {canEditSourceBranch && taskBranchName && (
+                <div className="space-y-1">
+                  <span className="text-ink-4 block text-[10px] font-medium tracking-wide uppercase">
+                    Task branch
+                  </span>
+                  <TaskBranchEditor
+                    key={taskBranchName}
+                    taskId={taskId}
+                    taskBranchName={taskBranchName}
+                  />
+                </div>
+              )}
               {canEditSourceBranch ? (
                 <div className="space-y-1">
+                  <span className="text-ink-4 block pt-1 text-[10px] font-medium tracking-wide uppercase">
+                    Source branch
+                  </span>
                   <BranchSelect
                     branches={selectableBranches}
                     branchesLoading={branchesLoading}

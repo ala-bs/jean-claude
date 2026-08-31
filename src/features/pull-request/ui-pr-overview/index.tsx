@@ -76,7 +76,7 @@ import { CIInlinePanel } from '../ui-pr-ci-inline';
 import { PrChecks } from '../ui-pr-checks';
 import { PrComments } from '../ui-pr-comments';
 import { PrMetaPanel } from '../ui-pr-meta-panel';
-import { descriptionPreviewMarkdown } from './media-preview';
+import { descriptionPreviewMarkdown } from '@/lib/description-preview-markdown';
 
 
 

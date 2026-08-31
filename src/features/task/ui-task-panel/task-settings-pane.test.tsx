@@ -18,6 +18,7 @@ vi.mock('@/hooks/use-skills', () => ({
 }));
 
 const setSourceBranchMutate = vi.fn();
+const setBranchNameMutate = vi.fn();
 
 const branchFixtures = [
   { name: 'main', lastCommitDate: '2026-01-01T00:00:00.000Z' },
@@ -32,6 +33,10 @@ vi.mock('@/hooks/use-projects', () => ({
 vi.mock('@/hooks/use-tasks', () => ({
   useSetTaskSourceBranch: () => ({
     mutate: setSourceBranchMutate,
+    isPending: false,
+  }),
+  useSetTaskBranchName: () => ({
+    mutate: setBranchNameMutate,
     isPending: false,
   }),
 }));
@@ -154,6 +159,42 @@ describe('TaskSettingsPane', () => {
 
     expect(setSourceBranchMutate).toHaveBeenCalledWith(
       { taskId: 'task-1', sourceBranch: 'develop' },
+      expect.anything(),
+    );
+  });
+
+  it('lets the user rename the task branch', async () => {
+    setBranchNameMutate.mockClear();
+    await renderEditableSource();
+    expect(container.textContent).toContain('jean-claude/task-1');
+
+    const renameButton = Array.from(
+      container.querySelectorAll('button'),
+    ).find(
+      (button) => button.getAttribute('aria-label') === 'Rename task branch',
+    );
+    await act(async () => {
+      renameButton?.click();
+    });
+
+    const input = container.querySelector('input');
+    expect(input).not.toBeNull();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )?.set;
+      setter?.call(input, 'feature/new-name');
+      input?.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      input?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+    });
+
+    expect(setBranchNameMutate).toHaveBeenCalledWith(
+      { taskId: 'task-1', branchName: 'feature/new-name' },
       expect.anything(),
     );
   });

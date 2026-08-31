@@ -5,20 +5,11 @@ import {
   MOBILE_PREVIEW_H264_REPLAY_CHUNK_LIMIT,
   type MobileColorScheme,
   type MobilePlatform,
-  type MobilePreviewAndroidAppTrustParams,
   type MobilePreviewFrameEvent,
   type MobilePreviewInputEvent,
   type MobilePreviewNativeLogEvent,
   type MobilePreviewNativeLogSession,
   type MobilePreviewNativeLogStartParams,
-  type MobilePreviewNetworkProxyCertificateParams,
-  type MobilePreviewNetworkProxyEvent,
-  type MobilePreviewNetworkProxySession,
-  type MobilePreviewNetworkProxyStartParams,
-  type MobilePreviewNetworkRequest,
-  type MobilePreviewPacketCaptureEvent,
-  type MobilePreviewPacketCaptureSession,
-  type MobilePreviewPacketCaptureStartParams,
   type MobilePreviewSession,
   type MobilePreviewStartParams,
   type MobileRotationDirection,
@@ -31,8 +22,6 @@ function logMobilePreviewDebug(..._args: unknown[]) {}
 
 const MAX_PENDING_NATIVE_LOGS = 1000;
 const MAX_NATIVE_LOGS = 1000;
-const MAX_NETWORK_REQUESTS = 500;
-const MAX_PENDING_NETWORK_REQUESTS = 500;
 const MAX_PENDING_FRAME_EVENTS = 120;
 const MAX_QUARANTINED_PREVIEW_SESSIONS = 100;
 
@@ -314,225 +303,6 @@ export function useMobilePreviewNativeLogs(
     logsStore,
     start: startMutation.mutateAsync,
     stop: stopMutation.mutateAsync,
-    isStarting: startMutation.isPending,
-    isStopping: stopMutation.isPending,
-    error: startMutation.error ?? stopMutation.error,
-  };
-}
-
-export function useMobilePreviewNetworkProxy(
-  _params: MobilePreviewNetworkProxyStartParams | null,
-) {
-  const [session, setSession] =
-    useState<MobilePreviewNetworkProxySession | null>(null);
-  const [requestsStore] = useState(
-    createStreamListStore<MobilePreviewNetworkRequest>,
-  );
-  const sessionRef = useRef<MobilePreviewNetworkProxySession | null>(null);
-  const pendingRequestsRef = useRef<MobilePreviewNetworkRequest[]>([]);
-  const flushRequestsFrameRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    const unsubscribeSession = api.mobilePreview.onNetworkProxySession(
-      (event) => {
-        if (
-          sessionRef.current &&
-          event.session.id !== sessionRef.current.id
-        ) {
-          return;
-        }
-        sessionRef.current = event.session;
-        setSession(event.session);
-      },
-    );
-    const unsubscribeRequest = api.mobilePreview.onNetworkProxyRequest(
-      (event: MobilePreviewNetworkProxyEvent) => {
-        if (event.sessionId !== sessionRef.current?.id) return;
-        pendingRequestsRef.current.push(event.request);
-        if (pendingRequestsRef.current.length > MAX_PENDING_NETWORK_REQUESTS) {
-          pendingRequestsRef.current.splice(
-            0,
-            pendingRequestsRef.current.length - MAX_PENDING_NETWORK_REQUESTS,
-          );
-        }
-        if (flushRequestsFrameRef.current !== null) return;
-
-        flushRequestsFrameRef.current = requestAnimationFrame(() => {
-          flushRequestsFrameRef.current = null;
-          const nextRequests = pendingRequestsRef.current;
-          pendingRequestsRef.current = [];
-          requestsStore.append(nextRequests, MAX_NETWORK_REQUESTS);
-        });
-      },
-    );
-
-    return () => {
-      const activeSession = sessionRef.current;
-      if (activeSession?.status === 'running') {
-        void api.mobilePreview
-          .stopNetworkProxy(activeSession.id)
-          .catch((error: unknown) => {
-            console.error('Failed to stop network proxy:', error);
-          });
-      }
-      unsubscribeRequest();
-      unsubscribeSession();
-      if (flushRequestsFrameRef.current !== null) {
-        cancelAnimationFrame(flushRequestsFrameRef.current);
-        flushRequestsFrameRef.current = null;
-      }
-      pendingRequestsRef.current = [];
-    };
-  }, [requestsStore]);
-
-  const startMutation = useMutation({
-    mutationFn: (startParams: MobilePreviewNetworkProxyStartParams) =>
-      api.mobilePreview.startNetworkProxy(startParams),
-    onSuccess: (nextSession) => {
-      sessionRef.current = nextSession;
-      setSession(nextSession);
-    },
-  });
-  const stopMutation = useMutation({
-    mutationFn: (sessionId: string) =>
-      api.mobilePreview.stopNetworkProxy(sessionId),
-  });
-  const installCertificateMutation = useMutation({
-    mutationFn: (
-      certificateParams: MobilePreviewNetworkProxyCertificateParams,
-    ) => api.mobilePreview.installNetworkProxyCertificate(certificateParams),
-  });
-  const prepareAndroidAppTrustMutation = useMutation({
-    mutationFn: (trustParams: MobilePreviewAndroidAppTrustParams) =>
-      api.mobilePreview.prepareAndroidAppTrust(trustParams),
-  });
-
-  const clear = useCallback(() => {
-    pendingRequestsRef.current = [];
-    requestsStore.clear();
-  }, [requestsStore]);
-
-  return {
-    session,
-    requestsStore,
-    start: startMutation.mutateAsync,
-    stop: stopMutation.mutateAsync,
-    clear,
-    isStarting: startMutation.isPending,
-    isStopping: stopMutation.isPending,
-    installCertificate: installCertificateMutation.mutateAsync,
-    prepareAndroidAppTrust: prepareAndroidAppTrustMutation.mutateAsync,
-    isInstallingCertificate: installCertificateMutation.isPending,
-    isPreparingAndroidAppTrust: prepareAndroidAppTrustMutation.isPending,
-    certificate: installCertificateMutation.data ?? null,
-    androidAppTrust: prepareAndroidAppTrustMutation.data ?? null,
-    error:
-      startMutation.error ??
-      stopMutation.error ??
-      installCertificateMutation.error ??
-      prepareAndroidAppTrustMutation.error,
-  };
-}
-
-export function useMobilePreviewPacketCapture(
-  params: MobilePreviewPacketCaptureStartParams | null,
-) {
-  const [session, setSession] =
-    useState<MobilePreviewPacketCaptureSession | null>(null);
-  const [requestsStore] = useState(
-    createStreamListStore<MobilePreviewNetworkRequest>,
-  );
-  const sessionRef = useRef<MobilePreviewPacketCaptureSession | null>(null);
-  const pendingRequestsRef = useRef<MobilePreviewNetworkRequest[]>([]);
-  const flushRequestsFrameRef = useRef<number | null>(null);
-
-  const matchesParams = useCallback(
-    (nextSession: MobilePreviewPacketCaptureSession) =>
-      !!params &&
-      nextSession.platform === params.platform &&
-      nextSession.deviceId === params.deviceId,
-    [params],
-  );
-
-  useEffect(() => {
-    sessionRef.current = null;
-    queueMicrotask(() => {
-      setSession(null);
-    });
-    requestsStore.clear();
-    if (!params) return undefined;
-
-    const unsubscribeSession = api.mobilePreview.onPacketCaptureSession(
-      (event) => {
-        if (!matchesParams(event.session)) return;
-        sessionRef.current = event.session;
-        setSession(event.session);
-      },
-    );
-    const unsubscribeRequest = api.mobilePreview.onPacketCaptureRequest(
-      (event: MobilePreviewPacketCaptureEvent) => {
-        if (event.sessionId !== sessionRef.current?.id) return;
-        pendingRequestsRef.current.push(event.request);
-        if (pendingRequestsRef.current.length > MAX_PENDING_NETWORK_REQUESTS) {
-          pendingRequestsRef.current.splice(
-            0,
-            pendingRequestsRef.current.length - MAX_PENDING_NETWORK_REQUESTS,
-          );
-        }
-        if (flushRequestsFrameRef.current !== null) return;
-
-        flushRequestsFrameRef.current = requestAnimationFrame(() => {
-          flushRequestsFrameRef.current = null;
-          const nextRequests = pendingRequestsRef.current;
-          pendingRequestsRef.current = [];
-          requestsStore.append(nextRequests, MAX_NETWORK_REQUESTS);
-        });
-      },
-    );
-
-    return () => {
-      const activeSession = sessionRef.current;
-      if (activeSession?.status === 'running') {
-        void api.mobilePreview
-          .stopPacketCapture(activeSession.id)
-          .catch((error: unknown) => {
-            console.error('Failed to stop packet capture:', error);
-          });
-      }
-      unsubscribeRequest();
-      unsubscribeSession();
-      if (flushRequestsFrameRef.current !== null) {
-        cancelAnimationFrame(flushRequestsFrameRef.current);
-        flushRequestsFrameRef.current = null;
-      }
-      pendingRequestsRef.current = [];
-    };
-  }, [matchesParams, params, requestsStore]);
-
-  const startMutation = useMutation({
-    mutationFn: (startParams: MobilePreviewPacketCaptureStartParams) =>
-      api.mobilePreview.startPacketCapture(startParams),
-    onSuccess: (nextSession) => {
-      sessionRef.current = nextSession;
-      setSession(nextSession);
-    },
-  });
-  const stopMutation = useMutation({
-    mutationFn: (sessionId: string) =>
-      api.mobilePreview.stopPacketCapture(sessionId),
-  });
-
-  const clear = useCallback(() => {
-    pendingRequestsRef.current = [];
-    requestsStore.clear();
-  }, [requestsStore]);
-
-  return {
-    session,
-    requestsStore,
-    start: startMutation.mutateAsync,
-    stop: stopMutation.mutateAsync,
-    clear,
     isStarting: startMutation.isPending,
     isStopping: stopMutation.isPending,
     error: startMutation.error ?? stopMutation.error,

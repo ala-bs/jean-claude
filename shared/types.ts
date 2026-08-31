@@ -462,6 +462,45 @@ export interface UpdateProject {
   updatedAt?: string;
 }
 
+/**
+ * A project environment variable as seen by the renderer.
+ *
+ * Secret values are intentionally absent: `value` is null when `isSecret` is
+ * true, so a secret can be replaced or deleted from the UI but never read back.
+ */
+export interface ProjectEnvVar {
+  id: string;
+  projectId: string;
+  key: string;
+  value: string | null;
+  isSecret: boolean;
+  /**
+   * True when a stored secret can no longer be decrypted (keychain reset, or
+   * the database moved between machines). The variable is skipped at run time,
+   * so the UI must prompt the user to re-enter its value.
+   */
+  decryptionFailed: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NewProjectEnvVar {
+  projectId: string;
+  key: string;
+  value: string;
+  isSecret?: boolean;
+  sortOrder?: number;
+}
+
+export interface UpdateProjectEnvVar {
+  key?: string;
+  /** Omit to keep the stored value; required when switching a var to secret. */
+  value?: string;
+  isSecret?: boolean;
+  sortOrder?: number;
+}
+
 export interface Task {
   id: string;
   projectId: string;
@@ -1503,7 +1542,53 @@ function isWorkActivitySetting(value: unknown): value is WorkActivitySetting {
   );
 }
 
+/**
+ * A glob whose matching files are treated as already reviewed in diff views,
+ * plus a color so they stay identifiable in the file tree. Rules are never
+ * baked into stored review state — they are applied when the tree is read, so
+ * editing a rule immediately re-derives which files count as reviewed.
+ */
+export interface AutoReviewRule {
+  id: string;
+  /** Picomatch glob, matched against the diff-relative file path. */
+  pattern: string;
+  /** Hex swatch used to tint matching rows. */
+  color: string;
+  enabled: boolean;
+  /** Optional human name shown in settings and as the row tooltip. */
+  label?: string;
+}
+
+export interface AutoReviewSetting {
+  rules: AutoReviewRule[];
+}
+
+function isAutoReviewRule(value: unknown): value is AutoReviewRule {
+  if (!value || typeof value !== 'object') return false;
+  const rule = value as Record<string, unknown>;
+  return (
+    typeof rule.id === 'string' &&
+    typeof rule.pattern === 'string' &&
+    typeof rule.color === 'string' &&
+    typeof rule.enabled === 'boolean' &&
+    (rule.label === undefined || typeof rule.label === 'string')
+  );
+}
+
+export function isAutoReviewSetting(value: unknown): value is AutoReviewSetting {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    Array.isArray((value as Record<string, unknown>).rules) &&
+    ((value as AutoReviewSetting).rules as unknown[]).every(isAutoReviewRule)
+  );
+}
+
 export const SETTINGS_DEFINITIONS = {
+  autoReview: {
+    defaultValue: { rules: [] } as AutoReviewSetting,
+    validate: isAutoReviewSetting,
+  },
   mobilePreviewRecordingFolder: {
     defaultValue: null as string | null,
     validate: (value: unknown): value is string | null =>

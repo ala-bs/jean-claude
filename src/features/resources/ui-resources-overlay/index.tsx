@@ -14,17 +14,17 @@ import {
   type AgentResourceSample,
   useAgentResourceSnapshots,
 } from '@/hooks/use-agent-resource-snapshots';
+import {
+  formatCpuPercent as formatCpu,
+  formatResourceBytes,
+} from '@/lib/format-resource-usage';
 import { api } from '@/lib/api';
+import { Sparkline as BaseSparkline } from '@/common/ui/sparkline';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useMemoryUsage } from '@/hooks/use-memory-usage';
-import { Sparkline as BaseSparkline } from '@/common/ui/sparkline';
-import {
-  formatCpuPercent as formatCpu,
-  formatResourceBytes,
-} from '@/lib/format-resource-usage';
 
 
 let peakTotalAgentCpu = 100;

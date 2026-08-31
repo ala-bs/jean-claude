@@ -181,7 +181,7 @@ function AddProjectPage() {
         // Project creation should still succeed if detected logo copy fails.
       }
     }
-    navigate({ to: '/projects/$projectId', params: { projectId: project.id } });
+    navigate({ to: '/all' });
   }
 
   function handleFormChange(updates: Partial<ProjectFormData>) {

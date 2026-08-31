@@ -4,14 +4,17 @@ import {
   Loader2,
   MoreHorizontal,
   Pencil,
+  Star,
   Trash2,
 } from 'lucide-react';
 import {
   clearBacklogOverlayDraft,
   getBacklogOverlayDraft,
+  useBacklogFavoriteProjectIds,
   useBacklogOverlayDraftStore,
   useBacklogSelectedProjectId,
   useSetBacklogSelectedProjectId,
+  useToggleBacklogFavoriteProject,
 } from '@/stores/backlog-overlay-draft';
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import React, {
@@ -21,6 +24,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { Select, type SelectRef } from '@/common/ui/select';
 import {
   useCreateProjectTodo,
   useDeleteProjectTodo,
@@ -37,7 +41,6 @@ import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 import { Kbd } from '@/common/ui/kbd';
 import type { ProjectTodo } from '@shared/types';
-import { Select } from '@/common/ui/select';
 import { useActiveProjects } from '@/hooks/use-projects';
 import { useBackgroundNewTaskJobForBacklogItem } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
@@ -296,18 +299,47 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
   const { data: projects = [] } = useActiveProjects();
   const selectedProjectId = useBacklogSelectedProjectId();
   const setSelectedBacklogProjectId = useSetBacklogSelectedProjectId();
+  const favoriteProjectIds = useBacklogFavoriteProjectIds();
+  const toggleFavoriteProject = useToggleBacklogFavoriteProject();
+
+  const favoriteIdSet = useMemo(
+    () => new Set(favoriteProjectIds),
+    [favoriteProjectIds],
+  );
+
+  // Favorites float to the top of the project list, so the fallback project
+  // (when nothing is selected yet) is the first favorite when one exists.
+  const orderedProjects = useMemo(() => {
+    const favorites = projects.filter((p) => favoriteIdSet.has(p.id));
+    const rest = projects.filter((p) => !favoriteIdSet.has(p.id));
+    return [...favorites, ...rest];
+  }, [projects, favoriteIdSet]);
 
   const projectId =
     selectedProjectId &&
     projects.some((project) => project.id === selectedProjectId)
       ? selectedProjectId
-      : (projects[0]?.id ?? '');
+      : (orderedProjects[0]?.id ?? '');
+
+  const isFavorite = !!projectId && favoriteIdSet.has(projectId);
+  const hasFavorites = orderedProjects.some((p) => favoriteIdSet.has(p.id));
 
   const projectOptions = useMemo(
-    () => projects.map((p) => ({ value: p.id, label: p.name })),
-    [projects],
+    () =>
+      orderedProjects.map((p) => ({
+        value: p.id,
+        label: p.name,
+        // Only show group headers once at least one project is favorited.
+        group: hasFavorites
+          ? favoriteIdSet.has(p.id)
+            ? 'Favorites'
+            : 'All projects'
+          : undefined,
+      })),
+    [orderedProjects, favoriteIdSet, hasFavorites],
   );
 
+  const projectSelectRef = useRef<SelectRef>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const triggerRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
@@ -491,6 +523,25 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
           }
 
           return false;
+        },
+        hideInCommandPalette: true,
+      },
+      {
+        label: 'Switch Backlog Project',
+        shortcut: 'cmd+p',
+        handler: () => {
+          if (editingId) return false;
+          if (projectOptions.length === 0) return false;
+          projectSelectRef.current?.open();
+        },
+        hideInCommandPalette: true,
+      },
+      {
+        label: isFavorite ? 'Unfavorite Project' : 'Favorite Project',
+        shortcut: 'cmd+shift+f',
+        handler: () => {
+          if (editingId || !projectId) return false;
+          toggleFavoriteProject(projectId);
         },
         hideInCommandPalette: true,
       },
@@ -809,14 +860,38 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
           onClick={handleModalClick}
         >
           {/* Project selector header */}
-          <div className="border-glass-border flex items-center border-b px-4 py-2">
+          <div className="border-glass-border flex items-center gap-1 border-b px-4 py-2">
             <Select
+              ref={projectSelectRef}
               value={projectId}
               options={projectOptions}
               onChange={handleProjectChange}
               label="Project"
+              layer={layer}
               className="text-ink-1 hover:bg-glass-medium border-none bg-transparent px-1 py-0.5 hover:border-none"
             />
+            <button
+              type="button"
+              disabled={!projectId}
+              onClick={() => toggleFavoriteProject(projectId)}
+              aria-pressed={isFavorite}
+              title={
+                isFavorite
+                  ? 'Remove project from favorites'
+                  : 'Add project to favorites'
+              }
+              aria-label={
+                isFavorite
+                  ? 'Remove project from favorites'
+                  : 'Add project to favorites'
+              }
+              className={clsx(
+                'hover:bg-glass-medium rounded p-1 transition-colors disabled:opacity-40',
+                isFavorite ? 'text-amber-300' : 'text-ink-3 hover:text-ink-1',
+              )}
+            >
+              <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
+            </button>
           </div>
 
           {/* Quick-add input */}
@@ -870,6 +945,13 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
           <div className="border-glass-border text-ink-2 flex flex-wrap items-center gap-3 border-t px-4 py-2 text-xs">
             <span className="inline-flex items-center gap-1.5">
               <Kbd shortcut="tab" /> Switch Input/List Focus
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <Kbd shortcut="cmd+p" /> Switch Project
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <Kbd shortcut="cmd+shift+f" />{' '}
+              {isFavorite ? 'Unfavorite Project' : 'Favorite Project'}
             </span>
             <span className="inline-flex items-center gap-1.5">
               <Kbd shortcut="cmd+enter" />

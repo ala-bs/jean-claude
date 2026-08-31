@@ -1,17 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import type { PreviewDerived, PreviewFacts } from './utils-setup-model';
+import { baseDerived, baseFacts } from './utils-preview-fixtures';
 import {
   getSetupStepAction,
   type PreviewActionFacts,
   type PreviewStepAction,
 } from './utils-setup-step-actions';
-import { baseDerived, baseFacts } from './utils-preview-fixtures';
+import type { PreviewDerived, PreviewFacts } from './utils-setup-model';
 
 const baseActionFacts: PreviewActionFacts = {
   dependenciesInstallStarting: false,
   hasBuildCommand: true,
-  hasNetworkProxyStartParams: true,
 };
 
 function action(
@@ -108,9 +107,11 @@ describe('getSetupStepAction — install/build', () => {
     expect(action('install', {}, {}, { hasBuildCommand: false }).disabled).toBe(true);
   });
 
-  it('is disabled on ios without a device', () => {
+  // Both platforms scope the build command id by device now, so neither can
+  // build without one.
+  it('is disabled on either platform without a device', () => {
     expect(action('install', { platform: 'ios', deviceId: '' }).disabled).toBe(true);
-    expect(action('install', { platform: 'android', deviceId: '' }).disabled).toBe(false);
+    expect(action('install', { platform: 'android', deviceId: '' }).disabled).toBe(true);
   });
 
   it('is disabled while app selection is pending or the build status is loading', () => {
@@ -170,51 +171,54 @@ describe('getSetupStepAction — preview', () => {
   });
 });
 
-describe('getSetupStepAction — proxy', () => {
-  it('toggles on the proxy session', () => {
-    expect(action('proxy')).toMatchObject({ label: 'Start', intent: 'proxy-toggle' });
-    expect(action('proxy', { networkRunning: true })).toMatchObject({
-      label: 'Stop',
-      variant: 'secondary',
-    });
+describe('getSetupStepAction — physical devices', () => {
+  const connectedPixel = {
+    platform: 'android' as const,
+    selectedDeviceIsPhysical: true,
+    selectedDeviceConnected: true,
+  };
+
+  it('enables Build for a connected physical Android device', () => {
+    expect(action('install', connectedPixel)?.disabled).toBe(false);
   });
 
-  it('is disabled without start params or during a transition', () => {
-    expect(action('proxy', {}, {}, { hasNetworkProxyStartParams: false }).disabled).toBe(true);
-    expect(action('proxy', { proxyIsStarting: true })).toMatchObject({
-      disabled: true,
-      loading: true,
-    });
-    expect(action('proxy', { proxyIsInstallingCertificate: true }).disabled).toBe(true);
-  });
-});
-
-describe('getSetupStepAction — https', () => {
-  it('asks to trust the app on android before the cert is trusted', () => {
+  it('enables Build for a connected physical iPhone', () => {
     expect(
-      action('https', { platform: 'android' }, { androidTrustConfigured: false }),
-    ).toMatchObject({ label: 'Trust app', intent: 'android-app-trust' });
+      action('install', {
+        platform: 'ios',
+        selectedDeviceIsPhysical: true,
+        selectedDeviceConnected: true,
+      })?.disabled,
+    ).toBe(false);
   });
 
-  it('installs the certificate once android trust is configured', () => {
+  it('disables Build while the physical device is unreachable', () => {
     expect(
-      action('https', { platform: 'android' }, { androidTrustConfigured: true }),
-    ).toMatchObject({ label: 'Install cert', intent: 'install-network-certificate' });
+      action('install', { ...connectedPixel, selectedDeviceConnected: false })
+        ?.disabled,
+    ).toBe(true);
   });
 
-  it('always installs the certificate on ios', () => {
-    expect(action('https', { platform: 'ios' }).intent).toBe(
-      'install-network-certificate',
+  it('disables Build with no device on either platform', () => {
+    expect(action('install', { platform: 'android', deviceId: '' })?.disabled).toBe(
+      true,
+    );
+    expect(action('install', { platform: 'ios', deviceId: '' })?.disabled).toBe(
+      true,
     );
   });
 
-  it('is disabled without a device or start params', () => {
-    expect(action('https', { deviceId: '' }).disabled).toBe(true);
-    expect(action('https', {}, {}, { hasNetworkProxyStartParams: false }).disabled).toBe(true);
+  it('disables Start preview for a physical iPhone (no capture path)', () => {
+    expect(
+      action('preview', {
+        platform: 'ios',
+        selectedDeviceIsPhysical: true,
+        selectedDeviceConnected: true,
+      })?.disabled,
+    ).toBe(true);
   });
 
-  it('loads while installing the cert or preparing trust', () => {
-    expect(action('https', { proxyIsInstallingCertificate: true }).loading).toBe(true);
-    expect(action('https', { proxyIsPreparingAndroidAppTrust: true }).loading).toBe(true);
+  it('keeps Start preview available for a physical Android device', () => {
+    expect(action('preview', connectedPixel)?.disabled).toBe(false);
   });
 });

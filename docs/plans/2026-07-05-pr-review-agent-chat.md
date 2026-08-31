@@ -882,6 +882,13 @@ Expected: PASS.
 
 ### Task 12: Add Manual Cleanup Button For PR Review Worktree
 
+> **Superseded.** The `Clean review workspace` button described below was shipped
+> and later removed: it was too easily confused with `Delete PR Workspaces`, and
+> the product decision is that PR workspace cleanup always deletes the associated
+> tasks. Do not reintroduce this button. The `worktreePath`-missing guard from
+> Step 3 is still live — a task can lose its worktree via task completion cleanup
+> or the unused-worktree sweep in settings.
+
 **Files:**
 - Modify: `src/features/pull-request/ui-pr-detail/index.tsx`
 - Modify: `src/features/pull-request/ui-pr-header/index.tsx` or add small control near file toolbar

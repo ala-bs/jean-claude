@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 
-import type { AgentQuestion, QueuedPrompt } from '@shared/agent-types';
+import type {
+  AgentBackgroundTask,
+  AgentQuestion,
+  QueuedPrompt,
+} from '@shared/agent-types';
 import type {
   NormalizedEntry,
   NormalizedPermissionRequest,
@@ -39,26 +43,92 @@ function isQuestionStateForTask(key: string, taskId: string): boolean {
   return key === taskId || getQuestionTaskId(key) === taskId;
 }
 
+/**
+ * Draft keys for questions that are still pending on *other* steps of the same
+ * task. A task can have several steps running at once, so pruning question
+ * state task-wide would discard answers the user is still typing into a sibling
+ * step's banner.
+ */
+function getLiveQuestionDraftKeys(
+  state: TaskMessagesStore,
+  taskId: string,
+  excludeStepId?: string,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const [stepId, step] of Object.entries(state.steps)) {
+    if (step.taskId !== taskId || stepId === excludeStepId) continue;
+    const question = step.pendingQuestion;
+    if (question) {
+      keys.add(getQuestionDraftKey(question.taskId, question.requestId));
+    }
+  }
+  return keys;
+}
+
+/**
+ * Invalidates in-flight pending-request fetches for a single step.
+ *
+ * Deliberately per-step, and deliberately keyed by the step that actually owns
+ * the request: a task's steps run concurrently and emit status updates
+ * constantly, so bumping task-wide made every sibling tick discard an unrelated
+ * step's in-flight fetch and its question banner never rendered.
+ */
+function bumpStepRequestVersion(state: TaskMessagesStore, stepId: string) {
+  return {
+    pendingRequestVersions: {
+      ...state.pendingRequestVersions,
+      [stepId]: (state.pendingRequestVersions[stepId] ?? 0) + 1,
+    },
+  };
+}
+
+/**
+ * The pending request still live on some step of `taskId`, if any.
+ *
+ * `pendingRequestsByTaskId` is a single slot per task but steps run
+ * concurrently, so clearing it when one step resolves would drop the feed's
+ * "needs answer" attention while a sibling step is still waiting on the user.
+ */
+function findLivePendingRequestForTask(
+  state: TaskMessagesStore,
+  taskId: string,
+  excludeStepId?: string,
+): PendingRequest | null {
+  for (const [stepId, step] of Object.entries(state.steps)) {
+    if (step.taskId !== taskId || stepId === excludeStepId) continue;
+    if (step.pendingPermission) {
+      return { type: 'permission', stepId, permission: step.pendingPermission };
+    }
+    if (step.pendingQuestion) {
+      return { type: 'question', stepId, question: step.pendingQuestion };
+    }
+  }
+  return null;
+}
+
+/**
+ * Prunes question drafts belonging to `taskId`, except those in
+ * `keepDraftKeys`. Drafts are keyed by draft key (`getQuestionDraftKey`), i.e.
+ * per request — never per task — so sibling steps of the same task keep
+ * independent drafts.
+ *
+ * `questionResponsesInFlight` is intentionally NOT pruned here: a lock is
+ * released by the `finally` in the submitting component, which always runs.
+ * Pruning it from a store mutation could drop a lock that is still held,
+ * re-opening the double-submit window it exists to close.
+ */
 function removeQuestionStateForTask(
   state: TaskMessagesStore,
   taskId: string,
-  keepDraftKey?: string,
-  keepInFlight = false,
+  keepDraftKeys?: Iterable<string>,
 ) {
+  const keepKeys = new Set(keepDraftKeys ?? []);
   const questionDrafts = Object.fromEntries(
     Object.entries(state.questionDrafts).filter(
-      ([key]) => key === keepDraftKey || !isQuestionStateForTask(key, taskId),
+      ([key]) => keepKeys.has(key) || !isQuestionStateForTask(key, taskId),
     ),
   );
-  const questionResponsesInFlight = Object.fromEntries(
-    Object.entries(state.questionResponsesInFlight).filter(
-      ([key]) =>
-        keepInFlight && key === taskId
-          ? true
-          : !isQuestionStateForTask(key, taskId),
-    ),
-  );
-  return { questionDrafts, questionResponsesInFlight };
+  return { questionDrafts };
 }
 
 function areRunCommandPortsEqual(
@@ -152,6 +222,11 @@ export interface TaskState {
  */
 export interface PendingRequest {
   type: 'permission' | 'question';
+  /**
+   * The step that owns the request. Needed by per-step UI (the step flow bar)
+   * to color the right chip when the step itself isn't in the `steps` cache.
+   */
+  stepId?: string;
   permission?: NormalizedPermissionRequest & { taskId: string };
   question?: {
     taskId: string;
@@ -166,7 +241,29 @@ interface TaskMessagesStore {
   steps: Record<string, TaskState>;
   /** Keyed by taskId — lightweight pending request tracking (always populated) */
   pendingRequestsByTaskId: Record<string, PendingRequest>;
-  pendingRequestVersion: number;
+  /**
+   * Keyed by stepId — background jobs (background subagents, `run_in_background`
+   * shells, Monitor) the agent is still waiting on. Kept outside `steps` so the
+   * indicator survives step-cache eviction and arrives even before the step's
+   * messages are loaded. Empty snapshots delete the key.
+   */
+  backgroundTasksByStepId: Record<string, AgentBackgroundTask[]>;
+  /**
+   * Keyed by stepId — bumped on every live `background-tasks` event so an
+   * in-flight `getBackgroundTasks` hydration fetch can tell that a newer
+   * snapshot landed while it was awaiting, and drop its stale result. A
+   * reference check on the array is not enough: a set-then-clear pair during
+   * the await returns the key to `undefined`, which looks unchanged.
+   */
+  backgroundTasksVersions: Record<string, number>;
+  /**
+   * Keyed by stepId — bumped whenever a step's pending request changes, so an
+   * in-flight `getPendingRequest` fetch can detect that it raced. Per-step (not
+   * global): sibling steps of the same task emit status updates constantly, and
+   * a global counter made every sibling tick invalidate an unrelated step's
+   * fetch, so its question banner never rendered.
+   */
+  pendingRequestVersions: Record<string, number>;
   /** Keyed by taskId — run command logs are task-level, not step-level */
   runCommandLogs: Record<string, RunCommandLogs>;
   /** Keyed by taskId/runCommandId — drops stale IPC batches after log reset. */
@@ -221,6 +318,7 @@ interface TaskMessagesStore {
   tryStartQuestionResponse: (key: string) => boolean;
   finishQuestionResponse: (key: string) => void;
   setQueuedPrompts: (stepId: string, queuedPrompts: QueuedPrompt[]) => void;
+  setBackgroundTasks: (stepId: string, tasks: AgentBackgroundTask[]) => void;
   appendRunCommandLogBatch: (
     taskId: string,
     runCommandId: string,
@@ -238,8 +336,16 @@ interface TaskMessagesStore {
   clearAllRunCommandLogs: (taskId: string) => void;
   setRunCommandRunning: (taskId: string, status: RunStatus | false) => void;
   setRunCommandStatusesHydrated: (hydrated: boolean) => void;
-  setPendingRequestForTask: (taskId: string, request: PendingRequest) => void;
-  clearPendingRequestForTask: (taskId: string) => void;
+  /** `stepId` is the step owning the request; omit only when unknown. */
+  setPendingRequestForTask: (args: {
+    taskId: string;
+    request: PendingRequest;
+    stepId?: string;
+  }) => void;
+  clearPendingRequestForTask: (args: {
+    taskId: string;
+    stepId?: string;
+  }) => void;
   touchStep: (stepId: string) => void;
   unloadStep: (stepId: string) => void;
 
@@ -428,7 +534,9 @@ function shouldKeepExistingEntry({
 export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
   steps: {},
   pendingRequestsByTaskId: {},
-  pendingRequestVersion: 0,
+  backgroundTasksByStepId: {},
+  backgroundTasksVersions: {},
+  pendingRequestVersions: {},
   runCommandLogs: {},
   runCommandLogGenerations: {},
   runCommandRunning: {},
@@ -578,7 +686,14 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
       const resolvedTaskId = taskId ?? step?.taskId;
       const questionState =
         shouldClearPending && resolvedTaskId
-          ? removeQuestionStateForTask(state, resolvedTaskId)
+          ? removeQuestionStateForTask(
+              state,
+              resolvedTaskId,
+              // Only this step finished — sibling steps of the same task may
+              // still be showing a question the user is part-way through
+              // answering, so their drafts must survive.
+              getLiveQuestionDraftKeys(state, resolvedTaskId, stepId),
+            )
           : null;
       if (!step) {
         if (!taskId) return state;
@@ -596,9 +711,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
               lastAccessedAt: Date.now(),
             },
           },
-          ...(shouldClearPending && {
-            pendingRequestVersion: state.pendingRequestVersion + 1,
-          }),
+          ...(shouldClearPending && bumpStepRequestVersion(state, stepId)),
           ...(questionState ?? {}),
         };
       }
@@ -615,9 +728,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
             }),
           },
         },
-        ...(shouldClearPending && {
-          pendingRequestVersion: state.pendingRequestVersion + 1,
-        }),
+        ...(shouldClearPending && bumpStepRequestVersion(state, stepId)),
         ...(questionState ?? {}),
       };
     });
@@ -635,7 +746,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
             pendingPermission: permission,
           },
         },
-        pendingRequestVersion: state.pendingRequestVersion + 1,
+        ...bumpStepRequestVersion(state, stepId),
       };
     });
   },
@@ -644,14 +755,17 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
     set((state) => {
       const step = state.steps[stepId];
       if (!step) return state;
-      const questionState = question
-        ? removeQuestionStateForTask(
-            state,
-            step.taskId,
-            getQuestionDraftKey(question.taskId, question.requestId),
-            true,
-          )
-        : removeQuestionStateForTask(state, step.taskId);
+      // Drafts belonging to questions still pending on sibling steps of this
+      // task are preserved — only this step's own stale drafts are pruned.
+      const keepKeys = getLiveQuestionDraftKeys(state, step.taskId, stepId);
+      if (question) {
+        keepKeys.add(getQuestionDraftKey(question.taskId, question.requestId));
+      }
+      const questionState = removeQuestionStateForTask(
+        state,
+        step.taskId,
+        keepKeys,
+      );
       return {
         steps: {
           ...state.steps,
@@ -660,7 +774,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
             pendingQuestion: question,
           },
         },
-        pendingRequestVersion: state.pendingRequestVersion + 1,
+        ...bumpStepRequestVersion(state, stepId),
         ...questionState,
       };
     });
@@ -675,8 +789,11 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
       };
       return {
         questionDrafts: {
-          ...removeQuestionStateForTask(state, getQuestionTaskId(key), key)
-            .questionDrafts,
+          // Typing in one step's banner must not drop a sibling step's draft.
+          ...removeQuestionStateForTask(state, getQuestionTaskId(key), [
+            ...getLiveQuestionDraftKeys(state, getQuestionTaskId(key)),
+            key,
+          ]).questionDrafts,
           [key]: update(current),
         },
       };
@@ -730,6 +847,46 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
             ...step,
             queuedPrompts,
           },
+        },
+      };
+    });
+  },
+
+  setBackgroundTasks: (stepId, tasks) => {
+    set((state) => {
+      const bumpVersion = {
+        backgroundTasksVersions: {
+          ...state.backgroundTasksVersions,
+          [stepId]: (state.backgroundTasksVersions[stepId] ?? 0) + 1,
+        },
+      };
+      const current = state.backgroundTasksByStepId[stepId];
+      if (tasks.length === 0) {
+        if (!current) return bumpVersion;
+        const { [stepId]: _removed, ...rest } = state.backgroundTasksByStepId;
+        void _removed;
+        return { ...bumpVersion, backgroundTasksByStepId: rest };
+      }
+      // Identity check keeps the array reference stable across no-op
+      // snapshots. Compares every field, so a description that arrives late
+      // for an already-known task still updates the UI.
+      if (
+        current &&
+        current.length === tasks.length &&
+        current.every(
+          (task, index) =>
+            task.taskId === tasks[index]?.taskId &&
+            task.description === tasks[index]?.description &&
+            task.taskType === tasks[index]?.taskType,
+        )
+      ) {
+        return bumpVersion;
+      }
+      return {
+        ...bumpVersion,
+        backgroundTasksByStepId: {
+          ...state.backgroundTasksByStepId,
+          [stepId]: tasks,
         },
       };
     });
@@ -938,24 +1095,42 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
         : { areRunCommandStatusesHydrated: hydrated },
     ),
 
-  setPendingRequestForTask: (taskId, request) => {
+  setPendingRequestForTask: ({ taskId, stepId, request }) => {
     set((state) => ({
       pendingRequestsByTaskId: {
         ...state.pendingRequestsByTaskId,
-        [taskId]: request,
+        [taskId]: stepId ? { ...request, stepId } : request,
       },
-      pendingRequestVersion: state.pendingRequestVersion + 1,
+      // Bump only the owning step. Bumping task-wide (or inferring the step set
+      // from `state.steps`, which misses steps unloaded mid-refetch) would
+      // discard a sibling step's in-flight fetch.
+      ...(stepId ? bumpStepRequestVersion(state, stepId) : {}),
     }));
   },
 
-  clearPendingRequestForTask: (taskId) => {
+  clearPendingRequestForTask: ({ taskId, stepId }) => {
     set((state) => {
-      if (!state.pendingRequestsByTaskId[taskId]) return state;
+      const versions = stepId ? bumpStepRequestVersion(state, stepId) : {};
+      if (!state.pendingRequestsByTaskId[taskId]) {
+        return { ...state, ...versions };
+      }
+      // A sibling step may still be waiting on the user — hand the slot over to
+      // it rather than dropping the task's attention entirely.
+      const live = findLivePendingRequestForTask(state, taskId, stepId);
+      if (live) {
+        return {
+          pendingRequestsByTaskId: {
+            ...state.pendingRequestsByTaskId,
+            [taskId]: live,
+          },
+          ...versions,
+        };
+      }
       const { [taskId]: _removed, ...rest } = state.pendingRequestsByTaskId;
       void _removed;
       return {
         pendingRequestsByTaskId: rest,
-        pendingRequestVersion: state.pendingRequestVersion + 1,
+        ...versions,
       };
     });
   },

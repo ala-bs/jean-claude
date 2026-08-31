@@ -10,22 +10,23 @@ import * as nodePty from 'node-pty';
 import { glob } from 'glob';
 
 
-import type {
-  CommandRunStatus,
-  PackageScriptsResult,
-  PortInUse,
-  PortsInUseErrorData,
-  ProjectCommand,
-  ProjectSuggestionCommand,
-  ProjectSuggestions,
-  RunCommandEnvVar,
-  RunCommandLogStream,
-  RunStatus,
-  StartAdHocRunCommandParams,
-  WorkspacePackage,
+import {
+  type CommandRunStatus,
+  type PackageScriptsResult,
+  parseProjectRootRunId,
+  type PortInUse,
+  type PortsInUseErrorData,
+  type ProjectCommand,
+  type ProjectSuggestionCommand,
+  type ProjectSuggestions,
+  RUN_COMMAND_ENV_SOURCES,
+  type RunCommandEnvVar,
+  type RunCommandLogStream,
+  type RunStatus,
+  type StartAdHocRunCommandParams,
+  type WorkspacePackage,
 } from '@shared/run-command-types';
 import { MOBILE_DEV_SERVER_COMMAND_PREFIX } from '@shared/mobile-preview-runtime';
-import { RUN_COMMAND_ENV_SOURCES } from '@shared/run-command-types';
 
 import { dbg } from '../lib/debug';
 import { getChildProcessEnv } from '../lib/child-process-env';
@@ -715,13 +716,17 @@ export class RunCommandService {
     projectId: string;
     workingDir: string;
   }): Promise<RunCommandContext> {
+    const isProjectRootRun = parseProjectRootRunId(taskId) !== null;
     const [task, project] = await Promise.all([
-      TaskRepository.findById(taskId),
+      isProjectRootRun ? undefined : TaskRepository.findById(taskId),
       ProjectRepository.findById(projectId),
     ]);
 
     return {
-      taskName: task?.name?.trim() || task?.prompt.trim() || taskId,
+      // Favorites have no task; don't leak the synthetic run id into templates.
+      taskName: isProjectRootRun
+        ? 'Project root'
+        : task?.name?.trim() || task?.prompt.trim() || taskId,
       projectName: project?.name ?? projectId,
       worktreePath: workingDir,
       projectPath: project?.path ?? '',
@@ -1276,6 +1281,7 @@ export class RunCommandService {
       envVars,
       confirmBeforeRun: false,
       confirmMessage: null,
+      isFavorite: false,
       sortOrder: 0,
       createdAt: new Date().toISOString(),
     };

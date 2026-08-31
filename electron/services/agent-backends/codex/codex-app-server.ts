@@ -1,8 +1,11 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import {
+  getChildProcessEnv,
+  getEnvPoolKey,
+} from '../../../lib/child-process-env';
 import { dbg } from '../../../lib/debug';
-import { getChildProcessEnv } from '../../../lib/child-process-env';
 
 import { CodexJsonRpcClient } from './codex-json-rpc-client';
 
@@ -20,21 +23,35 @@ type CodexAppServerState = {
   handle?: CodexAppServerHandle;
 };
 
-let serverState: CodexAppServerState | undefined;
+// One app-server per distinct env override set. Projects with no env vars all
+// share the '' entry, preserving the previous single-server behaviour.
+//
+// KNOWN LIMITATION: entries are only removed when their process exits, so
+// editing a project env var strands the old key's server until app quit (it
+// keeps running with the previous values in its environment). Acceptable for
+// now because the pre-existing behaviour also leaked one server for the app's
+// lifetime, but this needs refcounting or an idle reaper before env editing
+// becomes common. Tracked in the follow-ups for this feature.
+const serverStates = new Map<string, CodexAppServerState>();
 
-export async function getOrCreateCodexAppServer(): Promise<CodexAppServerHandle> {
+export async function getOrCreateCodexAppServer(
+  env?: Record<string, string>,
+): Promise<CodexAppServerHandle> {
+  const poolKey = getEnvPoolKey(env);
+  let serverState = serverStates.get(poolKey);
+
   if (serverState === undefined) {
     let state: CodexAppServerState;
     const clearIfCurrent = () => {
-      if (serverState === state) {
-        serverState = undefined;
+      if (serverStates.get(poolKey) === state) {
+        serverStates.delete(poolKey);
       }
     };
 
-    const promise = startCodexAppServer(clearIfCurrent)
+    const promise = startCodexAppServer(clearIfCurrent, env)
       .then(async (handle) => {
         state.handle = handle;
-        if (serverState !== state) {
+        if (serverStates.get(poolKey) !== state) {
           await handle.dispose();
           throw new Error('Codex app-server startup was superseded');
         }
@@ -47,34 +64,42 @@ export async function getOrCreateCodexAppServer(): Promise<CodexAppServerHandle>
       });
     state = { promise };
     serverState = state;
+    serverStates.set(poolKey, state);
   }
 
   return serverState.promise;
 }
 
 export async function resetCodexAppServerForTest(): Promise<void> {
-  const state = serverState;
-  serverState = undefined;
+  const states = [...serverStates.values()];
+  serverStates.clear();
 
-  if (state === undefined) {
-    return;
+  // allSettled so one failing dispose can't strand the remaining servers.
+  // Only already-started servers are awaited: a startup still in flight is
+  // disposed fire-and-forget, because awaiting it here would deadlock a reset
+  // that happens while a caller is blocked mid-handshake.
+  await Promise.allSettled(
+    states
+      .filter((state) => state.handle !== undefined)
+      .map((state) => state.handle!.dispose()),
+  );
+
+  for (const state of states) {
+    if (state.handle !== undefined) continue;
+    void state.promise.then((handle) => handle.dispose()).catch(() => undefined);
   }
-
-  if (state.handle !== undefined) {
-    await state.handle.dispose();
-    return;
-  }
-
-  void state.promise.then((handle) => handle.dispose()).catch(() => undefined);
 }
 
 async function startCodexAppServer(
   clearIfCurrent: () => void,
+  env?: Record<string, string>,
 ): Promise<CodexAppServerHandle> {
-  await assertCodexCliAvailable();
+  // Same env as the spawn below: a project-supplied PATH must resolve the same
+  // binary here, or we report "not found" for a CLI that would have launched.
+  await assertCodexCliAvailable(env);
 
   const proc = spawn('codex', ['app-server', '--listen', 'stdio://'], {
-    env: getChildProcessEnv(),
+    env: getChildProcessEnv({ overrides: env }),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const client = new CodexJsonRpcClient({ process: proc });
@@ -123,10 +148,12 @@ async function startCodexAppServer(
   return handle;
 }
 
-async function assertCodexCliAvailable(): Promise<void> {
+async function assertCodexCliAvailable(
+  env?: Record<string, string>,
+): Promise<void> {
   try {
     await execFileAsync('codex', ['--version'], {
-      env: getChildProcessEnv(),
+      env: getChildProcessEnv({ overrides: env }),
       timeout: 5_000,
     });
   } catch (error) {

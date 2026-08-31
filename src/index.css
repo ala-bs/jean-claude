@@ -713,6 +713,44 @@ button {
     inset 0 1px 0 0 color-mix(in srgb, var(--color-acc) 8%, transparent);
 }
 
+/* ── Step flow bar: chip awaiting a permission decision (amber) ── */
+@utility step-chip-permission {
+  background:
+    linear-gradient(var(--color-bg-0), var(--color-bg-0)) padding-box,
+    conic-gradient(
+        from var(--gradient-angle),
+        oklch(0.78 0.16 75),
+        oklch(0.72 0.18 55),
+        oklch(0.82 0.15 80),
+        oklch(0.78 0.16 75)
+      )
+      border-box;
+  border: 1px solid transparent;
+  animation: gradient-rotate 2s linear infinite;
+  box-shadow:
+    0 0 8px 0 oklch(0.78 0.16 75 / 0.25),
+    inset 0 1px 0 0 oklch(0.78 0.16 75 / 0.08);
+}
+
+/* ── Step flow bar: chip awaiting an answer to a question (cyan) ── */
+@utility step-chip-question {
+  background:
+    linear-gradient(var(--color-bg-0), var(--color-bg-0)) padding-box,
+    conic-gradient(
+        from var(--gradient-angle),
+        oklch(0.78 0.16 205),
+        oklch(0.78 0.16 235),
+        oklch(0.82 0.14 210),
+        oklch(0.78 0.16 205)
+      )
+      border-box;
+  border: 1px solid transparent;
+  animation: gradient-rotate 2s linear infinite;
+  box-shadow:
+    0 0 8px 0 oklch(0.78 0.16 205 / 0.25),
+    inset 0 1px 0 0 oklch(0.78 0.16 205 / 0.08);
+}
+
 /* ── Step flow bar: animated connector between steps ── */
 @keyframes step-connector-flow {
   from {
@@ -1183,6 +1221,8 @@ html[data-reduce-motion='true'] .question-border-selected,
 html[data-reduce-motion='true'] .prompt-input-border,
 html[data-reduce-motion='true'] .prompt-input-border-focused,
 html[data-reduce-motion='true'] .step-chip-running,
+html[data-reduce-motion='true'] .step-chip-permission,
+html[data-reduce-motion='true'] .step-chip-question,
 html[data-reduce-motion='true'] .step-connector-running,
 html[data-reduce-motion='true'] .animate-command-running,
 html[data-reduce-motion='true'] .animate-activity-glow,
@@ -1194,6 +1234,8 @@ html[data-reduce-motion='true'] .task-agent-running-shell .animate-pulse,
 html[data-reduce-motion='true'] .task-agent-running-shell .animate-spin,
 html[data-reduce-motion='true'] .step-chip-running .animate-pulse,
 html[data-reduce-motion='true'] .step-chip-running .animate-spin,
+html[data-reduce-motion='true'] .step-chip-permission .animate-pulse,
+html[data-reduce-motion='true'] .step-chip-question .animate-pulse,
 html[data-reduce-motion='true'] .rg-running-text,
 html[data-reduce-motion='true'] .rg-running-dots span,
 html[data-reduce-motion='true'] .rg-caret,

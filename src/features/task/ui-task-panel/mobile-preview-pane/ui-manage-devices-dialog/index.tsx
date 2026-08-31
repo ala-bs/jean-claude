@@ -18,7 +18,6 @@ import type {
   MobilePreviewDevice,
 } from '@shared/mobile-simulator-types';
 
-import { PlatformLogo } from '../ui-common';
 import { cleanPreviewError, formatError } from '../utils-preview-error';
 import {
   formatAndroidImageTag,
@@ -32,6 +31,7 @@ import {
   getSuggestedIosDeviceName,
   isOptionalPositiveInteger,
 } from '../utils-device-setup';
+import { PlatformLogo } from '../ui-common';
 
 export function ManageDevicesDialog({
   platform,

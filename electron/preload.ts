@@ -31,7 +31,6 @@ import type {
   MobilePlatform,
   MobilePreviewAndroidAppRestartParams,
   MobilePreviewAndroidAppStatusParams,
-  MobilePreviewAndroidAppTrustParams,
   MobilePreviewAndroidCreateDeviceParams,
   MobilePreviewAndroidInstallSystemImageParams,
   MobilePreviewAttachSessionParams,
@@ -49,15 +48,8 @@ import type {
   MobilePreviewNativeLogEvent,
   MobilePreviewNativeLogSessionEvent,
   MobilePreviewNativeLogStartParams,
-  MobilePreviewNetworkProxyCertificateParams,
-  MobilePreviewNetworkProxyEvent,
-  MobilePreviewNetworkProxySessionEvent,
-  MobilePreviewNetworkProxyStartParams,
   MobilePreviewOpenDeeplinkParams,
   MobilePreviewOpenDevMenuParams,
-  MobilePreviewPacketCaptureEvent,
-  MobilePreviewPacketCaptureSessionEvent,
-  MobilePreviewPacketCaptureStartParams,
   MobilePreviewReloadExpoParams,
   MobilePreviewSessionEvent,
   MobilePreviewSetTextSizeParams,
@@ -74,6 +66,10 @@ import type {
   NewWorkActivityEvent,
   WorkActivityWeekParams,
 } from '@shared/work-activity-types';
+import {
+  START_PR_COMMAND_CHANNEL,
+  type StartPrCommandParams,
+} from '@shared/run-command-types';
 import type {
   TimesheetAction,
   TimesheetAxisLookupRequest,
@@ -84,10 +80,6 @@ import type {
   TimesheetRowUpdate,
   TimesheetSyncParams,
 } from '@shared/timesheet-types';
-import {
-  START_PR_COMMAND_CHANNEL,
-  type StartPrCommandParams,
-} from '@shared/run-command-types';
 import { AGENT_CHANNELS } from '@shared/agent-types';
 import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
@@ -95,6 +87,20 @@ import type { DebugLogEntry } from '@shared/debug-log-types';
 import type { StartAdHocRunCommandParams } from '@shared/run-command-types';
 
 const devBadgeLabel = process.env.JC_DEV_BADGE_LABEL?.trim() || undefined;
+
+/**
+ * Whether this Chromium profile already had a localStorage bucket before this
+ * launch, sampled by the main process (see `hasExistingLocalStorageBucket`) and
+ * passed via `webPreferences.additionalArguments`.
+ *
+ * `false` means a genuine first run for this profile, so an empty localStorage
+ * is expected rather than a failed read. Defaults to `true` when the argument is
+ * missing: assuming "the bucket existed" makes the renderer's boot guard treat
+ * an empty read as suspicious, which is the safe direction to be wrong in.
+ */
+const hasExistingLocalStorageBucket = !process.argv.includes(
+  '--jc-local-storage-bucket=absent',
+);
 
 contextBridge.exposeInMainWorld('api', {
   platform: process.platform,
@@ -119,6 +125,16 @@ contextBridge.exposeInMainWorld('api', {
   },
   projects: {
     findAll: () => ipcRenderer.invoke('projects:findAll'),
+    listEnvVars: (projectId: string) =>
+      ipcRenderer.invoke('projects:listEnvVars', projectId),
+    createEnvVar: (data: unknown) =>
+      ipcRenderer.invoke('projects:createEnvVar', data),
+    updateEnvVar: (id: string, data: unknown) =>
+      ipcRenderer.invoke('projects:updateEnvVar', id, data),
+    deleteEnvVar: (id: string) =>
+      ipcRenderer.invoke('projects:deleteEnvVar', id),
+    isSecretStorageAvailable: () =>
+      ipcRenderer.invoke('projects:isSecretStorageAvailable'),
     findById: (id: string) => ipcRenderer.invoke('projects:findById', id),
     create: (data: unknown) => ipcRenderer.invoke('projects:create', data),
     update: (id: string, data: unknown) =>
@@ -203,8 +219,6 @@ contextBridge.exposeInMainWorld('api', {
   tasks: {
     focused: (taskId: string) => ipcRenderer.send('tasks:focused', taskId),
     findAll: () => ipcRenderer.invoke('tasks:findAll'),
-    listPendingPrWorkspaceDecisions: () =>
-      ipcRenderer.invoke('tasks:listPendingPrWorkspaceDecisions'),
     findByProjectId: (projectId: string) =>
       ipcRenderer.invoke('tasks:findByProjectId', projectId),
     findAllActive: () => ipcRenderer.invoke('tasks:findAllActive'),
@@ -220,6 +234,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('tasks:updatePendingMessage', id, pendingMessage),
     setSourceBranch: (params: { taskId: string; sourceBranch: string }) =>
       ipcRenderer.invoke('tasks:setSourceBranch', params),
+    setBranchName: (params: { taskId: string; branchName: string }) =>
+      ipcRenderer.invoke('tasks:setBranchName', params),
     delete: (id: string, options?: { deleteWorktree?: boolean }) =>
       ipcRenderer.invoke('tasks:delete', id, options),
     deletePrWorkspaceTask: (params: { taskId: string }) =>
@@ -228,11 +244,6 @@ contextBridge.exposeInMainWorld('api', {
       projectId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('tasks:deleteAllPrWorkspaces', params),
-    resolveClosedPrWorkspace: (params: {
-      projectId: string;
-      pullRequestId: number;
-      action: 'keep' | 'delete';
-    }) => ipcRenderer.invoke('tasks:resolveClosedPrWorkspace', params),
     toggleUserCompleted: (id: string) =>
       ipcRenderer.invoke('tasks:toggleUserCompleted', id),
     complete: (id: string, options: { cleanupWorktree?: boolean }) =>
@@ -267,12 +278,14 @@ contextBridge.exposeInMainWorld('api', {
         taskId: string,
         filePath: string,
         status: 'added' | 'modified' | 'deleted',
+        originalPath?: string,
       ) =>
         ipcRenderer.invoke(
           'tasks:worktree:getFileContent',
           taskId,
           filePath,
           status,
+          originalPath,
         ),
       getLocalFileContent: (
         taskId: string,
@@ -330,12 +343,15 @@ contextBridge.exposeInMainWorld('api', {
       generate: (taskId: string) =>
         ipcRenderer.invoke('tasks:summary:generate', taskId),
     },
+    generatePrDescription: (params: { taskId: string }) =>
+      ipcRenderer.invoke('tasks:generatePrDescription', params),
     createPullRequest: (params: {
       taskId: string;
       title: string;
       description: string;
       isDraft: boolean;
       deleteWorktree?: boolean;
+      commitUnstaged?: boolean;
     }) => ipcRenderer.invoke('tasks:createPullRequest', params),
     createPrReviewTask: (params: {
       projectId: string;
@@ -926,6 +942,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('fs:getFileSize', filePath),
     readImageAsDataUrl: (filePath: string) =>
       ipcRenderer.invoke('fs:readImageAsDataUrl', filePath),
+    readSpreadsheetAsBase64: (filePath: string) =>
+      ipcRenderer.invoke('fs:readSpreadsheetAsBase64', filePath),
     getImageUrl: (filePath: string) =>
       ipcRenderer.invoke('fs:getImageUrl', filePath),
     listDirectory: (dirPath: string, projectRoot: string) =>
@@ -1029,6 +1047,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke(AGENT_CHANNELS.GET_MESSAGE_COUNT, stepId),
     getPendingRequest: (stepId: string) =>
       ipcRenderer.invoke(AGENT_CHANNELS.GET_PENDING_REQUEST, stepId),
+    getBackgroundTasks: (stepId: string) =>
+      ipcRenderer.invoke(AGENT_CHANNELS.GET_BACKGROUND_TASKS, stepId),
     getMessagesWithRawData: (taskId: string, stepId: string) =>
       ipcRenderer.invoke(
         AGENT_CHANNELS.GET_MESSAGES_WITH_RAW_DATA,
@@ -1115,6 +1135,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('mobilePreview:reloadExpo', params),
     forwardPort: (params: MobilePreviewForwardPortParams) =>
       ipcRenderer.invoke('mobilePreview:forwardPort', params),
+    ensureMetroReverse: (params: { deviceId: string; metroPort: number }) =>
+      ipcRenderer.invoke('mobilePreview:ensureMetroReverse', params),
     setTextSize: (params: MobilePreviewSetTextSizeParams) =>
       ipcRenderer.invoke('mobilePreview:setTextSize', params),
     setColorScheme: (sessionId: string, scheme: MobileColorScheme) =>
@@ -1125,14 +1147,6 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('mobilePreview:startNativeLogs', params),
     stopNativeLogs: (sessionId: string) =>
       ipcRenderer.invoke('mobilePreview:stopNativeLogs', sessionId),
-    startNetworkProxy: (params: MobilePreviewNetworkProxyStartParams) =>
-      ipcRenderer.invoke('mobilePreview:startNetworkProxy', params),
-    stopNetworkProxy: (sessionId: string) =>
-      ipcRenderer.invoke('mobilePreview:stopNetworkProxy', sessionId),
-    startPacketCapture: (params: MobilePreviewPacketCaptureStartParams) =>
-      ipcRenderer.invoke('mobilePreview:startPacketCapture', params),
-    stopPacketCapture: (sessionId: string) =>
-      ipcRenderer.invoke('mobilePreview:stopPacketCapture', sessionId),
     resolveReactNativeDevTools: (params: ReactNativeDevToolsResolveParams) =>
       ipcRenderer.invoke('mobilePreview:resolveReactNativeDevTools', params),
     openReactNativeDevTools: (params: ReactNativeDevToolsOpenParams) =>
@@ -1165,15 +1179,6 @@ contextBridge.exposeInMainWorld('api', {
         'mobilePreview:closeEmbeddedReactNativeDevTools',
         params,
       ),
-    installNetworkProxyCertificate: (
-      params: MobilePreviewNetworkProxyCertificateParams,
-    ) =>
-      ipcRenderer.invoke(
-        'mobilePreview:installNetworkProxyCertificate',
-        params,
-      ),
-    prepareAndroidAppTrust: (params: MobilePreviewAndroidAppTrustParams) =>
-      ipcRenderer.invoke('mobilePreview:prepareAndroidAppTrust', params),
     getAndroidAppStatus: (params: MobilePreviewAndroidAppStatusParams) =>
       ipcRenderer.invoke('mobilePreview:getAndroidAppStatus', params),
     restartAndroidApp: (params: MobilePreviewAndroidAppRestartParams) =>
@@ -1194,58 +1199,6 @@ contextBridge.exposeInMainWorld('api', {
       return () =>
         ipcRenderer.removeListener('mobilePreview:nativeLog', handler);
     },
-    onNetworkProxySession: (
-      callback: (event: MobilePreviewNetworkProxySessionEvent) => void,
-    ) => {
-      const handler = (
-        _: unknown,
-        event: MobilePreviewNetworkProxySessionEvent,
-      ) => callback(event);
-      ipcRenderer.on('mobilePreview:networkProxySession', handler);
-      return () =>
-        ipcRenderer.removeListener(
-          'mobilePreview:networkProxySession',
-          handler,
-        );
-    },
-    onNetworkProxyRequest: (
-      callback: (event: MobilePreviewNetworkProxyEvent) => void,
-    ) => {
-      const handler = (_: unknown, event: MobilePreviewNetworkProxyEvent) =>
-        callback(event);
-      ipcRenderer.on('mobilePreview:networkProxyRequest', handler);
-      return () =>
-        ipcRenderer.removeListener(
-          'mobilePreview:networkProxyRequest',
-          handler,
-        );
-    },
-    onPacketCaptureSession: (
-      callback: (event: MobilePreviewPacketCaptureSessionEvent) => void,
-    ) => {
-      const handler = (
-        _: unknown,
-        event: MobilePreviewPacketCaptureSessionEvent,
-      ) => callback(event);
-      ipcRenderer.on('mobilePreview:packetCaptureSession', handler);
-      return () =>
-        ipcRenderer.removeListener(
-          'mobilePreview:packetCaptureSession',
-          handler,
-        );
-    },
-    onPacketCaptureRequest: (
-      callback: (event: MobilePreviewPacketCaptureEvent) => void,
-    ) => {
-      const handler = (_: unknown, event: MobilePreviewPacketCaptureEvent) =>
-        callback(event);
-      ipcRenderer.on('mobilePreview:packetCaptureRequest', handler);
-      return () =>
-        ipcRenderer.removeListener(
-          'mobilePreview:packetCaptureRequest',
-          handler,
-        );
-    },
     onFrame: (callback: (event: MobilePreviewFrameEvent) => void) => {
       const handler = (_: unknown, event: MobilePreviewFrameEvent) =>
         callback(event);
@@ -1260,6 +1213,8 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
   debug: {
+    log: (params: { scope: string; message: string; data?: unknown }) =>
+      ipcRenderer.invoke('debug:log', params),
     getTableNames: () => ipcRenderer.invoke('debug:getTableNames'),
     getDatabaseSize: () => ipcRenderer.invoke('debug:getDatabaseSize'),
     countOldCompletedTasks: () =>
@@ -1367,6 +1322,8 @@ contextBridge.exposeInMainWorld('api', {
   projectCommands: {
     findByProjectId: (projectId: string) =>
       ipcRenderer.invoke('project:commands:findByProjectId', projectId),
+    findAll: () => ipcRenderer.invoke('project:commands:findAll'),
+    findFavorites: () => ipcRenderer.invoke('project:commands:findFavorites'),
     create: (data: unknown) =>
       ipcRenderer.invoke('project:commands:create', data),
     update: (id: string, data: unknown) =>
@@ -1405,6 +1362,8 @@ contextBridge.exposeInMainWorld('api', {
       }),
     startAdHocCommand: (params: StartAdHocRunCommandParams) =>
       ipcRenderer.invoke('project:commands:run:startAdHocCommand', params),
+    startFavorite: (params: { projectId: string; runCommandId: string }) =>
+      ipcRenderer.invoke('project:commands:run:startFavorite', params),
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];
@@ -1509,6 +1468,11 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('globalPrompt:show', handler);
       return () => ipcRenderer.removeListener('globalPrompt:show', handler);
     },
+    onDismiss: (callback: (promptId: string) => void) => {
+      const handler = (_: unknown, promptId: string) => callback(promptId);
+      ipcRenderer.on('globalPrompt:dismiss', handler);
+      return () => ipcRenderer.removeListener('globalPrompt:dismiss', handler);
+    },
     respond: (response: GlobalPromptResponse) =>
       ipcRenderer.invoke('globalPrompt:respond', response),
   },
@@ -1578,6 +1542,11 @@ contextBridge.exposeInMainWorld('api', {
     findNonExistent: () => ipcRenderer.invoke('claudeProjects:findNonExistent'),
     cleanup: (params: { paths: string[]; contentHash: string }) =>
       ipcRenderer.invoke('claudeProjects:cleanup', params),
+  },
+  unusedWorktrees: {
+    scan: () => ipcRenderer.invoke('unusedWorktrees:scan'),
+    cleanup: (params: { paths: string[] }) =>
+      ipcRenderer.invoke('unusedWorktrees:cleanup', params),
   },
   completion: {
     complete: (params: {
@@ -1845,8 +1814,13 @@ contextBridge.exposeInMainWorld('api', {
   app: {
     isDevMode: !!process.env.ELECTRON_RENDERER_URL,
     devBadgeLabel,
+    hasExistingLocalStorageBucket,
     getIsPreviewMode: () =>
       ipcRenderer.invoke('app:getIsPreviewMode') as Promise<boolean>,
+    reportLocalStorageBootBlocked: () =>
+      ipcRenderer.invoke(
+        'app:reportLocalStorageBootBlocked',
+      ) as Promise<string>,
     getReloadUpdateInfo: (params: { builtCommitHash: string }) =>
       ipcRenderer.invoke('app:getReloadUpdateInfo', params) as Promise<{
         commitCount: number;

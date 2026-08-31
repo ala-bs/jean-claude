@@ -200,7 +200,8 @@ class FakeWebContents extends EventEmitter {
 }
 
 class FakeWindow extends EventEmitter {
-  webContents = new FakeWebContents();
+  /** Inspectable even after destruction; production code must not use this. */
+  rawWebContents = new FakeWebContents();
   destroyed = false;
   focused = false;
   autoFinish = true;
@@ -222,9 +223,9 @@ class FakeWindow extends EventEmitter {
   title = '';
 
   async loadURL(url: string) {
-    this.webContents.url = url;
+    this.rawWebContents.url = url;
     if (this.loadEvent) {
-      this.webContents.emit(
+      this.rawWebContents.emit(
         this.loadEvent.event,
         { preventDefault: this.loadEventPreventDefault },
         this.loadEvent.url,
@@ -233,7 +234,7 @@ class FakeWindow extends EventEmitter {
     await this.loadGate;
     if (this.didFailLoad) {
       const failure = this.didFailLoad;
-      this.webContents.emit(
+      this.rawWebContents.emit(
         'did-fail-load',
         {},
         failure.errorCode,
@@ -243,8 +244,8 @@ class FakeWindow extends EventEmitter {
       );
     }
     if (this.loadError) throw this.loadError;
-    this.webContents.url = this.finalUrl ?? url;
-    if (this.autoFinish) this.webContents.emit('did-finish-load');
+    this.rawWebContents.url = this.finalUrl ?? url;
+    if (this.autoFinish) this.rawWebContents.emit('did-finish-load');
   }
 
   close() {
@@ -272,6 +273,14 @@ class FakeWindow extends EventEmitter {
 
   isDestroyed() {
     return this.destroyed;
+  }
+
+  /** Electron throws on `window.webContents` once the window is destroyed. */
+  get webContents(): FakeWebContents {
+    if (this.destroyed) {
+      throw new TypeError('Object has been destroyed');
+    }
+    return this.rawWebContents;
   }
 
   emitClosed() {
@@ -367,20 +376,20 @@ function setup(
         window.finalUrl = OPEN_URL;
         window.loadEvent = config.hiddenLoadEvent;
         window.loadGate = config.hiddenLoadGate;
-        window.webContents.executeGate = config.executeGate;
-        window.webContents.sheetIds = config.hiddenSheetIds ?? ['sheet'];
-        window.webContents.outerHtml = Object.hasOwn(config, 'hiddenOuterHtml')
+        window.rawWebContents.executeGate = config.executeGate;
+        window.rawWebContents.sheetIds = config.hiddenSheetIds ?? ['sheet'];
+        window.rawWebContents.outerHtml = Object.hasOwn(config, 'hiddenOuterHtml')
           ? config.hiddenOuterHtml
           : openHtml();
-        window.webContents.driftUrlAfterHtml = config.hiddenDriftUrlAfterHtml;
-        window.webContents.driftUrlAfterAxis = config.hiddenDriftUrlAfterAxis;
-        window.webContents.sheetIdsAfterAxis = config.hiddenSheetIdsAfterAxis;
-        window.webContents.identityResultOverrides =
+        window.rawWebContents.driftUrlAfterHtml = config.hiddenDriftUrlAfterHtml;
+        window.rawWebContents.driftUrlAfterAxis = config.hiddenDriftUrlAfterAxis;
+        window.rawWebContents.sheetIdsAfterAxis = config.hiddenSheetIdsAfterAxis;
+        window.rawWebContents.identityResultOverrides =
           config.hiddenIdentityResultOverrides ?? [];
-        window.webContents.editorExtractionResultOverrides =
+        window.rawWebContents.editorExtractionResultOverrides =
           config.hiddenEditorExtractionResultOverrides ?? [];
         if (config.hiddenCapturedReply) {
-          window.webContents.capturedReply = config.hiddenCapturedReply;
+          window.rawWebContents.capturedReply = config.hiddenCapturedReply;
         }
         window.delayClosed = config.hiddenDelayClosed ?? false;
       } else {
@@ -620,7 +629,7 @@ describe('eureciaSessionService', () => {
       'malformed-url-secret',
     ];
     for (const url of navigationUrls) {
-      windows[0].window.webContents.emit(
+      windows[0].window.rawWebContents.emit(
         'will-navigate',
         { preventDefault: vi.fn() },
         url,
@@ -689,7 +698,7 @@ describe('eureciaSessionService', () => {
       baseUrl: BASE_URL,
     });
     expect(windows[0].window.destroyed).toBe(true);
-    expect(windows[0].window.webContents.listenerCount('did-finish-load')).toBe(0);
+    expect(windows[0].window.rawWebContents.listenerCount('did-finish-load')).toBe(0);
     expect(windows[0].window.listenerCount('closed')).toBe(0);
   });
 
@@ -781,7 +790,7 @@ describe('eureciaSessionService', () => {
 
     try {
       await vi.advanceTimersByTimeAsync(0);
-      windows[0].window.webContents.emit(
+      windows[0].window.rawWebContents.emit(
         'did-fail-load',
         {},
         -105,
@@ -793,7 +802,7 @@ describe('eureciaSessionService', () => {
       await expect(login).rejects.toThrow('Eurecia sign-in page failed to load.');
       expect(vi.getTimerCount()).toBe(0);
       expect(windows[0].window.destroyed).toBe(true);
-      expect(windows[0].window.webContents.listenerCount('did-fail-load')).toBe(0);
+      expect(windows[0].window.rawWebContents.listenerCount('did-fail-load')).toBe(0);
       const emitted = JSON.stringify(debug.dbg.timesheet.mock.calls);
       expect(emitted).not.toContain('secret-description');
       expect(emitted).not.toContain('secret-failed-url');
@@ -826,7 +835,7 @@ describe('eureciaSessionService', () => {
     );
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
 
-    windows[0].window.webContents.emit(
+    windows[0].window.rawWebContents.emit(
       'did-fail-load',
       {},
       errorCode,
@@ -977,7 +986,7 @@ describe('eureciaSessionService', () => {
       });
       expect(windows[0].window.destroyed).toBe(true);
       expect(vi.getTimerCount()).toBe(0);
-      expect(windows[0].window.webContents.listenerCount('did-fail-load')).toBe(0);
+      expect(windows[0].window.rawWebContents.listenerCount('did-fail-load')).toBe(0);
       const emitted = JSON.stringify(debug.dbg.timesheet.mock.calls);
       expect(emitted).not.toContain('secret-ordinary-rejection');
       expect(emitted).not.toContain('ERR_FAILED');
@@ -1162,7 +1171,7 @@ describe('eureciaSessionService', () => {
       contextIsolation: true,
       nodeIntegration: false,
     });
-    expect(windows[0].window.webContents.openHandler?.({ url: BASE_URL })).toEqual({
+    expect(windows[0].window.rawWebContents.openHandler?.({ url: BASE_URL })).toEqual({
       action: 'deny',
     });
     expect(windows[0].window.destroyed).toBe(true);
@@ -1186,6 +1195,26 @@ describe('eureciaSessionService', () => {
     await expect(second).rejects.toThrow('cancelled');
     expect(windows[0].window.closeCalls).toBe(1);
     expect(windows[0].window.destroyCalls).toBe(0);
+  });
+
+  it('settles as cancelled when the window closes mid-probe so the UI can show sign-in again', async () => {
+    // Electron destroys webContents before 'closed' fires; cleanup must not throw
+    // there, or the login promise would hang and strand the UI on "Signing in...".
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      throw new Error('not authenticated');
+    });
+    const { service, windows } = setup(fetchImpl, { loginAutoFinish: false });
+    const login = service.login();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+
+    windows[0].window.close();
+
+    await expect(login).rejects.toThrow('Eurecia sign-in was cancelled.');
+    // A retry gets a fresh window rather than a stale, never-settling promise.
+    const retry = service.login();
+    await vi.waitFor(() => expect(windows).toHaveLength(2));
+    windows[1].window.close();
+    await expect(retry).rejects.toThrow('Eurecia sign-in was cancelled.');
   });
 
   it('polls for authentication after an initial probe fails without another navigation', async () => {
@@ -1250,9 +1279,9 @@ describe('eureciaSessionService', () => {
     const login = service.login();
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
 
-    windows[0].window.webContents.emit('did-finish-load');
-    windows[0].window.webContents.emit('did-finish-load');
-    windows[0].window.webContents.emit('did-finish-load');
+    windows[0].window.rawWebContents.emit('did-finish-load');
+    windows[0].window.rawWebContents.emit('did-finish-load');
+    windows[0].window.rawWebContents.emit('did-finish-load');
 
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(maxActiveFetches).toBe(1);
@@ -1312,9 +1341,9 @@ describe('eureciaSessionService', () => {
     const login = service.login();
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
 
-    windows[0].window.webContents.emit('did-finish-load');
-    windows[0].window.webContents.emit('did-finish-load');
-    windows[0].window.webContents.emit('did-finish-load');
+    windows[0].window.rawWebContents.emit('did-finish-load');
+    windows[0].window.rawWebContents.emit('did-finish-load');
+    windows[0].window.rawWebContents.emit('did-finish-load');
     expect(fetchImpl).toHaveBeenCalledOnce();
 
     releaseFirstProbe();
@@ -1333,9 +1362,9 @@ describe('eureciaSessionService', () => {
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
 
     authenticated = true;
-    windows[0].window.webContents.url =
+    windows[0].window.rawWebContents.url =
       'https://plateforme-idp.eurecia.com/sign-in';
-    windows[0].window.webContents.emit('did-finish-load');
+    windows[0].window.rawWebContents.emit('did-finish-load');
 
     await expect(login).resolves.toMatchObject({ authenticated: true });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -1362,9 +1391,9 @@ describe('eureciaSessionService', () => {
         message: expect.stringContaining('cancelled'),
       });
       expect(vi.getTimerCount()).toBe(0);
-      expect(windows[0].window.webContents.listenerCount('will-navigate')).toBe(0);
-      expect(windows[0].window.webContents.listenerCount('will-redirect')).toBe(0);
-      expect(windows[0].window.webContents.listenerCount('did-finish-load')).toBe(0);
+      expect(windows[0].window.rawWebContents.listenerCount('will-navigate')).toBe(0);
+      expect(windows[0].window.rawWebContents.listenerCount('will-redirect')).toBe(0);
+      expect(windows[0].window.rawWebContents.listenerCount('did-finish-load')).toBe(0);
       expect(windows[0].window.listenerCount('closed')).toBe(0);
 
       await vi.advanceTimersByTimeAsync(5_000);
@@ -1391,9 +1420,9 @@ describe('eureciaSessionService', () => {
 
       await expect(login).rejects.toThrow('cancelled');
       expect(vi.getTimerCount()).toBe(0);
-      expect(windows[0].window.webContents.listenerCount('will-navigate')).toBe(0);
-      expect(windows[0].window.webContents.listenerCount('will-redirect')).toBe(0);
-      expect(windows[0].window.webContents.listenerCount('did-finish-load')).toBe(0);
+      expect(windows[0].window.rawWebContents.listenerCount('will-navigate')).toBe(0);
+      expect(windows[0].window.rawWebContents.listenerCount('will-redirect')).toBe(0);
+      expect(windows[0].window.rawWebContents.listenerCount('did-finish-load')).toBe(0);
       expect(windows[0].window.listenerCount('closed')).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -1426,9 +1455,9 @@ describe('eureciaSessionService', () => {
         });
         expect(Date.now()).toBe(0);
         expect(vi.getTimerCount()).toBe(0);
-        expect(windows[0].window.webContents.listenerCount('will-navigate')).toBe(0);
-        expect(windows[0].window.webContents.listenerCount('will-redirect')).toBe(0);
-        expect(windows[0].window.webContents.listenerCount('did-finish-load')).toBe(0);
+        expect(windows[0].window.rawWebContents.listenerCount('will-navigate')).toBe(0);
+        expect(windows[0].window.rawWebContents.listenerCount('will-redirect')).toBe(0);
+        expect(windows[0].window.rawWebContents.listenerCount('did-finish-load')).toBe(0);
         expect(windows[0].window.listenerCount('closed')).toBe(0);
       } finally {
         windows[0]?.window.close();
@@ -1446,18 +1475,18 @@ describe('eureciaSessionService', () => {
     void service.login().catch(() => {});
     await vi.waitFor(() => expect(windows).toHaveLength(1));
     const preventDefault = vi.fn();
-    windows[0].window.webContents.emit('will-navigate', { preventDefault }, 'https://attacker.example/phish');
-    windows[0].window.webContents.emit('will-redirect', { preventDefault }, 'http://bad.example');
+    windows[0].window.rawWebContents.emit('will-navigate', { preventDefault }, 'https://attacker.example/phish');
+    windows[0].window.rawWebContents.emit('will-redirect', { preventDefault }, 'http://bad.example');
     expect(preventDefault).toHaveBeenCalledTimes(2);
 
     const allowBase = vi.fn();
     const allowIdp = vi.fn();
-    windows[0].window.webContents.emit(
+    windows[0].window.rawWebContents.emit(
       'will-navigate',
       { preventDefault: allowBase },
       `${BASE_URL}/eurecia/login`,
     );
-    windows[0].window.webContents.emit(
+    windows[0].window.rawWebContents.emit(
       'will-redirect',
       { preventDefault: allowIdp },
       'https://plateforme-idp.eurecia.com/sign-in',
@@ -1465,10 +1494,10 @@ describe('eureciaSessionService', () => {
     expect(allowBase).not.toHaveBeenCalled();
     expect(allowIdp).not.toHaveBeenCalled();
 
-    windows[0].window.webContents.url =
+    windows[0].window.rawWebContents.url =
       'https://plateforme-idp.eurecia.com/sign-in';
     const preventTitle = vi.fn();
-    windows[0].window.webContents.emit('page-title-updated', {
+    windows[0].window.rawWebContents.emit('page-title-updated', {
       preventDefault: preventTitle,
     });
     expect(preventTitle).toHaveBeenCalledOnce();
@@ -1476,7 +1505,7 @@ describe('eureciaSessionService', () => {
       'Sign in to Eurecia (plateforme-idp.eurecia.com)',
     );
     windows[0].window.close();
-    expect(windows[0].window.webContents.listenerCount('page-title-updated')).toBe(0);
+    expect(windows[0].window.rawWebContents.listenerCount('page-title-updated')).toBe(0);
   });
 
   it('clears only partition storage and closes Eurecia windows on logout', async () => {
@@ -1564,7 +1593,7 @@ describe('eureciaSessionService', () => {
       selectedAxisIds: { axis1Id: '', axis2Id: '', axis3Id: '' },
     });
     await vi.waitFor(() =>
-      expect(windows[0].window.webContents.scripts).toEqual(
+      expect(windows[0].window.rawWebContents.scripts).toEqual(
         expect.arrayContaining([
           expect.stringContaining('outerHTML'),
           expect.stringContaining('imputationStructureId1_'),
@@ -1670,7 +1699,7 @@ describe('eureciaSessionService', () => {
       options: [{ id: 'one', label: 'One' }],
       selectedId: 'one',
     });
-    const axisScript = windows[0].window.webContents.scripts.find((script) =>
+    const axisScript = windows[0].window.rawWebContents.scripts.find((script) =>
       script.includes('dwrGetImputationStructureLinkedOptionList'),
     )!;
     expect(axisScript).toContain('dwrGetImputationStructureLinkedOptionList');
@@ -1752,15 +1781,15 @@ describe('eureciaSessionService', () => {
     expect(windows).toHaveLength(1);
     expect(windows[0].options.show).toBe(false);
     expect(windows[0].window.loadEventPreventDefault).not.toHaveBeenCalled();
-    expect(windows[0].window.webContents.scripts).toEqual(
+    expect(windows[0].window.rawWebContents.scripts).toEqual(
       expect.arrayContaining([
         expect.stringContaining('cloneNode'),
       ]),
     );
-    expect(windows[0].window.webContents.scripts.join('\n')).toContain(
+    expect(windows[0].window.rawWebContents.scripts.join('\n')).toContain(
       'TextEncoder',
     );
-    expect(windows[0].window.webContents.sheetIdentityResults).toEqual(
+    expect(windows[0].window.rawWebContents.sheetIdentityResults).toEqual(
       expect.arrayContaining([
         {
           status: 'ok',
@@ -1807,7 +1836,7 @@ describe('eureciaSessionService', () => {
       navigationUrl: BROWSE_URL,
     });
 
-    const extraction = windows[0].window.webContents.editorExtractionResults[0];
+    const extraction = windows[0].window.rawWebContents.editorExtractionResults[0];
     expect(extraction).toEqual({
       status: 'ok',
       html: expect.stringContaining(REDACTED_SHEET_ID),
@@ -1816,7 +1845,7 @@ describe('eureciaSessionService', () => {
     expect(JSON.stringify(extraction)).not.toContain(internalSheetId);
     expect(JSON.stringify(result)).not.toContain(internalSheetId);
     expect(JSON.stringify(debug.dbg.timesheet.mock.calls)).not.toContain(internalSheetId);
-    const extractionScript = windows[0].window.webContents.scripts.find((script) =>
+    const extractionScript = windows[0].window.rawWebContents.scripts.find((script) =>
       script.includes('outerHTML'),
     )!;
     expect(extractionScript).toContain('cloneNode');
@@ -1845,7 +1874,7 @@ describe('eureciaSessionService', () => {
       service.inspectSheet({ sheetId: 'sheet', navigationUrl: BROWSE_URL }),
     ).rejects.toThrow('binding changed');
     expect(windows[0].window.destroyed).toBe(true);
-    expect(windows[0].window.webContents.sheetIdentityResults).toEqual(
+    expect(windows[0].window.rawWebContents.sheetIdentityResults).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           fingerprint: sheetFingerprint(INTERNAL_SHEET_ID),
@@ -1868,7 +1897,7 @@ describe('eureciaSessionService', () => {
       service.inspectSheet({ sheetId: 'sheet', navigationUrl: BROWSE_URL }),
     ).rejects.toThrow('identity');
     expect(windows[0].window.destroyed).toBe(true);
-    const extractionScript = windows[0].window.webContents.scripts.find((script) =>
+    const extractionScript = windows[0].window.rawWebContents.scripts.find((script) =>
       script.includes('outerHTML'),
     )!;
     expect(extractionScript).toContain("status: 'absent'");
@@ -1940,13 +1969,13 @@ describe('eureciaSessionService', () => {
       service.inspectSheet({ sheetId: 'sheet', navigationUrl: BROWSE_URL }),
     ).rejects.toThrow('identity');
 
-    const results = windows[0].window.webContents.sheetIdentityResults;
+    const results = windows[0].window.rawWebContents.sheetIdentityResults;
     expect(results.length).toBeGreaterThan(0);
     for (const result of results) {
       expect(JSON.stringify(result).length).toBeLessThan(80);
       expect(JSON.stringify(result)).not.toContain('x'.repeat(100));
     }
-    const identityScript = windows[0].window.webContents.scripts.find((script) =>
+    const identityScript = windows[0].window.rawWebContents.scripts.find((script) =>
       script.includes('querySelectorAll'),
     )!;
     expect(identityScript).toContain("status: 'ok'");
@@ -1987,11 +2016,11 @@ describe('eureciaSessionService', () => {
       service.inspectSheet({ sheetId: 'sheet', navigationUrl: BROWSE_URL }),
     ).resolves.toMatchObject({ rows: [] });
 
-    const identityScript = windows[0].window.webContents.scripts.find((script) =>
+    const identityScript = windows[0].window.rawWebContents.scripts.find((script) =>
       script.includes('querySelectorAll'),
     )!;
     expect(identityScript).not.toContain(internalSheetId);
-    expect(JSON.stringify(windows[0].window.webContents.sheetIdentityResults)).not.toContain(
+    expect(JSON.stringify(windows[0].window.rawWebContents.sheetIdentityResults)).not.toContain(
       internalSheetId,
     );
     expect(JSON.stringify(debug.dbg.timesheet.mock.calls)).not.toContain(internalSheetId);
@@ -2111,7 +2140,7 @@ describe('eureciaSessionService', () => {
       navigationUrl: BROWSE_URL,
     });
     await vi.waitFor(() =>
-      expect(windows[0].window.webContents.scripts).toEqual(
+      expect(windows[0].window.rawWebContents.scripts).toEqual(
         expect.arrayContaining([expect.stringContaining('outerHTML')]),
       ),
     );
@@ -2142,7 +2171,7 @@ describe('eureciaSessionService', () => {
       );
     await vi.waitFor(() =>
       expect(
-        windows[0].window.webContents.scripts.some((script) =>
+        windows[0].window.rawWebContents.scripts.some((script) =>
           script.includes('cloneNode'),
         ),
       ).toBe(true),
@@ -2498,7 +2527,7 @@ describe('eureciaSessionService', () => {
       (error: unknown) => error,
     );
     await vi.waitFor(() =>
-      expect(windows[0].window.webContents.script).toContain(
+      expect(windows[0].window.rawWebContents.script).toContain(
         'imputationStructureId1_',
       ),
     );
@@ -2625,12 +2654,12 @@ describe('eureciaSessionService', () => {
     const lookupWindow = windows[0].window;
     const preventNavigation = vi.fn();
     const preventRedirect = vi.fn();
-    lookupWindow.webContents.emit(
+    lookupWindow.rawWebContents.emit(
       'will-navigate',
       { preventDefault: preventNavigation },
       OPEN_URL,
     );
-    lookupWindow.webContents.emit(
+    lookupWindow.rawWebContents.emit(
       'will-redirect',
       { preventDefault: preventRedirect },
       BROWSE_URL,
@@ -2707,7 +2736,7 @@ describe('eureciaSessionService', () => {
     };
     await service.lookupAxisOptions(request);
     const driftedWindow = windows[0].window;
-    driftedWindow.webContents.url = 'https://evil.example/changed';
+    driftedWindow.rawWebContents.url = 'https://evil.example/changed';
 
     await expect(service.lookupAxisOptions(request)).rejects.toThrow('binding changed');
 
@@ -2918,7 +2947,7 @@ describe('eureciaSessionService', () => {
     });
     await vi.waitFor(() => expect(windows).toHaveLength(1));
     await vi.waitFor(() =>
-      expect(windows[0].window.webContents.script).toContain(
+      expect(windows[0].window.rawWebContents.script).toContain(
         'imputationStructureId1_',
       ),
     );
@@ -2947,7 +2976,7 @@ describe('eureciaSessionService', () => {
       selectedAxisIds: { axis1Id: '', axis2Id: '', axis3Id: '' },
     });
     await vi.waitFor(() =>
-      expect(windows[0].window.webContents.script).toContain(
+      expect(windows[0].window.rawWebContents.script).toContain(
         'imputationStructureId1_',
       ),
     );
@@ -2977,7 +3006,7 @@ describe('eureciaSessionService', () => {
       selectedAxisIds: { axis1Id: '', axis2Id: '', axis3Id: '' },
     });
     await vi.waitFor(() =>
-      expect(windows[0].window.webContents.script).toContain(
+      expect(windows[0].window.rawWebContents.script).toContain(
         'imputationStructureId1_',
       ),
     );
@@ -3017,7 +3046,7 @@ describe('eureciaSessionService', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(timedOutSignal?.aborted).toBe(true);
-    windows[0].window.webContents.emit('did-finish-load');
+    windows[0].window.rawWebContents.emit('did-finish-load');
 
     await expect(login).resolves.toMatchObject({ authenticated: true });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -3113,7 +3142,7 @@ describe('eureciaSessionService', () => {
     };
     await service.lookupAxisOptions(request);
     const oldWindow = windows[0].window;
-    oldWindow.webContents.url = 'https://evil.example/drifted';
+    oldWindow.rawWebContents.url = 'https://evil.example/drifted';
     await expect(service.lookupAxisOptions(request)).rejects.toThrow(
       'binding changed',
     );

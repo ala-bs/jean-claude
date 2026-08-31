@@ -29,6 +29,8 @@ type CreateTaskInput = {
   pullRequestId: string;
   pullRequestUrl: string | null;
   prWorkspaceState: 'active';
+  workItemIds: string[] | null;
+  workItemUrls: string[] | null;
   updatedAt: string;
 };
 
@@ -98,6 +100,13 @@ export type PrReviewTaskDeps = {
     startCommitHash: string;
     branchName: string;
   }>;
+  /** Work items linked to the PR on the provider side. */
+  getPullRequestWorkItems: (params: {
+    providerId: string;
+    projectId: string;
+    repoId: string;
+    pullRequestId: number;
+  }) => Promise<Array<{ id: number | string; url?: string | null }>>;
   createTask: (data: CreateTaskInput) => Promise<Task>;
   updateTask: (taskId: string, data: RestoreTaskWorktreeInput) => Promise<Task>;
   setPrWorkspaceState: (
@@ -153,7 +162,7 @@ type ReconcilePrWorkspaceStateDeps = {
     projectId: string;
     pullRequestId: number;
   }) => Promise<'active' | 'completed' | 'abandoned'>;
-  markPrWorkspacesCleanupPending: (params: {
+  markPrWorkspacesKept: (params: {
     projectId: string;
     pullRequestId: string;
     taskIds: string[];
@@ -282,8 +291,7 @@ async function getDefaultReconcilePrWorkspaceStateDeps(): Promise<ReconcilePrWor
       });
       return pullRequest.status;
     },
-    markPrWorkspacesCleanupPending:
-      TaskRepository.markPrWorkspacesCleanupPending,
+    markPrWorkspacesKept: TaskRepository.markPrWorkspacesKept,
     reactivatePrWorkspaces: TaskRepository.reactivatePrWorkspaces,
     emitTaskUpsert,
   };
@@ -383,6 +391,54 @@ async function resolveDiffBaseCommit({
   return fallbackCommitHash;
 }
 
+/**
+ * Resolves the work items linked to a PR so the review workspace task carries
+ * the same work item links as the PR itself. Best-effort: a provider failure
+ * must never block workspace creation.
+ *
+ * Unlike normal task creation, PR review tasks deliberately do NOT activate the
+ * linked work items in Azure — reviewing someone else's PR must not transition
+ * their work item state.
+ */
+async function resolvePrWorkItems({
+  deps,
+  providerId,
+  repoProjectId,
+  repoId,
+  pullRequestId,
+}: {
+  deps: Pick<PrReviewTaskDeps, 'getPullRequestWorkItems'>;
+  providerId: string;
+  repoProjectId: string;
+  repoId: string;
+  pullRequestId: number;
+}): Promise<{ workItemIds: string[] | null; workItemUrls: string[] | null }> {
+  try {
+    const workItems = await deps.getPullRequestWorkItems({
+      providerId,
+      projectId: repoProjectId,
+      repoId,
+      pullRequestId,
+    });
+    if (workItems.length === 0) {
+      return { workItemIds: null, workItemUrls: null };
+    }
+    // Consumers zip the two arrays by index (task panel, feed card), so keep
+    // them positionally aligned rather than dropping empty URLs.
+    return {
+      workItemIds: workItems.map((workItem) => String(workItem.id)),
+      workItemUrls: workItems.map((workItem) => workItem.url ?? ''),
+    };
+  } catch (workItemsError) {
+    dbg.ipc(
+      'Failed to resolve work items for PR #%d; creating workspace without links: %O',
+      pullRequestId,
+      workItemsError,
+    );
+    return { workItemIds: null, workItemUrls: null };
+  }
+}
+
 async function createOrGetPrReviewTaskUnlocked(
   params: {
     projectId: string;
@@ -426,6 +482,11 @@ async function createOrGetPrReviewTaskUnlocked(
   if (!project.repoProviderId || !project.repoProjectId || !project.repoId) {
     throw new Error('Project has no linked repository');
   }
+  const repo = {
+    providerId: project.repoProviderId,
+    projectId: project.repoProjectId,
+    repoId: project.repoId,
+  };
 
   const pr = await deps.getPullRequest({
     providerId: project.repoProviderId,
@@ -451,6 +512,8 @@ async function createOrGetPrReviewTaskUnlocked(
       ? `origin/${project.defaultBranch}`
       : null;
 
+  // Existing workspaces keep whatever work item links they already have —
+  // linking is a creation-time concern only.
   if (existingTask?.worktreePath) {
     if (existingTask.prWorkspaceState === 'active') {
       return { task: existingTask, created: false };
@@ -529,6 +592,16 @@ async function createOrGetPrReviewTaskUnlocked(
     diffBaseBranch,
     fallbackCommitHash: worktreeResult.startCommitHash,
   });
+  // Only fetched for brand new tasks: an existing task keeps its own links.
+  const prWorkItems = existingTask
+    ? { workItemIds: null, workItemUrls: null }
+    : await resolvePrWorkItems({
+        deps,
+        providerId: repo.providerId,
+        repoProjectId: repo.projectId,
+        repoId: repo.repoId,
+        pullRequestId,
+      });
   let persistedResult: { task: Task; created: boolean };
   try {
     if (existingTask) {
@@ -556,6 +629,8 @@ async function createOrGetPrReviewTaskUnlocked(
         pullRequestId: String(pullRequestId),
         pullRequestUrl: pr.url ?? null,
         prWorkspaceState: 'active',
+        workItemIds: prWorkItems.workItemIds,
+        workItemUrls: prWorkItems.workItemUrls,
         updatedAt: new Date().toISOString(),
       });
       persistedResult = { task, created: true };
@@ -693,6 +768,30 @@ export function startPrCommand(
   );
 }
 
+/**
+ * Why a PR workspace can no longer be acted on, or null when it is still live.
+ *
+ * Deliberately does NOT treat `status === 'completed'` as terminal: that only
+ * means the workspace's last agent step finished, while the worktree stays
+ * alive and run commands must keep working. See the invariant documented in
+ * StepService.syncTaskStatus.
+ *
+ * These messages reach the user verbatim (the run button and prompt composer
+ * surface the rejection), so each branch explains what actually happened.
+ */
+function getPrWorkspaceTerminalReason(task: Task): string | null {
+  if (task.userCompleted) {
+    return `PR review task ${task.id} was archived`;
+  }
+  if (task.prWorkspaceState === 'cleanup-pending') {
+    return `PR review task ${task.id} is being cleaned up`;
+  }
+  if (!task.worktreePath) {
+    return `PR review task ${task.id} has no active worktree`;
+  }
+  return null;
+}
+
 export async function runCommandWithPrReviewLifecycle<
   Params extends {
     taskId: string;
@@ -727,14 +826,8 @@ export async function runCommandWithPrReviewLifecycle<
     async () => {
       const task = await findTaskById(params.taskId);
       validatePrReviewTask(task, identity);
-      if (
-        task.status === 'completed' ||
-        task.userCompleted ||
-        task.prWorkspaceState === 'cleanup-pending' ||
-        !task.worktreePath
-      ) {
-        throw new Error(`PR review task ${task.id} has no active worktree`);
-      }
+      const terminalReason = getPrWorkspaceTerminalReason(task);
+      if (terminalReason) throw new Error(terminalReason);
 
       return operation({
         ...params,
@@ -767,6 +860,16 @@ export async function startAgentWithPrReviewLifecycle(
     return operation(stepId);
   }
 
+  dbg.agent(
+    'pr-review lifecycle: step=%s task=%s state=%s status=%s userCompleted=%s worktree=%s',
+    stepId,
+    initialTask.id,
+    initialTask.prWorkspaceState,
+    initialTask.status,
+    initialTask.userCompleted,
+    initialTask.worktreePath,
+  );
+
   const identity = {
     stepId,
     taskId: initialTask.id,
@@ -783,14 +886,10 @@ export async function startAgentWithPrReviewLifecycle(
       }
       const task = await repositories.findTaskById(identity.taskId);
       validatePrReviewTask(task, identity);
-      if (
-        task.status === 'completed' ||
-        task.userCompleted ||
-        task.prWorkspaceState === 'cleanup-pending' ||
-        !task.worktreePath
-      ) {
-        throw new Error(`PR review task ${task.id} has no active worktree`);
-      }
+      // A finished agent run must not block starting another step.
+      const terminalReason = getPrWorkspaceTerminalReason(task);
+      if (terminalReason) throw new Error(terminalReason);
+      dbg.agent('pr-review lifecycle: lock acquired for step=%s', step.id);
       await operation(step.id);
     },
   );
@@ -805,6 +904,22 @@ export async function sendMessageWithPrReviewLifecycle(
   deps?: {
     findStepById: (stepId: string) => Promise<TaskStep | undefined>;
     findTaskById: (taskId: string) => Promise<Task | undefined>;
+    /**
+     * When false, resolve as soon as the prompt is ACCEPTED rather than when
+     * the agent turn finishes.
+     *
+     * The renderer awaits this call before clearing the composer, so waiting
+     * for the whole turn would pin the user's text and attachments in the
+     * input box for the entire agent run.
+     *
+     * Safe to skip because a turn that fails *after* starting has already
+     * surfaced itself: synthetic timeline entry, errored step status and a
+     * notification (see `agentService.performSendMessage`). A prompt that never
+     * starts rejects `started`, which still propagates from here. Internal
+     * callers that genuinely chain off turn completion (e.g. PR review chat
+     * continuation) leave this at its default.
+     */
+    waitForCompletion?: boolean;
   },
 ): Promise<void> {
   let completion: Promise<void> | undefined;
@@ -813,11 +928,20 @@ export async function sendMessageWithPrReviewLifecycle(
     async (authoritativeStepId) => {
       const followUp = await beginFollowUp(authoritativeStepId);
       completion = followUp.completion;
+      // Observe it the moment we own it. `await followUp.started` below can
+      // throw, and every path out of here either awaits `completion` or
+      // abandons it -- an abandoned rejection would crash the main process.
+      completion.catch((error) => {
+        dbg.agent('follow-up turn for step %s failed: %O', stepId, error);
+      });
       await followUp.started;
     },
     deps,
   );
   if (!completion) throw new Error(`Follow-up for step ${stepId} did not start`);
+
+  if (deps?.waitForCompletion === false) return;
+
   await completion;
 }
 
@@ -1023,45 +1147,14 @@ export async function reconcilePrWorkspaceState(
       )
       .map((task) => task.id);
     if (taskIds.length === 0) return [];
-    const pendingTasks = await resolvedDeps.markPrWorkspacesCleanupPending({
+    const keptTasks = await resolvedDeps.markPrWorkspacesKept({
       projectId: params.projectId,
       pullRequestId,
       taskIds,
     });
-    for (const task of pendingTasks) {
+    for (const task of keptTasks) {
       resolvedDeps.emitTaskUpsert(task);
     }
-    return pendingTasks;
+    return keptTasks;
   });
-}
-
-export async function listPendingPrWorkspaceDecisions(deps?: {
-  findPendingPrWorkspaceTasks: () => Promise<Task[]>;
-}): Promise<Array<{ projectId: string; pullRequestId: number; taskIds: string[] }>> {
-  const findPendingPrWorkspaceTasks =
-    deps?.findPendingPrWorkspaceTasks ??
-    (await import('../database/repositories')).TaskRepository
-      .findPendingPrWorkspaceTasks;
-  const decisions = new Map<
-    string,
-    { projectId: string; pullRequestId: number; taskIds: string[] }
-  >();
-
-  // Repository order defines decision age: pending detection time, creation, then ID.
-  for (const task of await findPendingPrWorkspaceTasks()) {
-    if (!task.pullRequestId) continue;
-    const key = `${task.projectId}:${task.pullRequestId}`;
-    const decision = decisions.get(key);
-    if (decision) {
-      decision.taskIds.push(task.id);
-    } else {
-      decisions.set(key, {
-        projectId: task.projectId,
-        pullRequestId: Number(task.pullRequestId),
-        taskIds: [task.id],
-      });
-    }
-  }
-
-  return [...decisions.values()];
 }

@@ -1,10 +1,10 @@
 import type { ComponentProps } from 'react';
 
-import type { MobilePlatform } from '@shared/mobile-simulator-types';
-import type { CommandRunStatus } from '@shared/run-command-types';
 import { Button } from '@/common/ui/button';
-import { InteractiveLog } from '@/features/common/interactive-log';
+import type { CommandRunStatus } from '@shared/run-command-types';
 import { EmptyState } from '../ui-common';
+import { InteractiveLog } from '@/features/common/interactive-log';
+import type { MobilePlatform } from '@shared/mobile-simulator-types';
 
 export function DevServerTab({
   platform,

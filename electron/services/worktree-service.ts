@@ -1,16 +1,23 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { exec, execFile, type ExecOptions, spawn } from 'child_process';
+import { exec, execFile, type ExecOptions } from 'child_process';
 import { promisify } from 'util';
 
 
 import { app } from 'electron';
-import ignore from 'ignore';
 import { nanoid } from 'nanoid';
 
 
 
+import {
+  createCommitIgnoreMatcher,
+  matchesCommitIgnore,
+} from '@shared/commit-ignore';
 import { getImageMimeType, isSvgPath } from '@shared/image-types';
+import {
+  isSpreadsheetPath,
+  MAX_SPREADSHEET_BYTES,
+} from '@shared/spreadsheet-types';
 import type { BranchInfo } from '@shared/types';
 import type { WorktreeFileCopyEntry } from '@shared/permission-types';
 
@@ -22,6 +29,13 @@ import { ProjectRepository } from '../database/repositories/projects';
 
 
 
+import {
+  addKeyToAgent,
+  getSshAgentStatus,
+  isKeyLoadedInAgent,
+  runWithSshAskpass,
+  type SshPromptRequest,
+} from './ssh-askpass-broker';
 import {
   buildWorktreeSettings,
   readSettings,
@@ -79,11 +93,11 @@ async function getIgnoredCommitPaths({
   }
 
   const ignoreContent = await getProjectCommitIgnore(projectPath);
-  if (!ignoreContent.trim()) {
+  const matcher = createCommitIgnoreMatcher(ignoreContent);
+  if (!matcher) {
     return { ignoredPaths: new Set(), ignoredStagedPaths: new Set() };
   }
 
-  const matcher = ignore().add(ignoreContent);
   const { stdout } = await execFileAsync(
     'git',
     ['status', '--porcelain', '-z', '--untracked-files=all'],
@@ -100,10 +114,10 @@ async function getIgnoredCommitPaths({
     const sourcePath =
       status[0] === 'R' || status[0] === 'C' ? entries[i + 1] : undefined;
     const isIgnored =
-      matcher.ignores(filePath) ||
+      matchesCommitIgnore(matcher, filePath) ||
       (status[0] === 'R' &&
         sourcePath !== undefined &&
-        matcher.ignores(sourcePath));
+        matchesCommitIgnore(matcher, sourcePath));
     if (isIgnored) {
       ignoredPaths.add(filePath);
       if (status[0] !== ' ' && status[0] !== '?') {
@@ -114,25 +128,6 @@ async function getIgnoredCommitPaths({
   }
 
   return { ignoredPaths, ignoredStagedPaths };
-}
-
-async function getStatusPaths(worktreePath: string): Promise<string[]> {
-  const { stdout } = await execFileAsync(
-    'git',
-    ['status', '--porcelain', '-z', '--untracked-files=all'],
-    { cwd: worktreePath, encoding: 'utf-8' },
-  );
-  const entries = stdout.split('\0').filter(Boolean);
-  const paths: string[] = [];
-
-  for (let i = 0; i < entries.length; i += 1) {
-    const entry = entries[i];
-    const status = entry.slice(0, 2);
-    paths.push(entry.slice(3));
-    if (status[0] === 'R' || status[0] === 'C') i += 1;
-  }
-
-  return paths;
 }
 
 async function runGitPathCommand({
@@ -150,6 +145,47 @@ async function runGitPathCommand({
       encoding: 'utf-8',
     });
   }
+}
+
+/**
+ * Stages every change in the repository except `excludedPaths`.
+ *
+ * Uses a broad `:/` pathspec narrowed by `:(exclude)` pathspecs rather than
+ * listing the included paths. Naming a path explicitly makes `git add` fail
+ * hard when that path is matched by a .gitignore rule but still appears in
+ * `git status` (e.g. a tracked file that was `git rm --cached`-ed while
+ * staying on disk); a broad pathspec lets git apply .gitignore itself.
+ *
+ * The pathspecs go over stdin because they cannot be chunked -- an exclude
+ * only narrows the pathspec it is passed alongside -- and a large ignore list
+ * would otherwise overflow ARG_MAX.
+ *
+ * `:/` and the `top` magic keep every pathspec relative to the repository
+ * root, matching the repo-root-relative paths that `git status` reports, so
+ * this stays correct even if `worktreePath` is a subdirectory of the repo.
+ */
+async function gitAddAllExcept({
+  worktreePath,
+  excludedPaths,
+}: {
+  worktreePath: string;
+  excludedPaths: Set<string>;
+}): Promise<void> {
+  const pathspecs = [
+    ':/',
+    ...[...excludedPaths].map((p) => `:(exclude,literal,top)${p}`),
+  ];
+
+  await new Promise<void>((resolve, reject) => {
+    const child = execFile(
+      'git',
+      ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
+      { cwd: worktreePath, encoding: 'utf-8' },
+      (error) => (error ? reject(error) : resolve()),
+    );
+    child.stdin?.on('error', reject);
+    child.stdin?.end(pathspecs.join('\0'));
+  });
 }
 
 async function hasStagedChanges(worktreePath: string): Promise<boolean> {
@@ -241,9 +277,64 @@ export function generateWorktreeName(prompt: string): string {
 /**
  * Gets the base worktrees directory for Jean-Claude: ~/.jean-claude/worktrees/
  */
-function getWorktreesBaseDir(): string {
+export function getWorktreesBaseDir(): string {
   const homeDir = app.getPath('home');
   return path.join(homeDir, '.jean-claude', 'worktrees');
+}
+
+/**
+ * Depth below ~/.jean-claude/worktrees that a directory must sit at before we
+ * will `rm -rf` it: <base>/<project>/<worktree>. This is what stops a project
+ * whose worktreesPath was mis-pointed at the base itself from turning every
+ * *other* project's folder into a deletion candidate.
+ */
+export const WORKTREE_DEPTH_BELOW_BASE = 2;
+
+/**
+ * Resolves a path through symlinks so comparisons against git's canonical
+ * worktree paths (always real paths) succeed on macOS (/var -> /private/var).
+ * Returns null when the path cannot be resolved.
+ */
+export async function canonicalizeWorktreePath(
+  target: string,
+): Promise<string | null> {
+  try {
+    return await fs.realpath(target);
+  } catch {
+    return null;
+  }
+}
+
+/** Path segments of `target` relative to the worktrees base, or null if outside it. */
+export async function segmentsBelowWorktreesBase(
+  target: string,
+): Promise<string[] | null> {
+  const base =
+    (await canonicalizeWorktreePath(getWorktreesBaseDir())) ??
+    getWorktreesBaseDir();
+  const resolved =
+    (await canonicalizeWorktreePath(target)) ?? path.resolve(target);
+  if (resolved === base) return [];
+  if (!resolved.startsWith(base + path.sep)) return null;
+  return resolved.slice(base.length + path.sep.length).split(path.sep);
+}
+
+/**
+ * Guards raw recursive deletion. Only directories that sit exactly where
+ * Jean-Claude puts worktrees may be removed without git's involvement.
+ */
+export async function assertSafeToRawDelete(target: string): Promise<void> {
+  const segments = await segmentsBelowWorktreesBase(target);
+  if (segments === null) {
+    throw new Error(
+      `Refusing to delete "${target}" — it is not under "${getWorktreesBaseDir()}"`,
+    );
+  }
+  if (segments.length < WORKTREE_DEPTH_BELOW_BASE) {
+    throw new Error(
+      `Refusing to delete "${target}" — expected a <base>/<project>/<worktree> path, got depth ${segments.length}`,
+    );
+  }
 }
 
 /**
@@ -431,6 +522,10 @@ export interface WorktreeFileContent {
   isBinary: boolean;
   oldImageDataUrl?: string | null;
   newImageDataUrl?: string | null;
+  /** Raw base64 bytes of a spreadsheet file, parsed client-side. */
+  oldSpreadsheetBase64?: string | null;
+  newSpreadsheetBase64?: string | null;
+  spreadsheetTooLarge?: boolean;
 }
 
 function parseNameStatusOutput(output: string): WorktreeDiffFile[] {
@@ -483,6 +578,66 @@ async function readGitFileContent(
   }
 }
 
+/**
+ * Reads a file from a git ref as base64. Unlike readGitFileContent this keeps
+ * the raw bytes intact, which is required for binary formats like spreadsheets.
+ */
+async function readGitFileBase64(
+  worktreePath: string,
+  ref: string,
+  filePath: string,
+): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['show', `${ref === ':' ? ':' : `${ref}:`}${filePath}`],
+      {
+        cwd: worktreePath,
+        encoding: 'buffer',
+        maxBuffer: MAX_SPREADSHEET_BYTES,
+      },
+    );
+    return Buffer.from(stdout).toString('base64');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads a spreadsheet from the working tree as base64.
+ *
+ * Resolves symlinks and rejects anything that escapes the worktree, matching
+ * the guard the text path applies in getWorktreeLocalFileContent — without it
+ * a tracked symlink pointing outside the repo would leak its target's bytes
+ * into the renderer.
+ */
+async function readSpreadsheetBase64FromDisk(
+  worktreePath: string,
+  filePath: string,
+): Promise<{ base64: string | null; tooLarge: boolean }> {
+  try {
+    const fullPath = path.join(worktreePath, filePath);
+    const [realRoot, realPath] = await Promise.all([
+      fs.realpath(worktreePath),
+      fs.realpath(fullPath),
+    ]);
+    if (
+      realPath !== realRoot &&
+      !realPath.startsWith(`${realRoot}${path.sep}`)
+    ) {
+      throw new Error(`File path escapes worktree: ${filePath}`);
+    }
+    const stats = await fs.stat(realPath);
+    if (stats.size > MAX_SPREADSHEET_BYTES) {
+      return { base64: null, tooLarge: true };
+    }
+    const buffer = await fs.readFile(realPath);
+    return { base64: buffer.toString('base64'), tooLarge: false };
+  } catch {
+    return { base64: null, tooLarge: false };
+  }
+}
+
 export async function getWorktreeLocalFileContent(
   worktreePath: string,
   filePath: string,
@@ -499,6 +654,45 @@ export async function getWorktreeLocalFileContent(
     throw new Error(`Invalid worktree file path: ${filePath}`);
   }
   const oldRef = scope === 'staged' ? 'HEAD' : ':';
+
+  // Spreadsheets are binary: ship raw bytes and let the renderer parse them.
+  if (isSpreadsheetPath(filePath)) {
+    const oldSpreadsheetBase64 =
+      status === 'added'
+        ? null
+        : await readGitFileBase64(
+            worktreePath,
+            oldRef,
+            originalPath ?? filePath,
+          );
+    let newSpreadsheetBase64: string | null = null;
+    let spreadsheetTooLarge = false;
+    if (status !== 'deleted') {
+      if (scope === 'staged') {
+        newSpreadsheetBase64 = await readGitFileBase64(
+          worktreePath,
+          ':',
+          filePath,
+        );
+      } else {
+        const result = await readSpreadsheetBase64FromDisk(
+          worktreePath,
+          filePath,
+        );
+        newSpreadsheetBase64 = result.base64;
+        spreadsheetTooLarge = result.tooLarge;
+      }
+    }
+    return {
+      oldContent: null,
+      newContent: null,
+      isBinary: true,
+      oldSpreadsheetBase64,
+      newSpreadsheetBase64,
+      spreadsheetTooLarge,
+    };
+  }
+
   const oldContent = status === 'added'
     ? null
     : await readGitFileContent(worktreePath, oldRef, originalPath ?? filePath);
@@ -617,6 +811,51 @@ function getSourceBranchRefs(
   refs.push(`refs/remotes/${remoteName ?? 'origin'}/${localBranch}`);
 
   return { localBranch, refs, exactLocalRef };
+}
+
+/**
+ * Diagnostic helper: resolves the base commit / source ref that the diff
+ * functions would use, plus the current HEAD. Used to explain why a task
+ * reports an empty diff (e.g. HEAD already merged into the source branch).
+ */
+export async function getDiffBaseInfo(
+  worktreePath: string,
+  startCommitHash: string,
+  sourceBranch: string | null,
+): Promise<{
+  baseCommit: string;
+  sourceRef: string | null;
+  headCommit: string | null;
+  headIsMergedIntoSource: boolean;
+}> {
+  const { baseCommit, sourceRef } = await getDiffBaseCommit(
+    worktreePath,
+    startCommitHash,
+    sourceBranch,
+  );
+
+  let headCommit: string | null = null;
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    });
+    headCommit = stdout.trim();
+  } catch {
+    // HEAD unavailable (e.g. worktree removed) — leave null.
+  }
+
+  return {
+    baseCommit,
+    sourceRef,
+    headCommit,
+    // Only meaningful when a real source ref was resolved: without one,
+    // baseCommit is just the (possibly stale) startCommitHash, so equality
+    // says nothing about the source branch.
+    headIsMergedIntoSource: Boolean(
+      sourceRef && headCommit && baseCommit && headCommit === baseCommit,
+    ),
+  };
 }
 
 /**
@@ -1001,6 +1240,7 @@ export async function getWorktreeFileContent(
   filePath: string,
   status: 'added' | 'modified' | 'deleted',
   sourceBranch?: string | null,
+  originalPath?: string,
 ): Promise<WorktreeFileContent> {
   dbg.worktree('getWorktreeFileContent called %o', {
     worktreePath,
@@ -1016,6 +1256,37 @@ export async function getWorktreeFileContent(
     startCommitHash,
     sourceBranch ?? null,
   );
+
+  // Spreadsheets are binary: ship raw bytes and let the renderer parse them.
+  if (isSpreadsheetPath(filePath)) {
+    // Renames arrive here as 'modified' with the *new* path, so the old side
+    // must be read from originalPath or git show finds nothing.
+    const oldSpreadsheetBase64 =
+      status === 'added'
+        ? null
+        : await readGitFileBase64(
+            worktreePath,
+            baseCommit,
+            originalPath ?? filePath,
+          );
+    const newResult =
+      status === 'deleted'
+        ? { base64: null, tooLarge: false }
+        : await readSpreadsheetBase64FromDisk(worktreePath, filePath);
+    dbg.worktree('Spreadsheet file %s %o', filePath, {
+      hasOld: oldSpreadsheetBase64 !== null,
+      hasNew: newResult.base64 !== null,
+      tooLarge: newResult.tooLarge,
+    });
+    return {
+      oldContent: null,
+      newContent: null,
+      isBinary: true,
+      oldSpreadsheetBase64,
+      newSpreadsheetBase64: newResult.base64,
+      spreadsheetTooLarge: newResult.tooLarge,
+    };
+  }
 
   let oldContent: string | null = null;
   let newContent: string | null = null;
@@ -1508,23 +1779,13 @@ export async function commitWorktreeChanges(
         worktreePath,
         projectPath,
       });
-      const paths = await getStatusPaths(worktreePath);
-      const includedPaths = paths.filter(
-        (filePath) => !ignoredPaths.has(filePath),
-      );
-
-      dbg.worktree(
-        'Staging %d changes, skipping %d ignored paths',
-        includedPaths.length,
-        ignoredPaths.size,
-      );
-      if (includedPaths.length > 0) {
-        await runGitPathCommand({
-          worktreePath,
-          args: ['add', '-A'],
-          paths: includedPaths,
-        });
-      }
+      // Stage the whole worktree and subtract the commit-ignored paths with
+      // exclude pathspecs. Enumerating the included paths explicitly instead
+      // makes `git add` hard-fail when any of them is matched by a .gitignore
+      // rule but still shows up in `git status` (e.g. a tracked file that was
+      // `git rm --cached`-ed while remaining on disk).
+      dbg.worktree('Staging worktree, excluding %d paths', ignoredPaths.size);
+      await gitAddAllExcept({ worktreePath, excludedPaths: ignoredPaths });
       if (ignoredStagedPaths.size > 0) {
         await runGitPathCommand({
           worktreePath,
@@ -1605,6 +1866,41 @@ function getExecErrorMessage(error: unknown): string {
 
 export type WorktreeBranchCleanupBehavior = 'delete' | 'keep';
 
+/**
+ * Looks up a worktree in `git worktree list` for the given project.
+ * Returns `null` when git no longer tracks that path (e.g. it was pruned and
+ * only a stale directory is left on disk).
+ */
+async function findRegisteredWorktree(params: {
+  projectPath: string;
+  worktreePath: string;
+}): Promise<{ path?: string; branch?: string } | null> {
+  const { projectPath, worktreePath } = params;
+  const { stdout } = await execAsync('git worktree list --porcelain', {
+    cwd: projectPath,
+    encoding: 'utf-8',
+  });
+  const canonicalWorktreePath = path.join(
+    await fs.realpath(path.dirname(worktreePath)),
+    path.basename(worktreePath),
+  );
+  return (
+    stdout
+      .trim()
+      .split(/\n\s*\n/)
+      .map((block) => {
+        const lines = block.split('\n');
+        return {
+          path: lines.find((line) => line.startsWith('worktree '))?.slice(9),
+          branch: lines
+            .find((line) => line.startsWith('branch refs/heads/'))
+            ?.slice('branch refs/heads/'.length),
+        };
+      })
+      .find((entry) => entry.path === canonicalWorktreePath) ?? null
+  );
+}
+
 export interface CleanupWorktreeParams {
   worktreePath: string;
   projectPath: string;
@@ -1613,6 +1909,38 @@ export interface CleanupWorktreeParams {
   branchCleanup?: WorktreeBranchCleanupBehavior;
   force?: boolean;
   onVerified?: () => void | Promise<void>;
+}
+
+/**
+ * True when `worktreePath` is a leftover directory that git no longer tracks:
+ * running git inside it fails AND it is absent from `git worktree list`.
+ * Fails closed (returns false) whenever either probe is inconclusive, so a
+ * transient git failure can never be mistaken for an orphan.
+ */
+async function isOrphanedWorktree(params: {
+  worktreePath: string;
+  projectPath: string;
+}): Promise<boolean> {
+  const { worktreePath, projectPath } = params;
+  try {
+    await execAsync('git rev-parse --git-dir', {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    });
+    return false;
+  } catch {
+    // Falls through: git is unusable inside the directory.
+  }
+  try {
+    return (await findRegisteredWorktree({ projectPath, worktreePath })) === null;
+  } catch (error) {
+    dbg.worktree(
+      'Failed to list worktrees while diagnosing %s: %O',
+      worktreePath,
+      error,
+    );
+    return false;
+  }
 }
 
 /**
@@ -1635,15 +1963,70 @@ export async function cleanupWorktree(
     return;
   }
 
-  if (skipIfChanges) {
-    const { stdout } = await execAsync(
-      'git status --porcelain --untracked-files=all',
-      {
-        cwd: worktreePath,
-        encoding: 'utf-8',
-      },
+  // An orphaned worktree — directory still on disk, but git pruned its admin
+  // dir — fails every git command run inside it (`fatal: not a git
+  // repository`). Detect that up front, otherwise both the uncommitted-changes
+  // check and the branch verification below turn a recoverable state into a
+  // permanent failure that blocks task completion forever.
+  if (await isOrphanedWorktree({ worktreePath, projectPath })) {
+    if (skipIfChanges) {
+      // Git cannot tell us whether the directory holds uncommitted work, and
+      // the caller asked us to preserve it if so. Leave it for the explicit
+      // "Unused worktrees" cleanup rather than guessing.
+      dbg.worktree(
+        'Worktree %s is orphaned; skipping cleanup because unverifiable changes may exist',
+        worktreePath,
+      );
+      return;
+    }
+
+    const persisted = branchName?.trim() || null;
+    if (branchCleanup === 'delete' && !persisted) {
+      throw new Error(
+        'Cannot delete worktree branch without persisted branch metadata',
+      );
+    }
+
+    dbg.worktree(
+      'Worktree %s is orphaned (unregistered, missing git admin dir); removing directory directly',
+      worktreePath,
     );
-    if (stdout.trim().length > 0) {
+    if (branchCleanup === 'delete') await onVerified?.();
+    // git will not remove a directory it no longer tracks, so this is a raw
+    // delete — gate it on the path actually being a Jean-Claude worktree.
+    await assertSafeToRawDelete(worktreePath);
+    await fs.rm(worktreePath, { force: true, recursive: true });
+    await cleanupMissingWorktree({
+      worktreePath,
+      projectPath,
+      branchName: persisted ?? '',
+      allowUnregistered: true,
+      // Deleting the branch is best-effort here; the blocking problem (the
+      // stale directory) is already resolved and must not be re-reported.
+      throwOnError: false,
+      skipBranchDelete: branchCleanup !== 'delete',
+    });
+    return;
+  }
+
+  if (skipIfChanges) {
+    let statusOutput: string;
+    try {
+      const { stdout } = await execAsync(
+        'git status --porcelain --untracked-files=all',
+        {
+          cwd: worktreePath,
+          encoding: 'utf-8',
+        },
+      );
+      statusOutput = stdout;
+    } catch (error) {
+      throw new Error(
+        `Failed to check worktree for uncommitted changes (worktree: ${worktreePath}): ${getExecErrorMessage(error)}`,
+        { cause: error },
+      );
+    }
+    if (statusOutput.trim().length > 0) {
       return;
     }
   }
@@ -1657,9 +2040,14 @@ export async function cleanupWorktree(
     worktreeBranch = stdout.trim();
   } catch (error) {
     if (branchCleanup === 'delete') {
-      throw new Error('Failed to verify worktree branch before delete', {
-        cause: error,
-      });
+      // Still a registered worktree, so this is genuine corruption rather than
+      // an orphan (handled above) — refuse to guess at the branch.
+      // Error `cause` is dropped by Electron IPC serialization, so the git
+      // output has to be inlined in the message to reach the renderer.
+      throw new Error(
+        `Failed to verify worktree branch before delete (worktree: ${worktreePath}): ${getExecErrorMessage(error)}`,
+        { cause: error },
+      );
     }
   }
   const persistedBranch = branchName?.trim() || null;
@@ -1705,6 +2093,8 @@ export async function cleanupMissingWorktree(params: {
   branchName: string;
   throwOnError?: boolean;
   allowUnregistered?: boolean;
+  /** Prune the stale worktree entry but leave the branch in place. */
+  skipBranchDelete?: boolean;
   onVerified?: () => void | Promise<void>;
 }): Promise<void> {
   const {
@@ -1713,6 +2103,7 @@ export async function cleanupMissingWorktree(params: {
     branchName,
     throwOnError = false,
     allowUnregistered = false,
+    skipBranchDelete = false,
     onVerified,
   } = params;
 
@@ -1720,27 +2111,10 @@ export async function cleanupMissingWorktree(params: {
     if (!worktreePath) {
       throw new Error('Cannot verify missing worktree branch without its path');
     }
-    const { stdout } = await execAsync('git worktree list --porcelain', {
-      cwd: projectPath,
-      encoding: 'utf-8',
+    const registered = await findRegisteredWorktree({
+      projectPath,
+      worktreePath,
     });
-    const canonicalWorktreePath = path.join(
-      await fs.realpath(path.dirname(worktreePath)),
-      path.basename(worktreePath),
-    );
-    const registered = stdout
-      .trim()
-      .split(/\n\s*\n/)
-      .map((block) => {
-        const lines = block.split('\n');
-        return {
-          path: lines.find((line) => line.startsWith('worktree '))?.slice(9),
-          branch: lines
-            .find((line) => line.startsWith('branch refs/heads/'))
-            ?.slice('branch refs/heads/'.length),
-        };
-      })
-      .find((entry) => entry.path === canonicalWorktreePath);
     if (
       (registered && registered.branch !== branchName) ||
       (!registered && !allowUnregistered)
@@ -1767,6 +2141,8 @@ export async function cleanupMissingWorktree(params: {
     dbg.worktree('Failed to prune worktrees in %s: %O', projectPath, error);
     if (throwOnError) throw error;
   }
+
+  if (skipBranchDelete) return;
 
   // Delete the orphaned branch
   try {
@@ -2077,19 +2453,17 @@ export async function checkMergeConflicts(
   }
 }
 
-const SSH_PASSPHRASE_PATTERN = /Enter passphrase for key/i;
-// Matches "user@host's password:" but not error messages like "Permission denied (password)"
-const SSH_PASSWORD_PATTERN = /\S+@\S+'s password:/i;
-
 /**
  * Pushes the current branch to a remote.
- * Detects SSH passphrase/password prompts and shows a global prompt dialog
- * so users can enter their credentials interactively.
+ * SSH passphrase/password prompts are routed through the askpass broker and
+ * surfaced as a dialog so users can authenticate interactively.
  */
 export async function pushBranch(params: {
   worktreePath: string;
   branchName: string;
   remote?: string;
+  /** See runGitWithSshPrompt. Pass false when the push is a mid-flow step. */
+  offerKeyUnlock?: boolean;
 }): Promise<void> {
   const remote = params.remote ?? 'origin';
   dbg.worktree('pushBranch: %s to %s', params.branchName, remote);
@@ -2098,12 +2472,93 @@ export async function pushBranch(params: {
     args: ['push', '-u', remote, params.branchName],
     cwd: params.worktreePath,
     label: 'git push',
+    offerKeyUnlock: params.offerKeyUnlock,
   });
+}
+
+/**
+ * Ceiling for git operations that talk to a remote. Generous enough for a
+ * large push, short enough that a blackholed connection cannot pin the askpass
+ * socket and child process for the lifetime of the app.
+ */
+const GIT_NETWORK_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * How long a credential dialog stays up before it is withdrawn. Shorter than
+ * GIT_NETWORK_TIMEOUT_MS so the user gets a real error rather than the command
+ * dying under an open dialog.
+ */
+const SSH_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Renames the local branch a worktree is checked out on and returns the branch
+ * it was previously on.
+ *
+ * The branch to rename is read from the worktree's actual HEAD rather than
+ * taken from the caller: `Task.branchName` can be null on older tasks, and the
+ * path-derived fallback is only a naming convention, so trusting it risks
+ * renaming an unrelated branch.
+ *
+ * Refuses to rename a branch that has an upstream. `git branch -m` moves the
+ * tracking config to the new name while the remote branch keeps the old one,
+ * which silently splits a subsequent push (and any open PR) across two refs.
+ */
+export async function renameWorktreeBranch(params: {
+  worktreePath: string;
+  newBranch: string;
+}): Promise<{ previousBranch: string }> {
+  const { worktreePath, newBranch } = params;
+
+  const currentBranch = await getCurrentBranchName(worktreePath);
+  if (!currentBranch || currentBranch === 'HEAD') {
+    throw new Error(
+      'This worktree is not on a branch (detached HEAD) and cannot be renamed',
+    );
+  }
+  dbg.worktree('renameWorktreeBranch: %s -> %s', currentBranch, newBranch);
+
+  await execFileAsync(
+    'git',
+    ['check-ref-format', `refs/heads/${newBranch}`],
+    { cwd: worktreePath, encoding: 'utf-8' },
+  ).catch(() => {
+    throw new Error(`"${newBranch}" is not a valid git branch name`);
+  });
+
+  const { stdout: existing } = await execFileAsync(
+    'git',
+    ['branch', '--list', newBranch, '--format=%(refname:short)'],
+    { cwd: worktreePath, encoding: 'utf-8' },
+  );
+  if (existing.trim()) {
+    throw new Error(`Branch ${newBranch} already exists`);
+  }
+
+  const upstream = await getUpstreamRef({
+    worktreePath,
+    branchName: currentBranch,
+  });
+  if (upstream) {
+    throw new Error(
+      `Branch ${currentBranch} is already pushed to ${upstream.remote}/${upstream.branch}. ` +
+        'Renaming it would leave the remote branch (and any open pull request) behind.',
+    );
+  }
+
+  await execFileAsync('git', ['branch', '-m', currentBranch, newBranch], {
+    cwd: worktreePath,
+    encoding: 'utf-8',
+  });
+
+  return { previousBranch: currentBranch };
 }
 
 /**
  * Pulls the latest commits for a branch from a remote into the worktree.
  * Uses the same interactive SSH prompt handling as pushBranch.
+ *
+ * `remote` is only a fallback: when the branch has an upstream configured, its
+ * remote wins.
  */
 export async function pullBranch(params: {
   worktreePath: string;
@@ -2111,23 +2566,94 @@ export async function pullBranch(params: {
   remote?: string;
 }): Promise<void> {
   const remote = params.remote ?? 'origin';
-  dbg.worktree('pullBranch: %s from %s', params.branchName, remote);
+
+  // The local branch name is not always the remote branch name (PR review
+  // worktrees create a local `jean-claude/review-...` branch from
+  // `origin/<pr-branch>`), so prefer the configured upstream ref.
+  const upstream = await getUpstreamRef({
+    worktreePath: params.worktreePath,
+    branchName: params.branchName,
+  });
+  const remoteRef = upstream ?? { remote, branch: params.branchName };
+
+  dbg.worktree(
+    'pullBranch: local=%s remote=%s/%s (upstream=%s)',
+    params.branchName,
+    remoteRef.remote,
+    remoteRef.branch,
+    upstream ? 'yes' : 'no',
+  );
 
   try {
     await runGitWithSshPrompt({
-      args: ['pull', '--ff-only', remote, params.branchName],
+      args: ['pull', '--ff-only', remoteRef.remote, remoteRef.branch],
       cwd: params.worktreePath,
       label: 'git pull',
     });
   } catch (error) {
-    throw new Error(explainPullFailure(getExecErrorMessage(error)));
+    throw new Error(
+      explainPullFailure({
+        message: getExecErrorMessage(error),
+        remoteBranch: remoteRef.branch,
+      }),
+    );
   }
+}
+
+/**
+ * Resolves the upstream tracking ref of a branch from git config, e.g.
+ * `branch.x.remote=origin` + `branch.x.merge=refs/heads/feature/a` ->
+ * `{ remote: 'origin', branch: 'feature/a' }`.
+ *
+ * Reads config instead of parsing `rev-parse --abbrev-ref @{u}` because that
+ * output is ambiguous: `feature/a` could mean remote `feature` branch `a`, or a
+ * local-tracking branch named `feature/a`. Returns null when the branch has no
+ * upstream, or when it tracks a local branch (`branch.x.remote='.'`).
+ */
+async function getUpstreamRef(params: {
+  worktreePath: string;
+  branchName: string;
+}): Promise<{ remote: string; branch: string } | null> {
+  const readConfig = async (key: string): Promise<string | null> => {
+    try {
+      const { stdout } = await execFileAsync('git', ['config', '--get', key], {
+        cwd: params.worktreePath,
+      });
+      return stdout.trim() || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const [remote, merge] = await Promise.all([
+    readConfig(`branch.${params.branchName}.remote`),
+    readConfig(`branch.${params.branchName}.merge`),
+  ]);
+
+  // '.' means the branch tracks another local branch — nothing to pull from.
+  if (!remote || !merge || remote === '.') return null;
+
+  const branch = merge.startsWith('refs/heads/')
+    ? merge.slice('refs/heads/'.length)
+    : merge;
+  if (!branch) return null;
+
+  return { remote, branch };
 }
 
 /**
  * Turns raw `git pull --ff-only` stderr into actionable guidance.
  */
-function explainPullFailure(message: string): string {
+function explainPullFailure(params: {
+  message: string;
+  remoteBranch: string;
+}): string {
+  const { message, remoteBranch } = params;
+
+  if (/couldn['’]t find remote ref|no such ref was fetched/i.test(message)) {
+    return `Pull failed because "${remoteBranch}" does not exist on the remote yet. Push the branch first, then pull again.\n\n${message}`;
+  }
+
   if (/would be overwritten by merge|local changes/i.test(message)) {
     return `Pull failed because the worktree has uncommitted changes. Commit or discard them, then pull again.\n\n${message}`;
   }
@@ -2139,97 +2665,223 @@ function explainPullFailure(message: string): string {
   return message;
 }
 
+/** User cancelled the SSH prompt — reported without a raw git stderr dump. */
+class SshAuthCancelledError extends Error {
+  constructor(label: string) {
+    super(`${label} cancelled: SSH authentication was not completed`);
+    this.name = 'SshAuthCancelledError';
+  }
+}
+
 /**
  * Runs a git command that may prompt for SSH credentials, surfacing the prompt
  * to the renderer via the global prompt dialog.
+ *
+ * ssh reads passphrases from /dev/tty, never from stdin, so a GUI process can
+ * only answer through the SSH_ASKPASS protocol — see ssh-askpass-broker.
+ * When the user unlocks a passphrase-protected key we offer to hand it to
+ * ssh-agent so the rest of the session is prompt-free.
  */
-function runGitWithSshPrompt(params: {
+export async function runGitWithSshPrompt(params: {
   args: string[];
   cwd: string;
   label: string;
+  /**
+   * Whether to offer adding an unlocked key to ssh-agent afterwards. Off for
+   * pushes that are one step of a longer flow (PR creation), where the dialog
+   * would land after the UI has already moved on.
+   */
+  offerKeyUnlock?: boolean;
+  /** Overrides the default network timeout. */
+  timeoutMs?: number;
 }): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn('git', params.args, {
-      cwd: params.cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        SSH_ASKPASS: '',
-        GIT_ASKPASS: '',
-        SSH_ASKPASS_REQUIRE: 'never',
-      },
-    });
+  let cancelled = false;
+  let unrecognisedPrompt: string | null = null;
+  /** Held in memory only, to optionally forward to ssh-add. Never persisted. */
+  let unlockedKey: { keyPath: string; passphrase: string } | null = null;
 
-    let stderrOutput = '';
-    let promptHandled = false;
+  const handlePrompt = async (
+    request: SshPromptRequest,
+  ): Promise<string | null> => {
+    {
+      // ssh offers each candidate identity in turn and retries a key up to
+      // three times. Without this, clicking Cancel with two encrypted keys
+      // configured pops a fresh dialog for the next key.
+      if (cancelled) return null;
 
-    child.stderr?.on('data', async (data: Buffer) => {
-      const text = data.toString();
-      stderrOutput += text;
-      dbg.worktree('%s stderr: %s', params.label, text.trim());
+      const { sendGlobalPromptToWindow, sendGlobalInputPrompt } = await import(
+        './global-prompt-service'
+      );
 
-      if (promptHandled) return;
+      // An unrecognised prompt must not be answered blindly — we have no idea
+      // what ssh is asking for, and a masked box would invite a secret.
+      if (request.kind === 'unknown') {
+        dbg.ssh('unrecognised prompt, declining: %s', request.prompt.trim());
+        cancelled = true;
+        unrecognisedPrompt = request.prompt.trim();
+        return null;
+      }
 
-      // Test accumulated output to handle patterns split across chunks
-      const isPassphrase = SSH_PASSPHRASE_PATTERN.test(stderrOutput);
-      const isPassword = SSH_PASSWORD_PATTERN.test(stderrOutput);
-
-      if (isPassphrase || isPassword) {
-        promptHandled = true;
-        dbg.worktree('SSH authentication prompt detected');
-
-        try {
-          const { sendGlobalPromptToWindow } =
-            await import('./global-prompt-service');
-          const prompt = {
-            title: 'SSH Authentication Required',
-            message: stderrOutput.trim(),
-            inputType: 'password' as const,
-            acceptLabel: 'Submit',
+      if (request.kind === 'confirm') {
+        const accepted = await sendGlobalPromptToWindow(
+          {
+            title: 'Unknown SSH Host',
+            message:
+              'The server’s identity cannot be verified. Only continue if you recognise this host.',
+            details: request.prompt.trim(),
+            acceptLabel: 'Continue',
             rejectLabel: 'Cancel',
-          };
-          // Cast needed: dynamic imports lose overload resolution.
-          // When inputType is set, the function returns { accepted, inputValue }.
-          const result = (await sendGlobalPromptToWindow(
-            prompt,
-          )) as unknown as {
-            accepted: boolean;
-            inputValue?: string;
-          };
-
-          if (result.accepted && result.inputValue != null) {
-            child.stdin?.write(result.inputValue + '\n');
-          } else {
-            dbg.worktree('SSH authentication cancelled by user');
-            child.kill();
-          }
-        } catch (err) {
-          dbg.worktree('Failed to show SSH prompt: %O', err);
-          child.kill();
-        }
+          },
+          { timeoutMs: SSH_PROMPT_TIMEOUT_MS, signal: request.signal },
+        );
+        if (!accepted) cancelled = true;
+        return accepted ? 'yes' : null;
       }
-    });
 
-    let stdoutOutput = '';
-    child.stdout?.on('data', (data: Buffer) => {
-      stdoutOutput += data.toString();
-    });
+      const keyName = request.keyPath ? path.basename(request.keyPath) : null;
+      // A retry only makes sense for a value we asked the user to type; a
+      // username is not "incorrect" on the second identity.
+      const retry = request.attempt > 1 && request.kind === 'passphrase';
 
-    child.on('error', (err) => {
-      reject(new Error(`Failed to spawn ${params.label}: ${err.message}`));
-    });
+      const response = await sendGlobalInputPrompt({
+        title: retry
+          ? 'Incorrect passphrase — try again'
+          : request.kind === 'passphrase'
+            ? `Unlock SSH key${keyName ? ` ${keyName}` : ''}`
+            : request.kind === 'username'
+              ? 'Sign in to the remote'
+              : 'SSH Authentication Required',
+        message:
+          request.kind === 'passphrase'
+            ? `Enter the passphrase for ${request.keyPath ?? 'your SSH key'} to ${params.label === 'git push' ? 'push' : 'continue'}.`
+            : request.kind === 'username'
+              ? 'Enter your username for the remote repository.'
+              : 'Enter your password to continue.',
+        details: request.prompt.trim(),
+        // A username is not a secret and must stay readable.
+        inputType: request.kind === 'username' ? 'text' : 'password',
+        inputPlaceholder:
+          request.kind === 'passphrase'
+            ? 'Key passphrase'
+            : request.kind === 'username'
+              ? 'Username'
+              : 'Password',
+        acceptLabel: request.kind === 'passphrase' ? 'Unlock' : 'Continue',
+        rejectLabel: 'Cancel',
+      }, { timeoutMs: SSH_PROMPT_TIMEOUT_MS, signal: request.signal });
 
-    child.on('close', (code) => {
-      if (code === 0) {
-        dbg.worktree('%s successful', params.label);
-        resolve();
-      } else {
-        const errorMessage =
-          stderrOutput.trim() || stdoutOutput.trim() || `Exit code ${code}`;
-        reject(new Error(`${params.label} failed: ${errorMessage}`));
+      if (!response.accepted || response.inputValue == null) {
+        cancelled = true;
+        return null;
       }
-    });
+
+      if (request.kind === 'passphrase' && request.keyPath) {
+        unlockedKey = {
+          keyPath: request.keyPath,
+          passphrase: response.inputValue,
+        };
+      }
+
+      return response.inputValue;
+    }
+  };
+
+  const result = await runWithSshAskpass({
+    command: 'git',
+    args: params.args,
+    cwd: params.cwd,
+    // A push can legitimately take a while on a large repo, but must not pin
+    // the broker socket and child process forever if the network blackholes.
+    timeoutMs: params.timeoutMs ?? GIT_NETWORK_TIMEOUT_MS,
+    handler: async (request) => {
+      // A prompt that failed (timed out, window gone, renderer reloaded) was
+      // not authorised by anyone, so treat it as a refusal. Without this,
+      // `cancelled` stays false and ssh walks on to the next identity, opening
+      // a fresh dialog for every remaining key.
+      try {
+        return await handlePrompt(request);
+      } catch (error) {
+        dbg.ssh('prompt failed, treating as cancelled: %O', error);
+        cancelled = true;
+        return null;
+      }
+    },
   });
+
+  if (result.code === 0) {
+    dbg.worktree('%s successful', params.label);
+    if (params.offerKeyUnlock !== false) void offerToAddKeyToAgent(unlockedKey);
+    return;
+  }
+
+  if (unrecognisedPrompt) {
+    // Distinct from a user cancellation: we declined, and the prompt text is
+    // the only clue to what ssh actually wanted.
+    throw new Error(
+      `${params.label} failed: Jean-Claude did not recognise an SSH prompt and declined to answer it.\n\nPrompt: ${unrecognisedPrompt}\n\n${result.stderr.trim()}`,
+    );
+  }
+
+  if (cancelled) throw new SshAuthCancelledError(params.label);
+
+  const errorMessage =
+    result.stderr.trim() || result.stdout.trim() || `Exit code ${result.code}`;
+  throw new Error(`${params.label} failed: ${explainSshFailure(errorMessage)}`);
+}
+
+/**
+ * After a successful authentication, offers to load the key into ssh-agent so
+ * the user is not asked again for the rest of the session.
+ *
+ * Fire-and-forget: the push already succeeded, and failing to cache the key
+ * must never turn a successful push into an error.
+ */
+async function offerToAddKeyToAgent(
+  unlocked: { keyPath: string; passphrase: string } | null,
+): Promise<void> {
+  if (!unlocked) return;
+
+  try {
+    const status = await getSshAgentStatus();
+    if (status.state === 'unavailable') {
+      dbg.ssh('skipping ssh-add offer: no ssh-agent available');
+      return;
+    }
+    if (await isKeyLoadedInAgent(unlocked.keyPath)) return;
+
+    const { sendGlobalPromptToWindow } = await import(
+      './global-prompt-service'
+    );
+    const accepted = await sendGlobalPromptToWindow({
+      title: 'Remember this SSH key?',
+      message: `Add ${path.basename(unlocked.keyPath)} to your ssh-agent so you are not asked for the passphrase again during this session. The passphrase is handed to ssh-agent and never stored by Jean-Claude.`,
+      details: unlocked.keyPath,
+      acceptLabel: 'Add to ssh-agent',
+      rejectLabel: 'Not now',
+    });
+    if (!accepted) return;
+
+    const outcome = await addKeyToAgent(unlocked);
+    if (!outcome.added) {
+      dbg.ssh('ssh-add declined by agent: %s', outcome.error);
+    }
+  } catch (error) {
+    dbg.ssh('ssh-add offer failed: %O', error);
+  }
+}
+
+/** Turns common SSH failures into guidance instead of raw git noise. */
+function explainSshFailure(message: string): string {
+  if (/Permission denied \(publickey/i.test(message)) {
+    return `${message}\n\nNo usable SSH key was offered. Check that your key is added to the remote and, if it has a passphrase, that you unlocked it.`;
+  }
+  if (/Host key verification failed/i.test(message)) {
+    return `${message}\n\nThe host was not trusted, so the connection was refused.`;
+  }
+  if (/Could not open a connection to your authentication agent/i.test(message)) {
+    return `${message}\n\nNo ssh-agent is running.`;
+  }
+  return message;
 }
 
 /**
@@ -2480,10 +3132,31 @@ export async function getWorktreeCommitFileContent(
   isBinary: boolean;
   oldImageDataUrl?: string | null;
   newImageDataUrl?: string | null;
+  oldSpreadsheetBase64?: string | null;
+  newSpreadsheetBase64?: string | null;
 }> {
   // Validate commit hash
   if (!/^[0-9a-f]{7,40}$/i.test(commitHash)) {
     return { oldContent: null, newContent: null, isBinary: false };
+  }
+
+  // Spreadsheets are binary: both sides come straight from git as raw bytes.
+  if (isSpreadsheetPath(filePath)) {
+    const [oldSpreadsheetBase64, newSpreadsheetBase64] = await Promise.all([
+      status === 'added'
+        ? Promise.resolve(null)
+        : readGitFileBase64(worktreePath, `${commitHash}^`, filePath),
+      status === 'deleted'
+        ? Promise.resolve(null)
+        : readGitFileBase64(worktreePath, commitHash, filePath),
+    ]);
+    return {
+      oldContent: null,
+      newContent: null,
+      isBinary: true,
+      oldSpreadsheetBase64,
+      newSpreadsheetBase64,
+    };
   }
 
   try {

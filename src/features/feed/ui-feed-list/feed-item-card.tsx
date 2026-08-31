@@ -8,7 +8,6 @@ import {
   CircleDotDashed,
   CircleHelp,
   ClipboardList,
-  FolderOpen,
   GitMerge,
   GitPullRequest,
   Hand,
@@ -51,7 +50,6 @@ import {
   DropdownItem,
 } from '@/common/ui/dropdown';
 import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
-import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
 import {
   getPrStateColor,
   getPrStatusLabel,
@@ -63,6 +61,7 @@ import {
   usePullRequestPolicyEvaluations,
 } from '@/hooks/use-pull-requests';
 import { useCompleteTask, useTask } from '@/hooks/use-tasks';
+import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
 import { api } from '@/lib/api';
 import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-dialog';
 import { formatRelativeTime } from '@/lib/time';
@@ -701,27 +700,6 @@ export function FeedItemCard({
     menuRef.current?.toggle();
   }, [dismiss, item.id]);
 
-  const handleOpenInProject = useCallback(() => {
-    if (item.source === 'pull-request' && item.pullRequestId) {
-      navigate({
-        to: '/projects/$projectId/prs/$prId',
-        params: {
-          projectId: item.projectId,
-          prId: String(item.pullRequestId),
-        },
-      });
-    } else if (item.taskId) {
-      navigate({
-        to: '/projects/$projectId/tasks/$taskId',
-        params: {
-          projectId: item.projectId,
-          taskId: item.taskId,
-        },
-      });
-    }
-    menuRef.current?.toggle();
-  }, [navigate, item]);
-
   const openOverlay = useOverlaysStore((s) => s.open);
   const setDraftProjectId = useNewTaskDraftStore((s) => s.setSelectedProjectId);
   const setDraft = useNewTaskDraftStore((s) => s.setDraft);
@@ -937,6 +915,14 @@ export function FeedItemCard({
                     PR Workspace
                   </span>
                 )}
+                {item.taskType === 'pr-review' && isDraft && (
+                  <span
+                    aria-label="Draft"
+                    className="border-glass-border text-ink-3 mt-px shrink-0 rounded border px-1 py-0.5 text-[10px] font-medium leading-none uppercase"
+                  >
+                    Draft
+                  </span>
+                )}
                 <span
                   className={clsx(
                     'min-w-0 flex-1 truncate leading-snug',
@@ -1032,10 +1018,25 @@ export function FeedItemCard({
                 {/* PR thread count */}
                 {item.source === 'pull-request' &&
                   (item.activeThreadCount ?? 0) > 0 && (
-                    <span className="text-status-pr flex items-center gap-0.5">
+                    <span
+                      className="text-status-pr flex items-center gap-0.5"
+                      title={`${item.activeThreadCount} active comment thread(s)`}
+                    >
                       <MessageSquare className="h-3 w-3" />
                       <span className="text-[10px]">
                         {item.activeThreadCount}
+                      </span>
+                    </span>
+                  )}
+                {item.source === 'pull-request' &&
+                  (item.resolvedThreadCount ?? 0) > 0 && (
+                    <span
+                      className="text-status-done flex items-center gap-0.5"
+                      title={`${item.resolvedThreadCount} resolved comment thread(s)`}
+                    >
+                      <CheckCircle2 className="h-3 w-3" />
+                      <span className="text-[10px]">
+                        {item.resolvedThreadCount}
                       </span>
                     </span>
                   )}
@@ -1219,10 +1220,24 @@ export function FeedItemCard({
                     </span>
                   )}
                   {(item.activeThreadCount ?? 0) > 0 && (
-                    <span className="text-status-pr flex items-center gap-0.5">
+                    <span
+                      className="text-status-pr flex items-center gap-0.5"
+                      title={`${item.activeThreadCount} active comment thread(s)`}
+                    >
                       <MessageSquare className="h-2.5 w-2.5" />
                       <span className="text-[9.5px]">
                         {item.activeThreadCount}
+                      </span>
+                    </span>
+                  )}
+                  {(item.resolvedThreadCount ?? 0) > 0 && (
+                    <span
+                      className="text-status-done flex items-center gap-0.5"
+                      title={`${item.resolvedThreadCount} resolved comment thread(s)`}
+                    >
+                      <CheckCircle2 className="h-2.5 w-2.5" />
+                      <span className="text-[9.5px]">
+                        {item.resolvedThreadCount}
                       </span>
                     </span>
                   )}
@@ -1284,14 +1299,6 @@ export function FeedItemCard({
           Create sub-task
         </DropdownItem>
       )}
-      <DropdownDivider />
-      <DropdownItem
-        onClick={handleOpenInProject}
-        shortcut="cmd+shift+o"
-        icon={<FolderOpen className="text-ink-2" />}
-      >
-        Open in project
-      </DropdownItem>
       <DropdownDivider />
       <DropdownInfo label="Menu shortcut" value="Shift+F10" />
     </Dropdown>

@@ -5,6 +5,9 @@ import { codeToHtml } from 'shiki';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 import { api } from '@/lib/api';
+import { isSpreadsheetPath } from '@shared/spreadsheet-types';
+import { SpreadsheetViewer } from '@/features/common/ui-spreadsheet-viewer';
+import { useSpreadsheetFile } from '@/hooks/use-spreadsheet-file';
 
 export function FilePreviewPane({
   filePath,
@@ -31,7 +34,10 @@ export function FilePreviewPane({
     ? filePath
     : `${projectPath}/${filePath}`;
 
+  const spreadsheet = useSpreadsheetFile(fullPath);
+
   useEffect(() => {
+    if (isSpreadsheetPath(fullPath)) return;
     startTransition(() => setIsLoading(true));
     startTransition(() => setError(null));
 
@@ -131,18 +137,36 @@ export function FilePreviewPane({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto">
-        {isLoading && (
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+        {spreadsheet.isSpreadsheet && (
+          <>
+            {spreadsheet.isLoading ? (
+              <div className="text-ink-3 flex h-full items-center justify-center">
+                Loading...
+              </div>
+            ) : spreadsheet.base64 ? (
+              <SpreadsheetViewer
+                newBase64={spreadsheet.base64}
+                className="min-h-0 flex-1"
+              />
+            ) : (
+              <div className="text-status-fail flex h-full items-center justify-center">
+                Unable to read spreadsheet
+              </div>
+            )}
+          </>
+        )}
+        {!spreadsheet.isSpreadsheet && isLoading && (
           <div className="text-ink-3 flex h-full items-center justify-center">
             Loading...
           </div>
         )}
-        {error && (
+        {!spreadsheet.isSpreadsheet && error && (
           <div className="text-status-fail flex h-full items-center justify-center">
             {error}
           </div>
         )}
-        {!isLoading && !error && content && (
+        {!spreadsheet.isSpreadsheet && !isLoading && !error && content && (
           <div className="relative">
             {/* Line numbers */}
             <div className="border-glass-border bg-bg-0 text-ink-4 absolute top-0 left-0 flex flex-col border-r px-2 py-4 text-right text-xs select-none">

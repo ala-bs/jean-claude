@@ -56,9 +56,6 @@ describe('getPrWorkspaceDeletionDestination', () => {
         currentTaskId: 'task/encoded',
         pathname: '/projects/project%2Fencoded/unknown/task%2Fencoded',
       }),
-    ).toEqual({
-      to: '/projects/$projectId',
-      params: { projectId: 'project/encoded' },
-    });
+    ).toEqual({ to: '/all' });
   });
 });

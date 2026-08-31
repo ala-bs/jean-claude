@@ -1,5 +1,5 @@
-import path from 'node:path';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 /**
  * Resolve whether a path is inside the project's managed attachment directory.

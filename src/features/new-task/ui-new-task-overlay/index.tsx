@@ -46,6 +46,10 @@ import {
   useComposerFileCommentsStore,
 } from '@/stores/composer-file-comments';
 import {
+  deleteAttachmentFiles,
+  findMissingAttachmentPaths,
+} from '@/lib/prompt-attachment-cleanup';
+import {
   expandFeatureReferencesInPrompt,
   getReferencedFeatures,
   type PreparedProjectFeatures,
@@ -65,11 +69,6 @@ import {
   useNewTaskDraftStore,
   type WorkItemsViewMode,
 } from '@/stores/new-task-draft';
-import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
-import {
-  deleteAttachmentFiles,
-  findMissingAttachmentPaths,
-} from '@/lib/prompt-attachment-cleanup';
 import {
   KeyboardLayerProvider,
   useKeyboardLayer,
@@ -127,21 +126,22 @@ import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
 import { Button } from '@/common/ui/button';
 import { compressImage } from '@/lib/image-compression';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
-import { resolveBackendModelSelection } from '@/features/agent/utils-backend-model-selection';
 import { getDefaultModelForBackend } from '@/lib/default-models';
 import { getOriginalTaskAgentMemoryPrompt } from '@/lib/agent-memory-prompt-input';
 import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
+import { NewTaskMoreMenu } from '@/features/new-task/ui-new-task-more-menu';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
+import { resolveBackendModelSelection } from '@/features/agent/utils-backend-model-selection';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
 import { useProjectSkills } from '@/hooks/use-skills';
-import { NewTaskMoreMenu } from '@/features/new-task/ui-new-task-more-menu';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
+import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
 import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 
 
@@ -1024,17 +1024,6 @@ export function NewTaskOverlay({
     });
   }, [highlightedWorkItemId, updateDraft]);
 
-  // Open highlighted work item in browser
-  const openHighlightedWorkItem = useCallback(() => {
-    if (!highlightedWorkItemId) return;
-    const workItem = workItems.find(
-      (wi) => wi.id.toString() === highlightedWorkItemId,
-    );
-    if (workItem?.url) {
-      window.open(workItem.url, '_blank');
-    }
-  }, [workItems, highlightedWorkItemId]);
-
   // Handle work item toggle from list click
   const handleWorkItemToggle = useCallback(
     (workItem: AzureDevOpsWorkItem) => {
@@ -1819,14 +1808,6 @@ export function NewTaskOverlay({
           shortcut: 'enter',
           handler: () => {
             toggleHighlightedWorkItem();
-          },
-        },
-      inputMode === 'search' &&
-        searchStep === 'select' && {
-          label: 'Open Highlighted Work Item in Browser',
-          shortcut: 'cmd+shift+o',
-          handler: () => {
-            openHighlightedWorkItem();
           },
         },
       canToggleMode && {

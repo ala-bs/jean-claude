@@ -15,6 +15,7 @@ import {
   resolvePathInsideRoot,
   resolveTrustedTaskRoot,
 } from './mobile-preview-path-resolver';
+import { isKnownPhysicalIosDevice } from './mobile-preview-ios-devicectl';
 import { mobilePreviewService } from './mobile-preview-service';
 import { runCommandService } from './run-command-service';
 
@@ -424,6 +425,79 @@ async function parseCurrentResponse(
   };
 }
 
+/**
+ * Hosts that resolve to the machine issuing the request. On a physical device
+ * these point at the PHONE's own loopback, where no Metro is listening.
+ */
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+export function isLoopbackLaunchHost(hostname: string): boolean {
+  return LOOPBACK_HOSTNAMES.has(hostname.toLowerCase());
+}
+
+/** Metro origin carried inside a dev-client link's `url` query parameter. */
+function readNestedLaunchUrl(parsed: URL): URL | null {
+  const nested = parsed.searchParams.get('url');
+  if (!nested) return null;
+  try {
+    return new URL(nested);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `url` advertises a Metro host a physical device cannot reach.
+ *
+ * `exp+<slug>://expo-development-client/?url=http://127.0.0.1:8081` puts the
+ * Metro origin in the query, not in the host, so both are checked.
+ */
+export function launchUrlNeedsLanRewrite(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.hostname && isLoopbackLaunchHost(parsed.hostname)) return true;
+  const nested = readNestedLaunchUrl(parsed);
+  return Boolean(nested?.hostname && isLoopbackLaunchHost(nested.hostname));
+}
+
+/**
+ * Replaces loopback hosts in an Expo launch URL with the Mac's LAN address.
+ * Scheme, port, path and every other query parameter are preserved: the URL is
+ * parsed, not string-substituted, so `exp://`, `exps://` and custom
+ * `exp+<slug>://` links all round-trip. A URL with no loopback host is returned
+ * unchanged (identical string, not a re-serialization).
+ */
+export function rewriteLaunchUrlToLanAddress({
+  url,
+  lanAddress,
+}: {
+  url: string;
+  lanAddress: string;
+}): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  let changed = false;
+  if (parsed.hostname && isLoopbackLaunchHost(parsed.hostname)) {
+    parsed.hostname = lanAddress;
+    changed = true;
+  }
+  const nested = readNestedLaunchUrl(parsed);
+  if (nested?.hostname && isLoopbackLaunchHost(nested.hostname)) {
+    nested.hostname = lanAddress;
+    parsed.searchParams.set('url', nested.toString());
+    changed = true;
+  }
+  return changed ? parsed.toString() : url;
+}
+
 export function createMobilePreviewExpoLaunchService(deps: {
   findProjectById: (id: string) => Promise<ProjectScope | undefined>;
   findTaskById: (id: string) => Promise<TaskScope | undefined>;
@@ -437,6 +511,12 @@ export function createMobilePreviewExpoLaunchService(deps: {
     params: MobilePreviewOpenDeeplinkParams,
     signal: AbortSignal,
   ) => Promise<void>;
+  /**
+   * Injectable so the service stays testable. Backed by the physical-device
+   * registry in `mobile-preview-ios-devicectl`; never inferred from the id
+   * format (CoreDevice and CoreSimulator ids are both UUID-shaped).
+   */
+  isPhysicalIosDevice?: (deviceId: string) => boolean;
   timeoutMs?: number;
   maxResponseBytes?: number;
   connectRetryWindowMs?: number;
@@ -730,11 +810,35 @@ export function createMobilePreviewExpoLaunchService(deps: {
     }, signal);
   }
 
+  /**
+   * Deeplink launching is simulator-only on iOS.
+   *
+   * The launch ends in `openDeeplink`, which on iOS is `xcrun simctl openurl` —
+   * a CoreSimulator command that cannot address a CoreDevice. There is no
+   * devicectl equivalent that opens a bare URL: `devicectl device process
+   * launch` can carry a payload URL but requires the target bundle id, which
+   * this request does not carry (and the app must already be installed).
+   *
+   * So we refuse up front instead of doing the Metro round-trip and the LAN
+   * rewrite and then failing inside `openDeeplink` with a guard message that
+   * says nothing about what the user should do instead.
+   */
+  function assertDeeplinkLaunchSupported(
+    params: MobilePreviewExpoLaunchParams,
+  ): void {
+    if (params.platform !== 'ios') return;
+    if (!(deps.isPhysicalIosDevice?.(params.deviceId) ?? false)) return;
+    throw new Error(
+      'Opening the dev server in an already-installed app is not supported on physical iOS devices yet. Use Build & Run instead (`expo run:ios --device`), which installs the app on the device and launches it against this dev server.',
+    );
+  }
+
   return {
     async launch(
       params: MobilePreviewExpoLaunchParams,
     ): Promise<MobilePreviewExpoLaunchResult> {
       assertParams(params);
+      assertDeeplinkLaunchSupported(params);
       const ownerKey = `${params.platform}\0${params.deviceId}`;
       const previousRequestId = latestRequestIds.get(ownerKey);
       if (previousRequestId && previousRequestId !== params.requestId) {
@@ -873,6 +977,11 @@ export function createMobilePreviewExpoLaunchService(deps: {
         }
         }
 
+        // `assertDeeplinkLaunchSupported` already rejected physical iOS, so the
+        // remaining targets (simulators, Android) share the Mac's network stack
+        // and use Metro's URL byte-for-byte.
+        const deeplinkUrl = result.url;
+
         await withDeviceOpenLock(ownerKey, signal, async () => {
           signal.throwIfAborted();
           if (latestRequestIds.get(ownerKey) !== params.requestId) {
@@ -881,10 +990,10 @@ export function createMobilePreviewExpoLaunchService(deps: {
           await deps.openDeeplink({
             platform: params.platform,
             deviceId: params.deviceId,
-            url: result.url,
+            url: deeplinkUrl,
           }, signal);
         });
-        return result;
+        return deeplinkUrl === result.url ? result : { ...result, url: deeplinkUrl };
       } finally {
         if (latestRequestIds.get(ownerKey) === params.requestId) {
           latestRequestIds.delete(ownerKey);
@@ -919,6 +1028,7 @@ export const mobilePreviewExpoLaunchService =
     resolveAppSchemes: resolveExpoAppSchemes,
     resolveUsesDevClient: resolveUsesExpoDevClient,
     getRunStatus: (taskId) => runCommandService.getRunStatus(taskId),
+    isPhysicalIosDevice: isKnownPhysicalIosDevice,
     fetch,
     openDeeplink: (params, signal) =>
       mobilePreviewService.openDeeplink(params, { signal }),

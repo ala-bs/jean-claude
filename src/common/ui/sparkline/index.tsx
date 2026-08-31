@@ -1,5 +1,5 @@
-import clsx from 'clsx';
 import { useId, useMemo } from 'react';
+import clsx from 'clsx';
 
 /**
  * Lightweight SVG sparkline for inline usage charts.

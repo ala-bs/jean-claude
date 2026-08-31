@@ -2,17 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { cache$, resetCache } from './cache-store';
 import {
+  getResourceChangeVersion,
+  setDocumentResource,
+} from './cache-actions';
+import {
   invalidateFeedResource,
   invalidateFeedResources,
   updateFeedDocument,
   updateFeedTaskWorktreeFlags,
 } from './feed-cache';
-import { feedQueryKeys } from '@/lib/feed-query-keys';
-import {
-  getResourceChangeVersion,
-  setDocumentResource,
-} from './cache-actions';
 import type { FeedItem } from '@shared/feed-types';
+import { feedQueryKeys } from '@/lib/feed-query-keys';
 
 function createFeedItem(id: string) {
   return {

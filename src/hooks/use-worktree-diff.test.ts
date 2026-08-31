@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { cache$, resetCache } from '@/cache/cache-store';
-import { ingestTask } from '@/cache/domains/tasks';
-import { setDocumentResource } from '@/cache/cache-actions';
 import { api } from '@/lib/api';
 import type { FeedItem } from '@shared/feed-types';
+import { ingestTask } from '@/cache/domains/tasks';
+import { setDocumentResource } from '@/cache/cache-actions';
 import type { Task } from '@shared/types';
 
 import { syncFeedWorktreeFlags } from './use-worktree-diff';

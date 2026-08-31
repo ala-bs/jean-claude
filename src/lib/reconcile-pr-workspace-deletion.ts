@@ -2,7 +2,6 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import { cache$ } from '@/cache/cache-store';
 import { invalidateFeedResources } from '@/cache/feed-cache';
-import { PR_WORKSPACE_DECISIONS_QUERY_KEY } from '@/cache/cache-events';
 import { removeStep } from '@/cache/domains/steps';
 import { removeTask } from '@/cache/domains/tasks';
 import { useOverlaysStore } from '@/stores/overlays';
@@ -31,7 +30,7 @@ export async function reconcilePrWorkspaceDeletion(
     }
     messages.clearAllRunCommandLogs(taskId);
     messages.setRunCommandRunning(taskId, false);
-    messages.clearPendingRequestForTask(taskId);
+    messages.clearPendingRequestForTask({ taskId });
     overlays.clearRunningCommandTargetForTask(taskId);
     removeTask(taskId);
     queryClient.removeQueries({ queryKey: ['tasks', taskId] });
@@ -39,10 +38,5 @@ export async function reconcilePrWorkspaceDeletion(
   }
 
   invalidateFeedResources(queryClient, ['tasks', 'workItems']);
-  await Promise.all([
-    queryClient.invalidateQueries({ queryKey: ['tasks'] }),
-    queryClient.invalidateQueries({
-      queryKey: PR_WORKSPACE_DECISIONS_QUERY_KEY,
-    }),
-  ]);
+  await queryClient.invalidateQueries({ queryKey: ['tasks'] });
 }

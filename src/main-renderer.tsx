@@ -1,9 +1,19 @@
-// Side-effect import: patches localStorage on evaluation. Must stay the FIRST
-// import in this file — module bodies run after their imports, so anything
-// evaluated earlier (react-scan, the persisted stores pulled in via ./app)
-// would read and write localStorage before the wrapper is installed.
+// Side-effect imports: both patch localStorage on evaluation, and must stay the
+// FIRST imports in this file — module bodies run after their imports, so
+// anything evaluated earlier (react-scan, the persisted stores pulled in via
+// ./app) would read and write localStorage before the patches are installed.
+//
+// Order between the two is load-bearing. Both wrap `setItem` on the
+// `localStorage` instance, each capturing whatever it resolves to at install
+// time, so the later install ends up outermost. Diagnostic first, guard second,
+// gives caller -> guard -> diagnostic -> real write: a withheld write is
+// withheld before the diagnostic reports it as written. Flip them and the guard
+// would sit underneath, so the diagnostic's captured reference would still reach
+// the real bucket.
 // eslint-disable-next-line import/order
 import './lib/debug-local-storage';
+// eslint-disable-next-line import/order
+import './lib/local-storage-boot-guard';
 
 import { createRoot } from 'react-dom/client';
 import { scan } from 'react-scan';

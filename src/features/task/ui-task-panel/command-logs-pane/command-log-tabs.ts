@@ -40,6 +40,7 @@ export function buildCommandLogTabs({
         sortOrder: Number.MAX_SAFE_INTEGER,
         confirmBeforeRun: false,
         confirmMessage: null,
+        isFavorite: false,
         createdAt: '',
       }),
     );

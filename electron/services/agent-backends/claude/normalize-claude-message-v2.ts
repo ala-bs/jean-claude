@@ -26,7 +26,12 @@ import type {
   NormalizedToolUse,
 } from '@shared/normalized-message-v2';
 
-import { normalizeToolRequest } from '../../permission-settings-service';
+import type { ResolvedPermissionRule } from '@shared/permission-types';
+
+import {
+  evaluatePermissionWithMatch,
+  normalizeToolRequest,
+} from '../../permission-settings-service';
 
 export type { NormalizationEvent };
 
@@ -37,13 +42,16 @@ export type NormalizationContext = {
   sessionIdEmitted: boolean;
   /** Tracks tool-use entries awaiting their result, keyed by toolId */
   pendingToolUses: Map<string, NormalizedEntry>;
-  /** Permission decisions made before SDK emits matching tool-use blocks. */
-  pendingToolPermissionDecisions?: ToolPermissionDecision[];
-};
-
-type ToolPermissionDecision = NonNullable<NormalizedToolUse['permission']> & {
-  tool: string;
-  matchValue: string;
+  /**
+   * Resolved permission rules for this session, used to attribute each tool
+   * use to the rule that allowed it.
+   *
+   * The SDK yields the assistant tool_use block *before* invoking `canUseTool`
+   * (and skips the callback entirely for tools it auto-allows), so the backend
+   * cannot hand us the decision in time — we re-evaluate the same rules here.
+   * When unset, every tool falls back to "allowed by agent".
+   */
+  permissionRules?: ResolvedPermissionRule[];
 };
 
 // --- Constants ---
@@ -167,8 +175,9 @@ function normalizeAssistantRaw(
         });
       }
     } else if (block.type === 'tool_use') {
-      const toolUse = mapToolUseBlock(block as ToolUseBlock, parentToolId);
-      toolUse.permission = consumePermissionDecision(ctx, toolUse);
+      const rawBlock = block as ToolUseBlock;
+      const toolUse = mapToolUseBlock(rawBlock, parentToolId);
+      toolUse.permission = resolveToolPermission(ctx, rawBlock);
       const entry = {
         id: nanoid(),
         date: new Date().toISOString(),
@@ -205,24 +214,41 @@ function normalizeAssistantRaw(
   return events;
 }
 
-function consumePermissionDecision(
+/**
+ * Resolve who allowed a tool use: a permission rule ('system') or the agent's
+ * own session-level allowance / user approval ('agent').
+ *
+ * Keyed on the RAW SDK block (name + input), not the mapped NormalizedToolUse.
+ * Permission rules are stored under raw-name keys (`webfetch`, `task`,
+ * `todowrite`, `mcp__server__tool`) while mapped names are display-oriented
+ * (`web-fetch`, `sub-agent`, `mcp`) — keying on the mapped name silently
+ * failed to match any rule for every non-core tool.
+ */
+function resolveToolPermission(
   ctx: NormalizationContext,
-  toolUse: NormalizedToolUse,
+  rawBlock: ToolUseBlock,
 ): NormalizedToolUse['permission'] {
-  const { tool, matchValue } = normalizeToolRequest(
-    toolUse.name,
-    (toolUse.input ?? {}) as Record<string, unknown>,
-  );
-  const decisions = (ctx.pendingToolPermissionDecisions ??= []);
-  const index = decisions.findIndex(
-    (decision) => decision.tool === tool && decision.matchValue === matchValue,
-  );
-  if (index === -1) return { allowedBy: 'agent' };
+  if (!ctx.permissionRules) return { allowedBy: 'agent' };
 
-  const [decision] = decisions.splice(index, 1);
-  return decision.rule
-    ? { allowedBy: decision.allowedBy, rule: decision.rule }
-    : { allowedBy: decision.allowedBy };
+  const rawInput = (rawBlock.input ?? {}) as Record<string, unknown>;
+  const { tool, matchValue } = normalizeToolRequest(rawBlock.name, rawInput);
+  const decision = evaluatePermissionWithMatch(
+    ctx.permissionRules,
+    tool,
+    matchValue,
+    tool === 'bash' ? String(rawInput.command ?? '') : undefined,
+  );
+  if (decision.action !== 'allow') return { allowedBy: 'agent' };
+
+  return decision.matchedRule
+    ? {
+        allowedBy: 'system',
+        rule: {
+          tool: decision.matchedRule.tool,
+          pattern: decision.matchedRule.pattern,
+        },
+      }
+    : { allowedBy: 'system' };
 }
 
 // --- User messages ---

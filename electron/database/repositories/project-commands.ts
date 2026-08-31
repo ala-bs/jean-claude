@@ -25,6 +25,7 @@ function parseRow(row: {
   envVars?: string;
   confirmBeforeRun: number;
   confirmMessage: string | null;
+  isFavorite?: number;
   sortOrder: number;
   createdAt: string;
 }): ProjectCommand {
@@ -41,6 +42,7 @@ function parseRow(row: {
     portOverrideArgs: row.portOverrideArgs ?? null,
     envVars: JSON.parse(row.envVars ?? '[]') as RunCommandEnvVar[],
     confirmBeforeRun: row.confirmBeforeRun === 1,
+    isFavorite: row.isFavorite === 1,
   };
 }
 
@@ -59,6 +61,29 @@ export const ProjectCommandRepository = {
       .selectFrom('project_commands')
       .selectAll()
       .where('projectId', '=', projectId)
+      .orderBy('sortOrder', 'asc')
+      .orderBy('createdAt', 'asc')
+      .execute();
+    return rows.map(parseRow);
+  },
+
+  /** Every command across all projects, used by the favorites picker. */
+  findAll: async (): Promise<ProjectCommand[]> => {
+    const rows = await db
+      .selectFrom('project_commands')
+      .selectAll()
+      .orderBy('sortOrder', 'asc')
+      .orderBy('createdAt', 'asc')
+      .execute();
+    return rows.map(parseRow);
+  },
+
+  /** Favorites across all projects, used by the running commands overlay. */
+  findFavorites: async (): Promise<ProjectCommand[]> => {
+    const rows = await db
+      .selectFrom('project_commands')
+      .selectAll()
+      .where('isFavorite', '=', 1)
       .orderBy('sortOrder', 'asc')
       .orderBy('createdAt', 'asc')
       .execute();
@@ -93,6 +118,7 @@ export const ProjectCommandRepository = {
         envVars: JSON.stringify(data.envVars ?? []),
         confirmBeforeRun: data.confirmBeforeRun ? 1 : 0,
         confirmMessage: data.confirmMessage ?? null,
+        isFavorite: data.isFavorite ? 1 : 0,
         sortOrder: sql<number>`(
           SELECT MAX(
             COALESCE((SELECT MAX(sortOrder) FROM project_commands WHERE projectId = ${data.projectId}), -1),
@@ -156,6 +182,8 @@ export const ProjectCommandRepository = {
       updateData.confirmBeforeRun = data.confirmBeforeRun ? 1 : 0;
     if (data.confirmMessage !== undefined)
       updateData.confirmMessage = data.confirmMessage;
+    if (data.isFavorite !== undefined)
+      updateData.isFavorite = data.isFavorite ? 1 : 0;
 
     const row = await db
       .updateTable('project_commands')

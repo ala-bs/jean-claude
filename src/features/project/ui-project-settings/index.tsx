@@ -58,6 +58,7 @@ import {
   useBackendModelPresetsSetting,
   useBackendsSetting,
   useProjectPromptPrefaceSetting,
+  usePromptPrefaceSetting,
   useUpdateProjectPromptPrefaceSetting,
 } from '@/hooks/use-settings';
 import {
@@ -93,6 +94,7 @@ import isEqual from 'lodash-es/isEqual';
 import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
 import { ProjectColorPicker } from '@/features/project/ui-project-color-picker';
+import { ProjectEnvSettings } from '@/features/project/ui-project-env-settings';
 import { ProjectLogo } from '@/features/project/ui-project-logo';
 import { ProjectLogoSuggestions } from '@/features/project/ui-project-logo-suggestions';
 import { ProjectMcpSettings } from '@/features/project/ui-project-mcp-settings';
@@ -120,12 +122,14 @@ import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-
 
 const PROMPT_PREFACE_MODE_OPTIONS = [
   { value: 'inherit', label: 'Use global' },
+  { value: 'extend', label: 'Extend global' },
   { value: 'override', label: 'Override global' },
 ];
 
 export type ProjectSettingsMenuItem =
   | 'details'
   | 'commit-ignore'
+  | 'env-vars'
   | 'permissions'
   | 'worktree'
   | 'feature-map'
@@ -150,6 +154,7 @@ function ProjectPromptPrefaceSettings({
 }) {
   const { data: setting, isLoading } =
     useProjectPromptPrefaceSetting(projectPath);
+  const { data: globalEntries } = usePromptPrefaceSetting();
   const updateSetting = useUpdateProjectPromptPrefaceSetting(projectPath);
 
   if (isLoading || !setting) {
@@ -157,14 +162,18 @@ function ProjectPromptPrefaceSettings({
   }
 
   const controlsDisabled = setting.mode === 'inherit';
+  const enabledGlobalCount = (globalEntries ?? []).filter(
+    (entry) => entry.enabled,
+  ).length;
 
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-ink-1 text-lg font-semibold">Prompt Preface</h2>
         <p className="text-ink-3 mt-1 text-sm">
-          Configure project instructions to inherit or replace global prompt
-          prefaces.
+          Configure project instructions to inherit, extend, or replace global
+          prompt prefaces. Extending runs project prefaces after the global ones
+          within the same placement.
         </p>
       </div>
 
@@ -184,6 +193,16 @@ function ProjectPromptPrefaceSettings({
           className="w-full justify-between sm:w-64"
         />
       </div>
+
+      {setting.mode === 'extend' && (
+        <p className="text-ink-3 text-sm">
+          {enabledGlobalCount === 0
+            ? 'No enabled global prefaces to extend — only the project prefaces below will run.'
+            : `${enabledGlobalCount} enabled global ${
+                enabledGlobalCount === 1 ? 'preface runs' : 'prefaces run'
+              } first, then the project prefaces below.`}
+        </p>
+      )}
 
       <PromptPrefaceList
         entries={setting.entries}
@@ -1707,6 +1726,9 @@ export function ProjectSettings({
       break;
     case 'commit-ignore':
       content = <ProjectCommitIgnoreSettings projectId={projectId} />;
+      break;
+    case 'env-vars':
+      content = <ProjectEnvSettings projectId={projectId} />;
       break;
     case 'permissions':
       content = <ProjectPermissionsSettings projectPath={project.path} />;

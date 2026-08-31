@@ -24,7 +24,6 @@ import {
 import type { AzureDevOpsWorkItem, WorkItemComment } from '@/lib/api';
 import {
   buildAttachedFilesXml,
-  MAX_FILES,
   processAttachmentFile,
   processAttachmentPath,
   processPastedPromptAttachment,
@@ -54,8 +53,8 @@ import { useToastStore } from '@/stores/toasts';
 
 
 
-import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
 import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
+import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
 
 const EMPTY_IMAGES: PromptImagePart[] = [];
 
@@ -732,11 +731,6 @@ export function PromptComposer({
         projectRoot
       ) {
         e.preventDefault();
-        const currentFileCount = files?.length ?? 0;
-        if (currentFileCount >= MAX_FILES) {
-          showImageError('Remove a file before attaching pasted content');
-          return;
-        }
 
         void processPastedPromptAttachment(
           pastedText,
@@ -747,7 +741,7 @@ export function PromptComposer({
         return;
       }
     },
-    [onImageAttach, onFileAttach, images, files, projectRoot, showImageError],
+    [onImageAttach, onFileAttach, images, projectRoot, showImageError],
   );
 
   const handleDragOver = useCallback(
@@ -800,12 +794,10 @@ export function PromptComposer({
 
       // Handle non-image files
       if (onFileAttach && projectRoot) {
-        const currentFileCount = files?.length ?? 0;
-        const allowedFiles = MAX_FILES - currentFileCount;
         const nonImageFiles = droppedFiles.filter(
           (f) => !f.type.startsWith('image/') && !isVideoFile(f),
         );
-        for (const file of nonImageFiles.slice(0, allowedFiles)) {
+        for (const file of nonImageFiles) {
           void processAttachmentFile(
             file,
             projectRoot,
@@ -815,7 +807,7 @@ export function PromptComposer({
         }
       }
     },
-    [onImageAttach, onFileAttach, images, files, projectRoot, showImageError],
+    [onImageAttach, onFileAttach, images, projectRoot, showImageError],
   );
 
   const handleFileSelect = useCallback(
@@ -850,14 +842,11 @@ export function PromptComposer({
 
   const handleOpenFilePicker = useCallback(async () => {
     if (!onFileAttach || !projectRoot) return;
-    const currentFileCount = files?.length ?? 0;
-    const allowed = MAX_FILES - currentFileCount;
-    if (allowed <= 0) return;
 
     const selectedPaths = await window.api.dialog.openFiles();
     if (!selectedPaths) return;
 
-    for (const sourcePath of selectedPaths.slice(0, allowed)) {
+    for (const sourcePath of selectedPaths) {
       void processAttachmentPath(
         sourcePath,
         projectRoot,
@@ -865,7 +854,7 @@ export function PromptComposer({
         showImageError,
       );
     }
-  }, [onFileAttach, files, projectRoot, showImageError]);
+  }, [onFileAttach, projectRoot, showImageError]);
 
   const handleFileCreate = useCallback(
     async (filename: string, content: string) => {
@@ -1182,6 +1171,7 @@ export function PromptComposer({
               maxHeight="500px"
               featureMap={featureMap}
               onPaste={handlePaste}
+              moveCursorBelowPaste
             />
           </div>
           <div className="border-glass-border bg-section-strip border-t px-4 py-2">
@@ -1248,7 +1238,7 @@ export function PromptComposer({
       {/* File chips */}
       {files && files.length > 0 && (
         <div
-          className="flex shrink-0 flex-wrap items-center gap-2 px-[18px] py-2"
+          className="flex max-h-24 shrink-0 flex-wrap items-center gap-2 overflow-y-auto px-[18px] py-2"
           style={{ borderTop: '1px solid var(--color-glass-border)' }}
         >
           {files.map((file, index) => (

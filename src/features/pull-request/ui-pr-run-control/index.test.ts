@@ -119,6 +119,7 @@ function buildCommand(overrides: Partial<ProjectCommand> = {}): ProjectCommand {
     envVars: [],
     confirmBeforeRun: false,
     confirmMessage: null,
+    isFavorite: false,
     sortOrder: 0,
     createdAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -957,12 +958,16 @@ describe('RunningCommandsOverlay target', () => {
     flushSync(() => {
       root?.render(
         createElement(
-          RootOverlay,
-          null,
+          QueryClientProvider,
+          { client: queryClient },
           createElement(
-            RootKeyboardBindings,
+            RootOverlay,
             null,
-            createElement(RunningCommandsOverlay, { onClose: vi.fn() }),
+            createElement(
+              RootKeyboardBindings,
+              null,
+              createElement(RunningCommandsOverlay, { onClose: vi.fn() }),
+            ),
           ),
         ),
       );
@@ -1017,12 +1022,16 @@ describe('RunningCommandsOverlay target', () => {
     flushSync(() => {
       root?.render(
         createElement(
-          RootOverlay,
-          null,
+          QueryClientProvider,
+          { client: queryClient },
           createElement(
-            RootKeyboardBindings,
+            RootOverlay,
             null,
-            createElement(RunningCommandsOverlay, { onClose: vi.fn() }),
+            createElement(
+              RootKeyboardBindings,
+              null,
+              createElement(RunningCommandsOverlay, { onClose: vi.fn() }),
+            ),
           ),
         ),
       );
@@ -1069,12 +1078,16 @@ describe('RunningCommandsOverlay target', () => {
     flushSync(() => {
       root?.render(
         createElement(
-          RootOverlay,
-          null,
+          QueryClientProvider,
+          { client: queryClient },
           createElement(
-            RootKeyboardBindings,
+            RootOverlay,
             null,
-            createElement(RunningCommandsOverlay, { onClose: vi.fn() }),
+            createElement(
+              RootKeyboardBindings,
+              null,
+              createElement(RunningCommandsOverlay, { onClose: vi.fn() }),
+            ),
           ),
         ),
       );

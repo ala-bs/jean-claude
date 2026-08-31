@@ -26,6 +26,8 @@ import type {
 } from '@shared/permission-types';
 import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
 
+import { EXTERNAL_DIRECTORY_TOOL } from '@/features/common/ui-external-directories';
+
 import { Button } from '@/common/ui/button';
 import { Input } from '@/common/ui/input';
 import { Select } from '@/common/ui/select';
@@ -254,6 +256,8 @@ function groupPermissions(scope: PermissionScope): ToolGroup[] {
     // Pseudo-tool owned by the "Auto-allow script edits" switch — showing it
     // as a raw rule row would duplicate that control.
     if (tool === SCRIPT_EDIT_TOOL) continue;
+    // Pseudo-tool owned by the "External directories" list editor.
+    if (tool === EXTERNAL_DIRECTORY_TOOL) continue;
     if (!groups.has(tool)) groups.set(tool, []);
     const bucket = groups.get(tool)!;
 

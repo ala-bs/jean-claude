@@ -7,8 +7,8 @@ import {
   useRef,
   useState,
 } from 'react';
-import { createPortal } from 'react-dom';
 import clsx from 'clsx';
+import { createPortal } from 'react-dom';
 import type { TextareaHTMLAttributes } from 'react';
 
 const DROPDOWN_MAX_HEIGHT = 192;

@@ -1,9 +1,9 @@
 import type { RefObject } from 'react';
 
 import { Button } from '@/common/ui/button';
-import { Select } from '@/common/ui/select';
-import { EmptyState } from '../ui-common';
 import { cleanPreviewError } from '../utils-preview-error';
+import { EmptyState } from '../ui-common';
+import { Select } from '@/common/ui/select';
 
 type DevToolsTarget = {
   id: string;

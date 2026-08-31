@@ -25,12 +25,18 @@ type CopilotSessionLike = {
   disconnect(): Promise<void>;
 };
 
-export function createCopilotClient({ cwd }: { cwd: string }): CopilotClientLike {
+export function createCopilotClient({
+  cwd,
+  env,
+}: {
+  cwd: string;
+  env?: Record<string, string>;
+}): CopilotClientLike {
   const cliPath = resolveCopilotCliPath();
   return new CopilotClient({
     workingDirectory: cwd,
     useLoggedInUser: true,
-    env: getChildProcessEnv(),
+    env: getChildProcessEnv({ overrides: env }),
     ...(cliPath ? { connection: RuntimeConnection.forStdio({ path: cliPath }) } : {}),
   }) as CopilotClientLike;
 }

@@ -1,6 +1,6 @@
+import { Loader2, MoreHorizontal, RefreshCw } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Loader2, MoreHorizontal, RefreshCw } from 'lucide-react';
 
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import { skillsQueryKeys } from '@/hooks/use-skills';

@@ -43,14 +43,13 @@ import {
   type PreparedProjectFeatures,
   prepareProjectFeatureReferences,
 } from '@/lib/prompt-feature-context';
+import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import {
-  MAX_FILES,
   processAttachmentFile,
   processAttachmentPath,
   processPastedPromptAttachment,
   shouldAttachPastedPromptContent,
 } from '@/lib/file-attachment-utils';
-import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import type { ProjectFeatureMap, PromptSnippet } from '@shared/types';
 import type {
   PromptFilePart,
@@ -76,6 +75,61 @@ const COMMANDS = [
 ];
 
 const FILE_SUGGESTION_LIMIT = 8;
+
+/**
+ * Tokens that count as an "exact" slash option (command, snippet slug, skill).
+ * Used to skip opening the autocomplete menu when a pasted `/foo` already
+ * matches an option exactly.
+ */
+export function getSlashOptionTokens({
+  showCommands,
+  promptSnippets,
+  skills,
+}: {
+  showCommands: boolean;
+  promptSnippets: PromptSnippet[];
+  skills: Skill[];
+}): Set<string> {
+  const tokens = new Set<string>();
+  if (showCommands) {
+    for (const { command } of COMMANDS) {
+      tokens.add(command.replace(/^\//, '').toLowerCase());
+    }
+  }
+  for (const snippet of promptSnippets) {
+    if (!snippet.enabled || !snippet.autocomplete.enabled) continue;
+    const slugs = snippet.autocomplete.slugs
+      .map((slug) => slug.trim())
+      .filter(Boolean);
+    // Mirrors the dropdown filter: a snippet only shows up if it has a slug,
+    // and it is searchable by both its slugs and its name.
+    if (slugs.length === 0) continue;
+    for (const slug of slugs) tokens.add(slug.toLowerCase());
+    const name = snippet.name.trim();
+    if (name) tokens.add(name.toLowerCase());
+  }
+  for (const skill of skills) {
+    tokens.add(skill.name.toLowerCase());
+  }
+  return tokens;
+}
+
+/**
+ * True while the input still holds exactly the text/caret produced by an
+ * exact-match slash paste — any further edit or caret move releases it.
+ */
+export function isSlashPasteSuppressed({
+  snapshot,
+  value,
+  cursorPosition,
+}: {
+  snapshot: { value: string; cursorPosition: number } | null;
+  value: string;
+  cursorPosition: number;
+}): boolean {
+  if (!snapshot) return false;
+  return snapshot.value === value && snapshot.cursorPosition === cursorPosition;
+}
 
 function getActiveMentionToken({
   text,
@@ -370,6 +424,10 @@ export const PromptTextarea = forwardRef<
 ) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [dropdownDismissed, setDropdownDismissed] = useState(false);
+  const [pastedSlashSnapshot, setPastedSlashSnapshot] = useState<{
+    value: string;
+    cursorPosition: number;
+  } | null>(null);
   const [cursorPosition, setCursorPosition] = useState(0);
   const [completionTriggerId, setCompletionTriggerId] = useState(0);
   const [completionCursorPosition, setCompletionCursorPosition] = useState(0);
@@ -415,8 +473,16 @@ export const PromptTextarea = forwardRef<
   const showMentionDropdown = !!activeMentionToken && !dropdownDismissed;
   const showFeatureDropdown =
     !!activeFeatureToken && !showMentionDropdown && !dropdownDismissed;
+  // Suppresses the slash menu for an exact-match paste, until the text or
+  // caret moves again. Slash-only, so @/# dropdowns stay unaffected.
+  const slashPasteSuppressed = isSlashPasteSuppressed({
+    snapshot: pastedSlashSnapshot,
+    value,
+    cursorPosition,
+  });
   const showSlashDropdown =
     !!activeSlashToken &&
+    !slashPasteSuppressed &&
     !showMentionDropdown &&
     !showFeatureDropdown &&
     !dropdownDismissed;
@@ -573,6 +639,11 @@ export const PromptTextarea = forwardRef<
     isCompletionLoading,
     completion,
   ]);
+
+  const slashOptionTokens = useMemo(
+    () => getSlashOptionTokens({ showCommands, promptSnippets, skills }),
+    [showCommands, promptSnippets, skills],
+  );
 
   // Filter slash commands/skills or @file path suggestions
   const filteredItems = useMemo((): RankedDropdownItem[] => {
@@ -1041,11 +1112,6 @@ export const PromptTextarea = forwardRef<
         projectRoot
       ) {
         e.preventDefault();
-        const currentFileCount = files?.length ?? 0;
-        if (currentFileCount >= MAX_FILES) {
-          showImageError('Remove a file before attaching pasted content');
-          return;
-        }
 
         void processPastedPromptAttachment(
           pastedText,
@@ -1069,6 +1135,19 @@ export const PromptTextarea = forwardRef<
       e.preventDefault();
       const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
       const nextCursorPosition = selectionStart + insertion.length;
+      // Pasting a slash command that already exactly matches an option should
+      // not pop the autocomplete menu — there is nothing left to pick.
+      const pastedSlashToken = getActiveSlashToken({
+        text: nextValue,
+        cursorPosition: nextCursorPosition,
+      });
+      setPastedSlashSnapshot(
+        pastedSlashToken &&
+          slashOptionTokens.has(pastedSlashToken.query.toLowerCase())
+          ? { value: nextValue, cursorPosition: nextCursorPosition }
+          : null,
+      );
+
       onChange(nextValue);
       setCursorPosition(nextCursorPosition);
       setCompletionCursorPosition(nextCursorPosition);
@@ -1086,10 +1165,10 @@ export const PromptTextarea = forwardRef<
       showImageError,
       onFileAttach,
       projectRoot,
-      files,
       value,
       onChange,
       dismiss,
+      slashOptionTokens,
     ],
   );
 
@@ -1140,12 +1219,10 @@ export const PromptTextarea = forwardRef<
 
       // Handle non-image files
       if (onFileAttach && projectRoot) {
-        const currentFileCount = files?.length ?? 0;
-        const allowedFiles = MAX_FILES - currentFileCount;
         const nonImageFiles = droppedFiles.filter(
           (f) => !f.type.startsWith('image/'),
         );
-        for (const file of nonImageFiles.slice(0, allowedFiles)) {
+        for (const file of nonImageFiles) {
           void processAttachmentFile(
             file,
             projectRoot,
@@ -1155,7 +1232,7 @@ export const PromptTextarea = forwardRef<
         }
       }
     },
-    [onImageAttach, onFileAttach, images, files, projectRoot, showImageError],
+    [onImageAttach, onFileAttach, images, projectRoot, showImageError],
   );
 
   const handleFileSelect = useCallback(
@@ -1184,14 +1261,10 @@ export const PromptTextarea = forwardRef<
   const handleOpenFilePicker = useCallback(async () => {
     if (!onFileAttach || !projectRoot) return;
 
-    const currentFileCount = files?.length ?? 0;
-    const allowedFiles = MAX_FILES - currentFileCount;
-    if (allowedFiles <= 0) return;
-
     const selectedPaths = await window.api.dialog.openFiles();
     if (!selectedPaths) return;
 
-    for (const sourcePath of selectedPaths.slice(0, allowedFiles)) {
+    for (const sourcePath of selectedPaths) {
       void processAttachmentPath(
         sourcePath,
         projectRoot,
@@ -1199,7 +1272,7 @@ export const PromptTextarea = forwardRef<
         showImageError,
       );
     }
-  }, [onFileAttach, files, projectRoot, showImageError]);
+  }, [onFileAttach, projectRoot, showImageError]);
 
   const handleFileCreate = useCallback(
     async (filename: string, content: string) => {
@@ -1777,7 +1850,7 @@ function FileThumbnails({
   onFileRemove?: (index: number) => void;
 }) {
   return (
-    <div className="mt-2 flex flex-wrap gap-2">
+    <div className="mt-2 flex max-h-24 flex-wrap gap-2 overflow-y-auto">
       {files.map((file, index) => (
         <div
           key={`${file.filename}-${index}`}

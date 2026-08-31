@@ -3,7 +3,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  File,
   Folder,
   MessageCircle,
   PenLine,
@@ -11,8 +10,11 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 
+import { ContextMenu, type ContextMenuItem } from './context-menu';
 import type { DiffFile, DiffFileStatus } from './types';
+import type { AutoReviewRule } from '@shared/types';
 import { getStatusIndicator } from './status-badge';
+import { hexToRgba } from '@/lib/colors';
 import { ReviewCheck } from './review-check';
 import type { ReviewedTreatment } from '@/stores/diff-review';
 import { selectionAfterClick } from './utils-selection';
@@ -107,6 +109,10 @@ export function DiffFileTree({
   stalePaths,
   onToggleReviewed,
   reviewedTreatment = 'dim',
+  autoReviewedBy,
+  ignoredPaths,
+  patternIgnoredPaths,
+  onToggleIgnored,
 }: {
   files: DiffFile[];
   selectedPath: string | null;
@@ -128,6 +134,19 @@ export function DiffFileTree({
   stalePaths?: Set<string>;
   onToggleReviewed?: (paths: string[], reviewed: boolean) => void;
   reviewedTreatment?: ReviewedTreatment;
+  /**
+   * Paths auto-marked by a review rule, mapped to the rule that claimed them,
+   * so the row can carry that rule's color.
+   */
+  autoReviewedBy?: Map<string, AutoReviewRule>;
+  /** Paths excluded from staging/commit. Enables the right-click ignore menu. */
+  ignoredPaths?: ReadonlySet<string>;
+  /**
+   * Ignored via a glob rather than their own literal line — un-ignoring them
+   * from a row is not possible, so the menu says so instead.
+   */
+  patternIgnoredPaths?: ReadonlySet<string>;
+  onToggleIgnored?: (paths: string[], ignored: boolean) => void;
 }) {
   const showReview = Boolean(reviewedPaths && onToggleReviewed);
   const hiddenFiles = useMemo(() => {
@@ -238,6 +257,72 @@ export function DiffFileTree({
     [selection, selectionSet, onToggleReviewed],
   );
 
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    paths: string[];
+  } | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+
+  /** Right-click targets the whole selection when the row is part of it. */
+  const handleRowContextMenu = useCallback(
+    (path: string, event: React.MouseEvent) => {
+      if (!onToggleIgnored) return;
+      event.preventDefault();
+      const inSelection = selectionSet.has(path);
+      // Right-clicking outside the selection acts on that row alone, so the
+      // stale highlight elsewhere would misrepresent what the menu will do.
+      if (!inSelection) setSelectedPaths([]);
+      setMenu({
+        x: event.clientX,
+        y: event.clientY,
+        paths: inSelection ? selection : [path],
+      });
+    },
+    [onToggleIgnored, selection, selectionSet],
+  );
+
+  const menuItems = useMemo<ContextMenuItem[]>(() => {
+    if (!menu || !onToggleIgnored) return [];
+    const { paths } = menu;
+    const notIgnored = paths.filter((path) => !ignoredPaths?.has(path));
+    // A path held by a glob can't be released by deleting its own line, so it
+    // is excluded from the un-ignore action rather than disabling the whole
+    // menu for the rest of a mixed selection.
+    const removable = paths.filter(
+      (path) => ignoredPaths?.has(path) && !patternIgnoredPaths?.has(path),
+    );
+    const lockedCount = paths.length - notIgnored.length - removable.length;
+    const count = (paths: string[]) =>
+      paths.length > 1 ? ` (${paths.length} files)` : '';
+
+    const items: ContextMenuItem[] = [];
+    if (notIgnored.length > 0) {
+      items.push({
+        label: `Ignore for commit${count(notIgnored)}`,
+        onSelect: () => onToggleIgnored(notIgnored, true),
+      });
+    }
+    if (removable.length > 0) {
+      items.push({
+        label: `Include in commit${count(removable)}`,
+        onSelect: () => onToggleIgnored(removable, false),
+      });
+    }
+    if (lockedCount > 0) {
+      items.push({
+        label:
+          lockedCount > 1
+            ? `${lockedCount} ignored by a pattern rule`
+            : 'Ignored by a pattern rule',
+        hint: 'settings',
+        disabled: true,
+        onSelect: () => {},
+      });
+    }
+    return items;
+  }, [menu, onToggleIgnored, ignoredPaths, patternIgnoredPaths]);
+
   // Escape drops a multi-selection without touching the opened file.
   useEffect(() => {
     if (selection.length < 2) return;
@@ -322,16 +407,29 @@ export function DiffFileTree({
           stalePaths={stalePaths}
           onToggleReviewed={onToggleReviewed}
           onToggleRowReviewed={handleToggleRowReviewed}
+          autoReviewedBy={autoReviewedBy}
           filePathsUnder={filePathsUnder}
           selectedPaths={selectionSet}
           onRowClick={handleRowClick}
+          onRowContextMenu={onToggleIgnored ? handleRowContextMenu : undefined}
+          ignoredPaths={ignoredPaths}
         />
       ))}
+      {menu && menuItems.length > 0 && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems}
+          onClose={closeMenu}
+        />
+      )}
       {reviewedTreatment === 'bottom' && hiddenFiles.length > 0 && (
         <ReviewedGroup
           files={hiddenFiles}
           onSelectFile={onSelectFile}
           onToggleReviewed={onToggleReviewed}
+          onRowContextMenu={onToggleIgnored ? handleRowContextMenu : undefined}
+          ignoredPaths={ignoredPaths}
         />
       )}
       {reviewedTreatment === 'hide' && hiddenFiles.length > 0 && (
@@ -348,10 +446,14 @@ function ReviewedGroup({
   files,
   onSelectFile,
   onToggleReviewed,
+  onRowContextMenu,
+  ignoredPaths,
 }: {
   files: DiffFile[];
   onSelectFile: (path: string) => void;
   onToggleReviewed?: (paths: string[], reviewed: boolean) => void;
+  onRowContextMenu?: (path: string, event: React.MouseEvent) => void;
+  ignoredPaths?: ReadonlySet<string>;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   return (
@@ -374,18 +476,35 @@ function ReviewedGroup({
           <button
             key={file.path}
             onClick={() => onSelectFile(file.path)}
-            className="text-ink-2 hover:bg-glass-medium/50 flex h-[24px] w-full items-center gap-1.5 pr-2 pl-6 text-left text-xs opacity-60"
+            onContextMenu={
+              onRowContextMenu
+                ? (event) => onRowContextMenu(file.path, event)
+                : undefined
+            }
+            data-commit-ignored={ignoredPaths?.has(file.path) || undefined}
+            title={
+              ignoredPaths?.has(file.path)
+                ? 'Ignored — will not be staged or committed'
+                : undefined
+            }
+            className={clsx(
+              'text-ink-2 hover:bg-glass-medium/50 flex h-[24px] w-full items-center gap-1.5 pr-2 pl-6 text-left text-xs',
+              ignoredPaths?.has(file.path) ? 'opacity-25' : 'opacity-60',
+            )}
           >
-            <ReviewCheck
-              checked
-              size={13}
-              onToggle={(next) => onToggleReviewed?.([file.path], next)}
-            />
             <span className="min-w-0 truncate" title={file.path}>
               <span className="text-ink-4">
                 {file.path.slice(0, file.path.lastIndexOf('/') + 1)}
               </span>
               {getFileName(file.path)}
+            </span>
+            {/* Right-aligned to share a column with the main tree's checks. */}
+            <span className="ml-auto flex shrink-0 items-center pl-1.5">
+              <ReviewCheck
+                checked
+                size={13}
+                onToggle={(next) => onToggleReviewed?.([file.path], next)}
+              />
             </span>
           </button>
         ))}
@@ -411,9 +530,12 @@ function TreeNodeRow({
   stalePaths,
   onToggleReviewed,
   onToggleRowReviewed,
+  autoReviewedBy,
   filePathsUnder,
   selectedPaths,
   onRowClick,
+  onRowContextMenu,
+  ignoredPaths,
 }: {
   node: TreeNode;
   depth: number;
@@ -434,9 +556,12 @@ function TreeNodeRow({
   stalePaths?: Set<string>;
   onToggleReviewed?: (paths: string[], reviewed: boolean) => void;
   onToggleRowReviewed: (path: string, reviewed: boolean) => void;
+  autoReviewedBy?: Map<string, AutoReviewRule>;
   filePathsUnder: (folderPath: string) => string[];
   selectedPaths: Set<string>;
   onRowClick: (path: string, event: React.MouseEvent) => void;
+  onRowContextMenu?: (path: string, event: React.MouseEvent) => void;
+  ignoredPaths?: ReadonlySet<string>;
 }) {
   const indent = 10;
   const paddingLeft = 8 + depth * indent;
@@ -529,9 +654,12 @@ function TreeNodeRow({
               stalePaths={stalePaths}
               onToggleReviewed={onToggleReviewed}
               onToggleRowReviewed={onToggleRowReviewed}
+              autoReviewedBy={autoReviewedBy}
               filePathsUnder={filePathsUnder}
               selectedPaths={selectedPaths}
               onRowClick={onRowClick}
+              onRowContextMenu={onRowContextMenu}
+              ignoredPaths={ignoredPaths}
             />
           ))}
       </div>
@@ -551,42 +679,72 @@ function TreeNodeRow({
   const isReviewed = reviewedPaths?.has(node.path) ?? false;
   const isStale = stalePaths?.has(node.path) ?? false;
   const isMultiSelected = selectedPaths.size > 1 && selectedPaths.has(node.path);
+  const autoRule = autoReviewedBy?.get(node.path);
+  const isIgnored = ignoredPaths?.has(node.path) ?? false;
+  // The rule still tints the row once un-checked — that is the point of the
+  // color, to say "this matched a rule" rather than "this is reviewed".
+  const autoRuleLabel = autoRule
+    ? `Auto-reviewed by ${autoRule.label?.trim() || autoRule.pattern}`
+    : undefined;
 
   return (
     <button
       onClick={(event) => onRowClick(node.path, event)}
+      onContextMenu={
+        onRowContextMenu
+          ? (event) => onRowContextMenu(node.path, event)
+          : undefined
+      }
       aria-current={isSelected ? 'true' : undefined}
       aria-selected={isMultiSelected || undefined}
       data-file-path={node.path}
+      data-commit-ignored={isIgnored || undefined}
+      title={
+        isIgnored ? 'Ignored — will not be staged or committed' : autoRuleLabel
+      }
       className={clsx(
         'relative flex h-[26px] w-full items-center gap-1.5 px-2 text-left text-[13px] transition-colors',
+        isIgnored && 'opacity-40',
         isSelected
           ? 'text-ink-0 bg-glass-medium shadow-[inset_2px_0_0_var(--acc)]'
           : isMultiSelected
             ? 'bg-acc-soft text-ink-0'
-            : isReviewed && !isStale
-              ? 'text-status-done bg-status-done-soft hover:bg-status-done-soft'
-              : 'text-ink-1 hover:bg-glass-medium/50',
+            : autoRule
+              ? 'text-ink-1'
+              : isReviewed && !isStale
+                ? 'text-status-done bg-status-done-soft hover:bg-status-done-soft'
+                : 'text-ink-1 hover:bg-glass-medium/50',
       )}
-      style={{ paddingLeft: 8 + depth * indent + (showReview ? 6 : 21) }}
+      style={{
+        // The left gutter now always holds the change indicator, so the offset
+        // no longer depends on whether review checkboxes are shown.
+        paddingLeft: 8 + depth * indent + 6,
+        // Selection has to stay legible, so it keeps its own background and the
+        // rule tint sits out those rows.
+        ...(autoRule && !isSelected && !isMultiSelected
+          ? { backgroundColor: hexToRgba(autoRule.color, 0.18) }
+          : undefined),
+      }}
     >
       {guides}
-      {showReview ? (
-        <ReviewCheck
-          checked={isReviewed}
-          stale={isStale}
-          size={14}
-          title={
-            isMultiSelected
-              ? `${isReviewed ? 'Unmark' : 'Mark'} ${selectedPaths.size} selected files`
-              : undefined
-          }
-          onToggle={(next) => onToggleRowReviewed(node.path, next)}
-        />
-      ) : (
-        <File className="text-ink-3 h-[15px] w-[15px] shrink-0" aria-hidden />
-      )}
-      <span className={clsx('min-w-0 truncate', node.status === 'deleted' && 'line-through')}>
+      {/* Change indicator leads the row: it says what happened to the file,
+          which is worth more at a glance than a generic file glyph. Fixed
+          width so names stay aligned whatever the letter. */}
+      <span
+        className={clsx(
+          'w-[14px] shrink-0 text-center font-mono text-[11px] font-semibold',
+          statusIndicator.color,
+        )}
+        aria-hidden={statusIndicator.label ? undefined : true}
+      >
+        {statusIndicator.label}
+      </span>
+      <span
+        className={clsx(
+          'min-w-0 truncate',
+          node.status === 'deleted' && 'line-through',
+        )}
+      >
         {node.name}
       </span>
       {node.status === 'renamed' && node.originalPath && (
@@ -644,9 +802,21 @@ function TreeNodeRow({
           {llmThreadCount}
         </span>
       )}
-      <span className={clsx('ml-auto shrink-0 font-mono text-[13px] font-semibold', statusIndicator.color)}>
-        {statusIndicator.label}
-      </span>
+      {showReview && (
+        <span className="ml-auto flex shrink-0 items-center pl-1.5">
+          <ReviewCheck
+            checked={isReviewed}
+            stale={isStale}
+            size={14}
+            title={
+              isMultiSelected
+                ? `${isReviewed ? 'Unmark' : 'Mark'} ${selectedPaths.size} selected files`
+                : undefined
+            }
+            onToggle={(next) => onToggleRowReviewed(node.path, next)}
+          />
+        </span>
+      )}
     </button>
   );
 }

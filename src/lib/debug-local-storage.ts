@@ -83,6 +83,25 @@ function installLocalStorageDebug(): void {
 
   if (verbose) logSnapshot('boot');
 
+  /**
+   * Every persisted store coming up empty at once points at the bucket, not at
+   * the stores. Two very different causes, so name the likely one per origin:
+   * on `file://` (packaged / `pnpm preview`) the bucket is stable, so an empty
+   * one means the last session's writes never reached disk — e.g. a hard
+   * `app.exit()` that skipped Chromium's DOMStorage commit. On `http://` (dev)
+   * the far more common cause is the dev server moving to another port, since
+   * localStorage is keyed by origin.
+   */
+  if (lastSize.size === 0) {
+    const cause =
+      window.location.protocol === 'file:'
+        ? 'first run, or the previous session exited before its writes were committed to disk'
+        : 'first run, or the origin changed (dev server port moved) and previously persisted state lives under the old origin';
+    console.warn(
+      `${PREFIX} localStorage is empty at boot for origin=${window.location.origin} — ${cause}`,
+    );
+  }
+
   const rawSetItem = localStorage.setItem.bind(localStorage);
   const rawRemoveItem = localStorage.removeItem.bind(localStorage);
   const rawClear = localStorage.clear.bind(localStorage);

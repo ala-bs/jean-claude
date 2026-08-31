@@ -194,6 +194,64 @@ describe('Codex app server process manager', () => {
     expect(mocks.clientInstances).toHaveLength(1);
   });
 
+  it('gives projects with different env their own server', async () => {
+    const firstProc = createFakeProcess();
+    const secondProc = createFakeProcess();
+    mocks.spawn.mockReturnValueOnce(firstProc).mockReturnValueOnce(secondProc);
+
+    const a = await getOrCreateCodexAppServer({ TOKEN: 'project-a' });
+    const b = await getOrCreateCodexAppServer({ TOKEN: 'project-b' });
+
+    expect(b).not.toBe(a);
+    expect(mocks.spawn).toHaveBeenCalledTimes(2);
+    // Each process must carry only its own project's value.
+    expect(mocks.spawn.mock.calls[0][2].env.TOKEN).toBe('project-a');
+    expect(mocks.spawn.mock.calls[1][2].env.TOKEN).toBe('project-b');
+  });
+
+  it('shares one server between projects whose env matches', async () => {
+    const proc = createFakeProcess();
+    mocks.spawn.mockReturnValue(proc);
+
+    const first = await getOrCreateCodexAppServer({ A: '1', B: '2' });
+    // Same pairs, different insertion order — must hit the same pool entry.
+    const second = await getOrCreateCodexAppServer({ B: '2', A: '1' });
+
+    expect(second).toBe(first);
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps env-less callers on the shared server', async () => {
+    const proc = createFakeProcess();
+    mocks.spawn.mockReturnValue(proc);
+
+    const first = await getOrCreateCodexAppServer();
+    const second = await getOrCreateCodexAppServer({});
+
+    expect(second).toBe(first);
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not evict another env pool when one startup fails', async () => {
+    const healthyProc = createFakeProcess();
+    const failingProc = createFakeProcess();
+    mocks.spawn
+      .mockReturnValueOnce(healthyProc)
+      .mockReturnValueOnce(failingProc);
+
+    const healthy = await getOrCreateCodexAppServer({ TOKEN: 'good' });
+
+    mocks.requestImplementations.push(() =>
+      Promise.reject(new Error('initialize failed')),
+    );
+    await expect(
+      getOrCreateCodexAppServer({ TOKEN: 'bad' }),
+    ).rejects.toThrow('initialize failed');
+
+    // The healthy pool entry must survive its neighbour's failure.
+    expect(await getOrCreateCodexAppServer({ TOKEN: 'good' })).toBe(healthy);
+  });
+
   it('resets singleton on startup failure', async () => {
     const firstProc = createFakeProcess();
     const secondProc = createFakeProcess();

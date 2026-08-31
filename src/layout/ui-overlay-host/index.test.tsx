@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 
 import { type OverlayType, useOverlaysStore } from '@/stores/overlays';
-import { ClosedPrWorkspaceModal } from '@/features/pull-request/ui-closed-pr-workspace-modal';
+import { Modal } from '@/common/ui/modal';
 import { ModalArbitrationProvider } from '@/common/context/modal-arbitration';
 import { OverlayHost } from '@/layout/ui-overlay-host';
 import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
@@ -13,27 +13,22 @@ import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('@/hooks/use-pr-workspace-decisions', () => ({
-  usePrWorkspaceDecisions: () => ({
-    data: [
-      {
-        key: 'project-1:41',
-        projectId: 'project-1',
-        pullRequestId: 41,
-        taskIds: ['task-1'],
-      },
-    ],
-    error: null,
-    isFetching: false,
-    refetch: vi.fn(),
-  }),
-  useResolvePrWorkspaceDecision: () => ({
-    error: null,
-    isPending: false,
-    mutateAsync: vi.fn(),
-    variables: undefined,
-  }),
-}));
+// Stands in for an always-mounted, lowest-priority global modal.
+function GlobalBackgroundModal() {
+  return (
+    <Modal
+      isOpen
+      onClose={() => {}}
+      closeOnClickOutside={false}
+      closeOnEscape={false}
+      showHeader={false}
+      arbitrationPriority={0}
+      ariaLabel="Global background modal"
+    >
+      <p>Global background modal</p>
+    </Modal>
+  );
+}
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => vi.fn(),
@@ -78,7 +73,7 @@ describe('OverlayHost modal arbitration', () => {
       root.render(
         <RootKeyboardBindings>
           <ModalArbitrationProvider>
-            <ClosedPrWorkspaceModal />
+            <GlobalBackgroundModal />
             <OverlayHost />
           </ModalArbitrationProvider>
         </RootKeyboardBindings>,
@@ -97,24 +92,24 @@ describe('OverlayHost modal arbitration', () => {
     ['calendar', 'Calendar overlay'],
     ['resources', 'Resources overlay'],
   ] as const)(
-    'preempts and resumes the closed PR modal through the real %s store path',
+    'preempts and resumes the global modal through the real %s store path',
     async (overlay: OverlayType, label: string) => {
       await vi.waitFor(() => {
-        expect(document.body.textContent).toContain('Pull request #41 is closed');
+        expect(document.body.textContent).toContain('Global background modal');
       });
 
       act(() => useOverlaysStore.getState().open(overlay));
       await vi.waitFor(() => {
         expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
         expect(document.body.textContent).toContain(label);
-        expect(document.body.textContent).not.toContain('Pull request #41 is closed');
+        expect(document.body.textContent).not.toContain('Global background modal');
       });
 
       act(() => {
         document.querySelector<HTMLButtonElement>('button')?.click();
       });
       await vi.waitFor(() => {
-        expect(document.body.textContent).toContain('Pull request #41 is closed');
+        expect(document.body.textContent).toContain('Global background modal');
         expect(document.body.textContent).not.toContain(label);
       });
     },
@@ -129,7 +124,7 @@ describe('OverlayHost modal arbitration', () => {
     });
 
     await vi.waitFor(() => {
-      expect(document.body.textContent).toContain('Pull request #41 is closed');
+      expect(document.body.textContent).toContain('Global background modal');
       expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
       expect(useOverlaysStore.getState().activeOverlay).toBeNull();
     });

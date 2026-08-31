@@ -5,6 +5,7 @@ import {
   ClipboardList,
   History,
   Menu,
+  Plus,
   RefreshCw,
   SlidersHorizontal,
   Smartphone,
@@ -612,7 +613,16 @@ export function Header() {
             </Button>
           }
           align="left"
+          preferredMaxHeight={560}
         >
+          <DropdownItem
+            icon={<Plus />}
+            onClick={() => openOverlay('new-task')}
+            shortcut="cmd+n"
+          >
+            New Task
+          </DropdownItem>
+          <DropdownDivider />
           <DropdownItem
             icon={<SlidersHorizontal />}
             onClick={() => openOverlay('settings')}
@@ -668,7 +678,7 @@ export function Header() {
           <DropdownItem
             icon={<Terminal />}
             onClick={() => openOverlay('running-commands')}
-            shortcut="cmd+shift+r"
+            shortcut="cmd+shift+t"
           >
             Commands
             {runningCommandsCount > 0 && (
@@ -726,6 +736,21 @@ export function Header() {
           onClick={() => openOverlay('work-activity')}
           className="px-2"
         />
+        {runningCommandsCount > 0 ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<Terminal />}
+            title={`${runningCommandsCount} running command${runningCommandsCount === 1 ? '' : 's'}`}
+            aria-label={`Open running commands (${runningCommandsCount} running)`}
+            onClick={() => openOverlay('running-commands')}
+            className="relative px-2"
+          >
+            <span className="bg-status-done text-bg-0 absolute -top-1 -right-1 min-w-3.5 rounded-full px-1 font-mono text-[9px] leading-[14px] tabular-nums shadow-[0_0_7px_var(--color-status-done)]">
+              {runningCommandsCount}
+            </span>
+          </Button>
+        ) : null}
         {showMobilePreviewWorkspace ? (
           <Button
             variant={isMobilePreviewWorkspaceOpen ? 'secondary' : 'ghost'}

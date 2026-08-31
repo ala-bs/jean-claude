@@ -169,13 +169,12 @@ export function BackgroundJobsOverlay({ onClose }: { onClose: () => void }) {
                       }
                     }}
                     onOpenTask={(targetJob) => {
-                      if (!targetJob.projectId || !targetJob.taskId) return;
+                      if (!targetJob.taskId) return;
+                      // This is a global overlay opened over the feed, so open
+                      // the task in the feed rather than a project route.
                       navigate({
-                        to: '/projects/$projectId/tasks/$taskId',
-                        params: {
-                          projectId: targetJob.projectId,
-                          taskId: targetJob.taskId,
-                        },
+                        to: '/all/$taskId',
+                        params: { taskId: targetJob.taskId },
                       });
                       onClose();
                     }}

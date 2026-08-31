@@ -20,6 +20,8 @@ import {
   createCodexNormalizationContext,
   normalizeCodexNotification,
 } from './normalize-codex-message-v2';
+import { flattenScope } from '../../permission-settings-service';
+import { getAllowedDirectories } from '../../directory-access';
 import { getOrCreateCodexAppServer } from './codex-app-server';
 
 import type { CodexJsonRpcNotification } from './codex-json-rpc-client';
@@ -79,6 +81,8 @@ type CodexSessionState = {
   sessionId: string;
   threadId: string | null;
   turnId: string | null;
+  /** Env this session's app-server was pooled under; interrupts must reuse it. */
+  env?: Record<string, string>;
   eventChannel: AsyncEventChannel<AgentEvent>;
   normalizationCtx: CodexNormalizationContext;
   messageIndex: number;
@@ -122,6 +126,7 @@ export class CodexBackend implements AgentBackend {
       sessionId: sessionKey,
       threadId: null,
       turnId: null,
+      env: config.env,
       eventChannel: new AsyncEventChannel<AgentEvent>(),
       normalizationCtx: createCodexNormalizationContext(),
       messageIndex: this.taskContext.sessionStartIndex,
@@ -138,7 +143,7 @@ export class CodexBackend implements AgentBackend {
     this.sessions.set(sessionKey, session);
 
     try {
-      const { client, rootPid } = await getOrCreateCodexAppServer();
+      const { client, rootPid } = await getOrCreateCodexAppServer(config.env);
       const threadConfig = createCodexThreadConfig(config);
       const threadResult = config.sessionId
         ? await client.request('thread/resume', {
@@ -223,7 +228,7 @@ export class CodexBackend implements AgentBackend {
       return;
     }
 
-    const { client } = await getOrCreateCodexAppServer();
+    const { client } = await getOrCreateCodexAppServer(session.env);
     await client.request('turn/interrupt', {
       threadId: session.threadId,
       turnId: session.turnId,
@@ -496,7 +501,7 @@ function createCodexThreadConfig(config: AgentBackendConfig): {
           config: {
             sandbox_workspace_write: {
               network_access: true,
-              writable_roots: getCodexWritableRoots(config.cwd),
+              writable_roots: getCodexWritableRoots(config),
             },
           },
         }
@@ -504,11 +509,22 @@ function createCodexThreadConfig(config: AgentBackendConfig): {
   };
 }
 
-function getCodexWritableRoots(cwd: string): string[] {
-  return [
-    ...getCodexPackageManagerCacheRoots(),
-    ...getCodexWorktreeGitWritableRoots(cwd),
-  ];
+function getCodexWritableRoots(config: AgentBackendConfig): string[] {
+  // External directories granted in project/global/session permissions have to
+  // be added to the sandbox too — otherwise the grant is accepted by our
+  // evaluator but Codex still refuses to write there.
+  const allowedDirectories = getAllowedDirectories([
+    ...(config.permissionRules ?? []),
+    ...flattenScope(config.persistedSessionRules ?? {}),
+  ]);
+
+  return Array.from(
+    new Set([
+      ...getCodexPackageManagerCacheRoots(),
+      ...getCodexWorktreeGitWritableRoots(config.cwd),
+      ...allowedDirectories,
+    ]),
+  );
 }
 
 function getCodexPackageManagerCacheRoots(): string[] {

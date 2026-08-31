@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react';
 import { startTransition, useCallback, useEffect, useState } from 'react';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 
 
@@ -105,8 +105,6 @@ export function PrHeader({
   onRefresh,
   isRefreshing = false,
   associatedPrReviewTask,
-  onCleanReviewWorkspace,
-  isCleaningReviewWorkspace = false,
   onDeletePrWorkspaces,
 }: {
   pr: AzureDevOpsPullRequestDetails;
@@ -117,11 +115,12 @@ export function PrHeader({
   onRefresh?: () => void;
   isRefreshing?: boolean;
   associatedPrReviewTask?: Task | null;
-  onCleanReviewWorkspace?: () => void;
-  isCleaningReviewWorkspace?: boolean;
   onDeletePrWorkspaces?: () => void;
 }) {
   const navigate = useNavigate();
+  // The app uses hash history, so `window.location.pathname` never holds the
+  // route. Read it from the router instead.
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const queryClient = useQueryClient();
   const { data: project } = useProject(projectId);
   const addRunningJob = useBackgroundJobsStore((s) => s.addRunningJob);
@@ -176,7 +175,15 @@ export function PrHeader({
         queryClient.invalidateQueries({ queryKey: ['tasks', { projectId }] });
         setIsCreating(false);
 
-        if (!window.location.pathname.startsWith('/all')) {
+        // From the feed, stay in the feed and focus the new review workspace
+        // there. Navigating to the project route would yank the user out of
+        // the feed context they started from.
+        if (pathname.startsWith('/all')) {
+          void navigate({
+            to: '/all/$taskId',
+            params: { taskId: task.id },
+          });
+        } else {
           void navigate({
             to: '/projects/$projectId/tasks/$taskId',
             params: { projectId, taskId: task.id },
@@ -195,6 +202,7 @@ export function PrHeader({
     [
       pr.id,
       projectId,
+      pathname,
       navigate,
       queryClient,
       addRunningJob,
@@ -299,21 +307,6 @@ export function PrHeader({
                 />
               }
             />
-          )}
-          {onCleanReviewWorkspace && (
-            <button
-              type="button"
-              onClick={onCleanReviewWorkspace}
-              disabled={isCleaningReviewWorkspace}
-              className="border-glass-border bg-bg-1 hover:bg-bg-2 flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
-            >
-              {isCleaningReviewWorkspace ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5" />
-              )}
-              Clean review workspace
-            </button>
           )}
           {onDeletePrWorkspaces && (
             <button

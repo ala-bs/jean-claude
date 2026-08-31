@@ -20,16 +20,16 @@ import {
   useProviderDetails,
   useUpdateProvider,
 } from '@/hooks/use-providers';
-import { Select } from '@/common/ui/select';
-import { cleanIpcError } from '@/lib/ipc-error';
-import { useTokensByProviderType } from '@/hooks/use-tokens';
 import { Button } from '@/common/ui/button';
+import { cleanIpcError } from '@/lib/ipc-error';
 import { getRandomColor } from '@/lib/colors';
 import { IconButton } from '@/common/ui/icon-button';
 import { Input } from '@/common/ui/input';
 import type { Provider } from '@shared/types';
+import { Select } from '@/common/ui/select';
 import { useCreateProject } from '@/hooks/use-projects';
 import { useModal } from '@/common/context/modal';
+import { useTokensByProviderType } from '@/hooks/use-tokens';
 
 
 
@@ -84,7 +84,7 @@ function RepoRow({
 
       if (result.success) {
         // Create project with all metadata
-        const newProject = await createProject.mutateAsync({
+        await createProject.mutateAsync({
           name: repo.name,
           path: targetPath,
           type: 'local',
@@ -100,10 +100,9 @@ function RepoRow({
           updatedAt: new Date().toISOString(),
         });
 
-        // Navigate to the new project
+        // Navigate back to the feed list, where the new project shows up
         navigate({
-          to: '/projects/$projectId',
-          params: { projectId: newProject.id },
+          to: '/all',
         });
       } else {
         setCloneError(result.error || 'Clone failed');

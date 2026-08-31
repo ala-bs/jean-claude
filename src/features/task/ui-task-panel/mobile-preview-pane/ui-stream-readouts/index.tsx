@@ -1,17 +1,13 @@
 import { memo, useSyncExternalStore } from 'react';
 import clsx from 'clsx';
 
-import type {
-  MobilePreviewNativeLogEvent,
-  MobilePreviewNetworkRequest,
-} from '@shared/mobile-simulator-types';
 import {
   type StreamListStore,
   useStreamListStore,
 } from '@/hooks/utils-stream-list-store';
-import type { PreviewFpsStore } from '../preview-fps-store';
-import { getNetworkStats } from '../utils-network';
 import { EmptyState } from '../ui-common';
+import type { MobilePreviewNativeLogEvent } from '@shared/mobile-simulator-types';
+import type { PreviewFpsStore } from '../preview-fps-store';
 
 // Subscribes to the device-log buffer so streaming logs re-render this list
 // only, never the preview surface or the other tabs.
@@ -56,43 +52,6 @@ export const NativeLogsTabLabel = memo(function NativeLogsTabLabel({
 }) {
   const logs = useStreamListStore(store);
   return <>Logs {logs.length ? logs.length : ''}</>;
-});
-
-// Rendered inside the Setup checklist, which is visible while the network tab
-// is not. It subscribes to the request buffer itself so the pane does not have
-// to (a pane-level subscription would re-render the preview on every request).
-export const NetworkRequestCountDetail = memo(
-  function NetworkRequestCountDetail({
-    store,
-    showTunneled,
-  }: {
-    store: StreamListStore<MobilePreviewNetworkRequest>;
-    showTunneled: boolean;
-  }) {
-    const requests = useStreamListStore(store);
-    const total = getNetworkStats(
-      showTunneled
-        ? [...requests]
-        : requests.filter((request) => !request.tunnelOnly),
-    ).total;
-    return <>{total} requests · decrypt on</>;
-  },
-);
-
-export const NetworkTabLabel = memo(function NetworkTabLabel({
-  store,
-  showTunneled,
-}: {
-  store: StreamListStore<MobilePreviewNetworkRequest>;
-  showTunneled: boolean;
-}) {
-  const requests = useStreamListStore(store);
-  const failed = getNetworkStats(
-    showTunneled
-      ? [...requests]
-      : requests.filter((request) => !request.tunnelOnly),
-  ).failed;
-  return <>Network {failed || ''}</>;
 });
 
 export const PreviewStatusText = memo(function PreviewStatusText({

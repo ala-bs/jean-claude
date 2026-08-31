@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,11 +10,13 @@ import {
   exitCurrentPreviewAfterReload,
   launchReloadedPreview,
   orchestrateReloadedPreview,
+  RELOAD_PREVIEW_FLUSH_SETTLE_MS,
   runReloadPreviewCommand,
   signalReloadPreviewReady,
   startReloadPreviewLogLimiter,
   stopReloadPreviewActivities,
   terminateReloadPreviewProcessTree,
+  waitForPreviousPreviewExit,
 } from './reload-preview-service';
 
 describe('stopReloadPreviewActivities', () => {
@@ -187,6 +190,115 @@ describe('orchestrateReloadedPreview', () => {
     });
 
     expect(callOrder).toEqual(['release', 'launch-ready', 'exit']);
+  });
+
+  // The replacement reads localStorage while booting, and `launchPreview` only
+  // resolves once it has finished booting. A flush that happens any later than
+  // this is read by the launch *after* next, which is the whole bug.
+  it('flushes and settles storage before the replacement is launched', async () => {
+    const callOrder: string[] = [];
+
+    await orchestrateReloadedPreview({
+      cwd: join('project', 'root'),
+      exitCurrentApp: () => callOrder.push('exit'),
+      flushStorage: () => callOrder.push('flush'),
+      waitForFlush: async () => {
+        callOrder.push('settle');
+      },
+      launchPreview: async () => {
+        callOrder.push('launch-ready');
+      },
+      reacquireSingleInstanceLock: vi.fn(() => true),
+      releaseSingleInstanceLock: () => callOrder.push('release'),
+      timeoutMs: 30_000,
+    });
+
+    expect(callOrder).toEqual([
+      'flush',
+      'settle',
+      'release',
+      'launch-ready',
+      'exit',
+    ]);
+  });
+
+  it('gives the flush time to reach disk before handing off', async () => {
+    const waitForFlush = vi.fn().mockResolvedValue(undefined);
+
+    await orchestrateReloadedPreview({
+      cwd: join('project', 'root'),
+      exitCurrentApp: vi.fn(),
+      flushStorage: vi.fn(),
+      waitForFlush,
+      flushSettleMs: 400,
+      launchPreview: vi.fn().mockResolvedValue(undefined),
+      reacquireSingleInstanceLock: vi.fn(() => true),
+      releaseSingleInstanceLock: vi.fn(),
+      timeoutMs: 30_000,
+    });
+
+    expect(waitForFlush).toHaveBeenCalledWith(400);
+  });
+
+  it('settles for the default duration when none is configured', async () => {
+    const waitForFlush = vi.fn().mockResolvedValue(undefined);
+
+    await orchestrateReloadedPreview({
+      cwd: join('project', 'root'),
+      exitCurrentApp: vi.fn(),
+      flushStorage: vi.fn(),
+      waitForFlush,
+      launchPreview: vi.fn().mockResolvedValue(undefined),
+      reacquireSingleInstanceLock: vi.fn(() => true),
+      releaseSingleInstanceLock: vi.fn(),
+      timeoutMs: 30_000,
+    });
+
+    expect(waitForFlush).toHaveBeenCalledWith(RELOAD_PREVIEW_FLUSH_SETTLE_MS);
+  });
+
+  it('does not stall the handoff when no flush is configured', async () => {
+    const callOrder: string[] = [];
+    const waitForFlush = vi.fn().mockResolvedValue(undefined);
+
+    await orchestrateReloadedPreview({
+      cwd: join('project', 'root'),
+      exitCurrentApp: () => callOrder.push('exit'),
+      waitForFlush,
+      launchPreview: async () => {
+        callOrder.push('launch-ready');
+      },
+      reacquireSingleInstanceLock: vi.fn(() => true),
+      releaseSingleInstanceLock: () => callOrder.push('release'),
+      timeoutMs: 30_000,
+    });
+
+    expect(waitForFlush).not.toHaveBeenCalled();
+    expect(callOrder).toEqual(['release', 'launch-ready', 'exit']);
+  });
+
+  it('continues the handoff when flushing storage throws', async () => {
+    const flushError = new Error('session destroyed');
+    const onFlushError = vi.fn();
+    const exitCurrentApp = vi.fn();
+    const launchPreview = vi.fn().mockResolvedValue(undefined);
+
+    await orchestrateReloadedPreview({
+      cwd: join('project', 'root'),
+      exitCurrentApp,
+      flushStorage: () => {
+        throw flushError;
+      },
+      onFlushError,
+      launchPreview,
+      reacquireSingleInstanceLock: vi.fn(() => true),
+      releaseSingleInstanceLock: vi.fn(),
+      timeoutMs: 30_000,
+    });
+
+    expect(onFlushError).toHaveBeenCalledWith(flushError);
+    expect(launchPreview).toHaveBeenCalledOnce();
+    expect(exitCurrentApp).toHaveBeenCalledOnce();
   });
 
   it('reacquires the lock and leaves the current app running on failure', async () => {
@@ -464,7 +576,177 @@ describe('signalReloadPreviewReady', () => {
   });
 });
 
+/**
+ * The gate that keeps the two processes off one LevelDB. See
+ * `waitForPreviousPreviewExit` — the outgoing process writes its `.ack` before
+ * calling `app.exit(0)`, so only the pid actually disappearing proves the LOCK
+ * is free.
+ */
+describe('waitForPreviousPreviewExit', () => {
+  it('returns immediately when the predecessor is already gone', async () => {
+    const isAlive = vi.fn().mockReturnValue(false);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      waitForPreviousPreviewExit({
+        pid: 60688,
+        dependencies: { isAlive, wait },
+      }),
+    ).resolves.toEqual({ exited: true, attempts: 1 });
+
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it('polls until the predecessor exits', async () => {
+    // Alive for two checks, then gone — the real handoff shape.
+    const isAlive = vi
+      .fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      waitForPreviousPreviewExit({
+        pid: 60688,
+        intervalMs: 50,
+        dependencies: { isAlive, wait },
+      }),
+    ).resolves.toEqual({ exited: true, attempts: 3 });
+
+    expect(wait).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledWith(50);
+  });
+
+  /**
+   * Must expire rather than hang: a window with possibly-empty localStorage is
+   * recoverable on the next launch, a permanently blank app is not.
+   */
+  it('gives up after the attempt budget so the window still opens', async () => {
+    const isAlive = vi.fn().mockReturnValue(true);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      waitForPreviousPreviewExit({
+        pid: 60688,
+        maxAttempts: 4,
+        dependencies: { isAlive, wait },
+      }),
+    ).resolves.toEqual({ exited: false, attempts: 4 });
+
+    // One wait fewer than attempts: no point sleeping after the last check.
+    expect(wait).toHaveBeenCalledTimes(3);
+  });
+
+  /**
+   * The default `isAlive` is the only part of this with real OS semantics, so
+   * it is exercised against real pids rather than a stub. Injecting `isAlive`
+   * here would assert nothing.
+   */
+  describe('default liveness check', () => {
+    it('sees this process as alive and gives up on it', async () => {
+      await expect(
+        waitForPreviousPreviewExit({
+          pid: process.pid,
+          maxAttempts: 2,
+          intervalMs: 0,
+        }),
+      ).resolves.toEqual({ exited: false, attempts: 2 });
+    });
+
+    it('sees an exited process as gone', async () => {
+      // Spawn and reap a real child, so the pid is genuinely dead rather than
+      // merely unlikely to exist.
+      const child = spawn(process.execPath, ['-e', '']);
+      const pid = child.pid;
+      if (pid === undefined) throw new Error('child failed to spawn');
+      await new Promise<void>((resolve) => child.once('exit', () => resolve()));
+
+      await expect(
+        waitForPreviousPreviewExit({ pid, maxAttempts: 2, intervalMs: 0 }),
+      ).resolves.toEqual({ exited: true, attempts: 1 });
+    });
+  });
+
+  it.each([0, -1, Number.NaN])(
+    'does not stall the window for an unusable pid (%s)',
+    async (pid) => {
+      const isAlive = vi.fn();
+
+      await expect(
+        waitForPreviousPreviewExit({
+          pid,
+          dependencies: { isAlive, wait: vi.fn() },
+        }),
+      ).resolves.toEqual({ exited: true, attempts: 0 });
+
+      expect(isAlive).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe('createReloadPreviewReadinessRegistrar', () => {
+  /**
+   * The ordering fix. Readiness must be announced before a window exists,
+   * because creating one opens the LevelDB store the predecessor still holds.
+   */
+  it('signals immediately via signalNow, before any window is created', async () => {
+    const lifecycle = new EventEmitter();
+    const signalReady = vi.fn().mockResolvedValue(undefined);
+
+    const registerReadiness = createReloadPreviewReadinessRegistrar({
+      lifecycle,
+      logFilePath: join('temp', 'restart.log'),
+      readyFilePath: join('temp', 'restart.ready'),
+      dependencies: { removeFileSync: vi.fn(), signalReady },
+      onError: vi.fn(),
+    });
+
+    registerReadiness.signalNow();
+
+    await vi.waitFor(() =>
+      expect(signalReady).toHaveBeenCalledWith({
+        readyFilePath: join('temp', 'restart.ready'),
+      }),
+    );
+  });
+
+  it('does not signal twice when a window loads after signalNow', async () => {
+    const webContents = new EventEmitter();
+    const lifecycle = new EventEmitter();
+    const signalReady = vi.fn().mockResolvedValue(undefined);
+
+    const registerReadiness = createReloadPreviewReadinessRegistrar({
+      lifecycle,
+      logFilePath: join('temp', 'restart.log'),
+      readyFilePath: join('temp', 'restart.ready'),
+      dependencies: { removeFileSync: vi.fn(), signalReady },
+      onError: vi.fn(),
+    });
+
+    registerReadiness.signalNow();
+    await vi.waitFor(() => expect(signalReady).toHaveBeenCalledOnce());
+
+    registerReadiness(webContents);
+    webContents.emit('did-finish-load');
+
+    expect(signalReady).toHaveBeenCalledOnce();
+  });
+
+  it('signalNow stays inert without a ready file path', () => {
+    const signalReady = vi.fn().mockResolvedValue(undefined);
+
+    const registerReadiness = createReloadPreviewReadinessRegistrar({
+      lifecycle: new EventEmitter(),
+      dependencies: { removeFileSync: vi.fn(), signalReady },
+      onError: vi.fn(),
+    });
+
+    registerReadiness.signalNow();
+
+    expect(signalReady).not.toHaveBeenCalled();
+  });
+
   it('signals only after the renderer finishes loading', async () => {
     const webContents = new EventEmitter();
     const lifecycle = new EventEmitter();
@@ -752,6 +1034,7 @@ function createLaunchHarness(params?: {
     dependencies: {
       acknowledgeReady: vi.fn().mockResolvedValue(undefined),
       closeLogFile: vi.fn(),
+      currentPid: () => 60688,
       markerExists: vi.fn(async () => {
         const exists = markerChecks.shift() ?? false;
         params?.onMarkerCheck?.(exists);
@@ -801,6 +1084,9 @@ describe('launchReloadedPreview', () => {
           JC_PREVIEW_RESTART_ACK_FILE: harness.ackFilePath,
           JC_PREVIEW_RESTART_LOG_FILE: harness.logFilePath,
           JC_PREVIEW_RESTART_READY_FILE: harness.readyFilePath,
+          // The replacement waits on this pid before opening its window, so
+          // the two processes never hold the LocalStorage LevelDB at once.
+          JC_PREVIEW_RESTART_PREV_PID: '60688',
         }),
         shell: true,
         stdio: ['ignore', 12, 12],

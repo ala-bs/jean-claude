@@ -1,13 +1,14 @@
-import type {
-  MobilePlatform,
-  MobilePreviewAndroidDeviceProfile,
-  MobilePreviewAndroidSystemImage,
-  MobilePreviewDevice,
-  MobilePreviewIosDeviceType,
-  MobilePreviewIosRuntime,
+import {
+  isPhysicalMobilePreviewDevice,
+  type MobilePlatform,
+  type MobilePreviewAndroidDeviceProfile,
+  type MobilePreviewAndroidSystemImage,
+  type MobilePreviewDevice,
+  type MobilePreviewIosDeviceType,
+  type MobilePreviewIosRuntime,
 } from '@shared/mobile-simulator-types';
-import type { MobilePreviewProjectConfig } from '@shared/types';
 import { canAutoStartMobilePreviewDevice } from '@/features/mobile-preview/utils-mobile-preview-auto-launch';
+import type { MobilePreviewProjectConfig } from '@shared/types';
 
 export function getDefaultAndroidProjectPath({
   appPath,
@@ -186,8 +187,55 @@ export function formatDeviceState(state: MobilePreviewDevice['state']) {
 
 
 
+/**
+ * Physical hardware cannot be "started" by us — it is only usable when the
+ * handset is already reachable and trusted.
+ */
 export function canStartDevice(device: MobilePreviewDevice | undefined) {
+  if (!device) return false;
+  if (isPhysicalMobilePreviewDevice(device)) {
+    return device.connection === 'connected';
+  }
   return canAutoStartMobilePreviewDevice(device);
+}
+
+/**
+ * Short, human-facing word for a physical device's connection state. Returns
+ * null when the state carries no useful signal (connected, or a simulator).
+ */
+export function formatDeviceConnectionState(
+  device: MobilePreviewDevice | undefined | null,
+) {
+  if (!device || !isPhysicalMobilePreviewDevice(device)) return null;
+  switch (device.connection) {
+    case 'unauthorized':
+      return 'Unauthorized';
+    case 'untrusted':
+      return 'Untrusted';
+    case 'unavailable':
+      return 'Not connected';
+    default:
+      return null;
+  }
+}
+
+/**
+ * `xcrun devicectl` lists every device CoreDevice ever paired with, so the one
+ * reachable handset is easily buried. Usable devices float to the top; the rest
+ * stay listed (they show up in Xcode too) in their original relative order.
+ */
+export function sortPhysicalDevicesByAvailability(
+  devices: MobilePreviewDevice[],
+) {
+  return devices
+    .map((device, index) => ({ device, index }))
+    .sort((first, second) => {
+      const firstUsable = canStartDevice(first.device) ? 0 : 1;
+      const secondUsable = canStartDevice(second.device) ? 0 : 1;
+      if (firstUsable !== secondUsable) return firstUsable - secondUsable;
+      return first.index - second.index;
+    })
+    .map((entry) => entry.device);
 }
 
 export function getPreviewDeviceKey(platform: MobilePlatform, deviceId: string) {

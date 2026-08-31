@@ -2,8 +2,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import type {
+  PermissionAction,
+  ResolvedPermissionRule,
+} from '@shared/permission-types';
 import type { NormalizedPermissionRequest } from '@shared/normalized-message-v2';
-import type { ResolvedPermissionRule } from '@shared/permission-types';
 
 type DirectoryAccess = NonNullable<
   NormalizedPermissionRequest['directoryAccess']
@@ -177,14 +180,18 @@ export function toDirectoryPermissionPattern(directory: string): string {
 export function getAllowedDirectories(
   rules: ResolvedPermissionRule[],
 ): string[] {
-  return rules
-    .filter(
-      (rule) =>
-        rule.tool === 'external_directory' &&
-        rule.action === 'allow' &&
-        rule.pattern.endsWith('/**'),
-    )
-    .map((rule) => rule.pattern.slice(0, -3))
+  // Rules resolve last-match-wins, so a later `ask`/`deny` on the same pattern
+  // has to cancel an earlier `allow` instead of both being counted.
+  const effective = new Map<string, PermissionAction>();
+  for (const rule of rules) {
+    if (rule.tool !== 'external_directory') continue;
+    if (!rule.pattern.endsWith('/**')) continue;
+    effective.set(rule.pattern.slice(0, -3), rule.action);
+  }
+
+  return [...effective.entries()]
+    .filter(([, action]) => action === 'allow')
+    .map(([directory]) => directory)
     .filter((directory) => !hasGlobMetacharacters(directory))
     .flatMap((directory) => {
       if (!path.isAbsolute(directory)) return [];

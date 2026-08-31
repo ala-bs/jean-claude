@@ -40,6 +40,7 @@ export function useTaskMessages({
   const setPendingRequestForTask = useTaskMessagesStore(
     (s) => s.setPendingRequestForTask,
   );
+  const setBackgroundTasks = useTaskMessagesStore((s) => s.setBackgroundTasks);
   const isLoaded = !!stepState;
   // Track which step we're currently fetching to prevent duplicate requests
   const fetchingRef = useRef<string | null>(null);
@@ -50,12 +51,14 @@ export function useTaskMessages({
 
   const fetchPendingRequest = useCallback(async () => {
     if (!enabled || !stepId) return;
+    // Per-step version: a sibling step of the same task emitting status updates
+    // must not invalidate this step's fetch.
     const pendingRequestVersionAtStart =
-      useTaskMessagesStore.getState().pendingRequestVersion;
+      useTaskMessagesStore.getState().pendingRequestVersions[stepId] ?? 0;
     const pendingRequest = await api.agent.getPendingRequest(stepId);
     if (pendingRequest) {
       if (
-        useTaskMessagesStore.getState().pendingRequestVersion !==
+        (useTaskMessagesStore.getState().pendingRequestVersions[stepId] ?? 0) !==
         pendingRequestVersionAtStart
       ) {
         return;
@@ -71,15 +74,17 @@ export function useTaskMessages({
 
       if (pendingRequest.type === 'permission') {
         setPermission(stepId, pendingRequest.data);
-        setPendingRequestForTask(taskId, {
-          type: 'permission',
-          permission: pendingRequest.data,
+        setPendingRequestForTask({
+          taskId,
+          stepId,
+          request: { type: 'permission', permission: pendingRequest.data },
         });
       } else {
         setQuestion(stepId, pendingRequest.data);
-        setPendingRequestForTask(taskId, {
-          type: 'question',
-          question: pendingRequest.data,
+        setPendingRequestForTask({
+          taskId,
+          stepId,
+          request: { type: 'question', question: pendingRequest.data },
         });
       }
     }
@@ -91,6 +96,38 @@ export function useTaskMessages({
     setQuestion,
     setPendingRequestForTask,
   ]);
+
+  /**
+   * Re-hydrate the live background-job set from the main process.
+   *
+   * `background_tasks_changed` is only emitted on change, so a renderer that
+   * reloaded (or a window opened) mid-run would otherwise never learn that the
+   * agent is still waiting on background work. Also self-heals a stale
+   * indicator left behind by a dropped clear event.
+   */
+  const fetchBackgroundTasks = useCallback(async () => {
+    if (!enabled || !stepId) return;
+    // Version, not an array reference: a set-then-clear pair arriving during
+    // the await returns the key to `undefined`, which a reference check reads
+    // as "unchanged" and would then overwrite with this older result.
+    const versionAtStart =
+      useTaskMessagesStore.getState().backgroundTasksVersions[stepId] ?? 0;
+    try {
+      const tasks = await api.agent.getBackgroundTasks(stepId);
+      if (
+        (useTaskMessagesStore.getState().backgroundTasksVersions[stepId] ??
+          0) !== versionAtStart
+      ) {
+        // A live snapshot landed while this was in flight — it is newer.
+        return;
+      }
+      setBackgroundTasks(stepId, tasks);
+    } catch (error) {
+      // IPC rejects when the window is tearing down. A missing indicator is
+      // not worth an unhandled rejection.
+      console.error('Failed to fetch background tasks', error);
+    }
+  }, [enabled, stepId, setBackgroundTasks]);
 
   const fetchMessages = useCallback(() => {
     if (!enabled || !stepId) return;
@@ -119,6 +156,7 @@ export function useTaskMessages({
           loadStep(stepId, taskId, messages, resolvedStep.status);
           // Also fetch pending request after loading step
           fetchPendingRequest();
+          void fetchBackgroundTasks();
           return;
         }
         // Still missing: surface it as an error instead of leaving the step
@@ -137,7 +175,15 @@ export function useTaskMessages({
           fetchingRef.current = null;
         }
       });
-  }, [enabled, stepId, taskId, loadStep, fetchPendingRequest, setStatus]);
+  }, [
+    enabled,
+    stepId,
+    taskId,
+    loadStep,
+    fetchPendingRequest,
+    fetchBackgroundTasks,
+    setStatus,
+  ]);
 
   const refetch = useCallback(() => {
     if (!enabled || !stepId) return;
@@ -184,6 +230,7 @@ export function useTaskMessages({
 
         // Also fetch pending request (in case we missed an IPC event)
         fetchPendingRequest();
+        void fetchBackgroundTasks();
       }
     }
   }, [
@@ -194,6 +241,7 @@ export function useTaskMessages({
     stepState?.messages.length,
     fetchMessages,
     fetchPendingRequest,
+    fetchBackgroundTasks,
   ]);
 
   // Refetch pending request when window regains focus
@@ -205,11 +253,24 @@ export function useTaskMessages({
       if (isLoaded && stepState?.status === 'waiting') {
         fetchPendingRequest();
       }
+      // Background jobs are NOT gated on `waiting`: the whole point is a step
+      // that reads as completed while its jobs are still live. Refetching on
+      // focus also heals an indicator left stale by a dropped IPC event.
+      if (isLoaded) {
+        void fetchBackgroundTasks();
+      }
     };
 
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
-  }, [enabled, stepId, isLoaded, stepState?.status, fetchPendingRequest]);
+  }, [
+    enabled,
+    stepId,
+    isLoaded,
+    stepState?.status,
+    fetchPendingRequest,
+    fetchBackgroundTasks,
+  ]);
 
   // Watchdog: if the step never lands in the store (stale-aborted fetch, a
   // fetch that was never started), log state and retry instead of stranding

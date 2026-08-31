@@ -6,26 +6,30 @@ import {
   useMemo,
   useState,
 } from 'react';
-import clsx from 'clsx';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import clsx from 'clsx';
 
 
 
 import {
-  DiffFileTree,
-  normalizeAzureChangeType,
-  ReviewProgress,
-} from '@/features/common/ui-file-diff';
+  containsAzureDevOpsMention,
+  type MentionDisplayNames,
+  normalizeMentionId,
+} from '@/lib/azure-devops-mentions';
 import {
   diffFileSignature,
   prReviewScopeId,
   useDiffReview,
 } from '@/stores/diff-review';
 import {
-  containsAzureDevOpsMention,
-  type MentionDisplayNames,
-  normalizeMentionId,
-} from '@/lib/azure-devops-mentions';
+  DiffFileTree,
+  normalizeAzureChangeType,
+  ReviewProgress,
+} from '@/features/common/ui-file-diff';
+import {
+  getAttachmentFileName,
+  getAzureAttachmentPayload,
+} from '@/lib/image-utils';
 import {
   type PullRequestRepoInfo,
   updateFeedPullRequest,
@@ -50,16 +54,11 @@ import {
   useCreateOrGetPrReviewTask,
   useCreatePrReviewChatStep,
 } from '@/hooks/use-pr-review-agent';
-import { useDeleteWorktree, useProjectTasks } from '@/hooks/use-tasks';
 import {
   useTaskReviewDraftCountByFile,
   useTaskReviewFileDrafts,
 } from '@/stores/task-review-comment-drafts';
 import { api } from '@/lib/api';
-import {
-  getAttachmentFileName,
-  getAzureAttachmentPayload,
-} from '@/lib/image-utils';
 import type { DiffFile } from '@/features/common/ui-file-diff';
 import { isPrReviewChatStepMeta } from '@shared/types';
 import type { MentionOption } from '@/common/ui/mention-textarea';
@@ -73,11 +72,11 @@ import { useLatestRef } from '@/hooks/use-latest-ref';
 import { usePrDetailState } from '@/stores/navigation';
 import { usePrDraftCountByFile } from '@/stores/pr-comment-drafts';
 import { useProject } from '@/hooks/use-projects';
+import { useProjectTasks } from '@/hooks/use-tasks';
 import { usePrWorkspaceActions } from '@/hooks/use-pr-workspace-actions';
 import { useRecordPrView } from '@/hooks/use-pr-view-snapshot';
 import { useSteps } from '@/hooks/use-steps';
 import { useTaskMessages } from '@/hooks/use-task-messages';
-import { useToastStore } from '@/stores/toasts';
 
 
 
@@ -311,9 +310,7 @@ export function PrDetail({
   const continuePrReviewChatStep = useContinuePrReviewChatStep();
   const createOrGetPrReviewTask = useCreateOrGetPrReviewTask();
   const createPrReviewChatStep = useCreatePrReviewChatStep();
-  const deleteWorktree = useDeleteWorktree();
   const { deleteAll } = usePrWorkspaceActions();
-  const addToast = useToastStore((state) => state.addToast);
 
   const isPrAuthor = useMemo(() => {
     if (!pr || !currentUser) return false;
@@ -517,28 +514,6 @@ export function PrDetail({
     ],
   );
 
-  const handleCleanReviewWorkspace = useCallback(async () => {
-    if (!associatedPrReviewTask?.worktreePath) return;
-
-    try {
-      const result = await deleteWorktree.mutateAsync({
-        taskId: associatedPrReviewTask.id,
-        keepBranch: true,
-      });
-      if (!result.editorCloseWarning) {
-        addToast({ type: 'success', message: 'Review workspace cleaned' });
-      }
-    } catch (error) {
-      addToast({
-        type: 'error',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Failed to clean review workspace',
-      });
-    }
-  }, [addToast, associatedPrReviewTask, deleteWorktree]);
-
   const handleDeletePrWorkspaces = useCallback(async () => {
     try {
       await deleteAll.mutateAsync({ projectId, pullRequestId: prId });
@@ -605,6 +580,7 @@ export function PrDetail({
     reviewed,
     stale,
     treatment,
+    autoReviewedBy,
     setReviewed,
     cycleTreatment,
   } = useDiffReview(reviewScopeId, diffSignatures);
@@ -670,7 +646,9 @@ export function PrDetail({
                 readOnly
                   ? 'This pull request view is read-only.'
                   : !associatedPrReviewTask.worktreePath
-                    ? 'Review workspace was cleaned up. Start a new review workspace to ask more.'
+                    ? pr?.status === 'active'
+                      ? 'This review workspace no longer has a worktree. Use "Create Review Workspace" to ask more.'
+                      : 'This review workspace no longer has a worktree, and this pull request is no longer active.'
                     : undefined
               }
               isSubmittingFollowUp={
@@ -692,6 +670,7 @@ export function PrDetail({
   }, [
     associatedPrReviewTask,
     continuePrReviewChatStep,
+    pr?.status,
     prId,
     prReviewSteps,
     readOnly,
@@ -807,15 +786,6 @@ export function PrDetail({
         onRefresh={handleRefresh}
         isRefreshing={isRefreshing}
         associatedPrReviewTask={associatedPrReviewTask}
-        onCleanReviewWorkspace={
-          !readOnly && associatedPrReviewTask?.worktreePath
-            ? handleCleanReviewWorkspace
-            : undefined
-        }
-        isCleaningReviewWorkspace={
-          deleteWorktree.isPending &&
-          deleteWorktree.variables?.taskId === associatedPrReviewTask?.id
-        }
         onDeletePrWorkspaces={
           !readOnly && associatedPrReviewTask
             ? () => {
@@ -967,6 +937,7 @@ export function PrDetail({
                       stalePaths={canReview ? stale : undefined}
                       onToggleReviewed={canReview ? setReviewed : undefined}
                       reviewedTreatment={treatment}
+                      autoReviewedBy={canReview ? autoReviewedBy : undefined}
                       stickyFolders
                     />
                   </div>

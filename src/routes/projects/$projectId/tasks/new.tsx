@@ -7,6 +7,10 @@ import { nanoid } from 'nanoid';
 
 
 import {
+  getModelsForBackend,
+  getModelThinkingCapabilities,
+} from '@/features/agent/ui-backend-selector';
+import {
   getThinkingEffortOptions,
   normalizeThinkingEffortForModel,
 } from '@shared/thinking-settings';
@@ -39,16 +43,12 @@ import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
-import { resolveBackendModelSelection } from '@/features/agent/utils-backend-model-selection';
 import { getDefaultModelForBackend } from '@/lib/default-models';
-import {
-  getModelsForBackend,
-  getModelThinkingCapabilities,
-} from '@/features/agent/ui-backend-selector';
 import { getOriginalTaskAgentMemoryPrompt } from '@/lib/agent-memory-prompt-input';
 import { Input } from '@/common/ui/input';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import { PromptTextarea } from '@/features/common/ui-prompt-textarea';
+import { resolveBackendModelSelection } from '@/features/agent/utils-backend-model-selection';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useCreateTaskWithWorktree } from '@/hooks/use-tasks';
@@ -382,11 +382,8 @@ function NewTask() {
     // Clear the draft now that we've submitted
     clearDraft();
 
-    // Navigate to the task
-    navigate({
-      to: '/projects/$projectId/tasks/$taskId',
-      params: { projectId, taskId: task.id },
-    });
+    // Navigate to the new task in the feed list, the main view
+    navigate({ to: '/all/$taskId', params: { taskId: task.id } });
   }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -405,7 +402,7 @@ function NewTask() {
           variant="ghost"
           size="sm"
           onClick={() =>
-            navigate({ to: '/projects/$projectId', params: { projectId } })
+            navigate({ to: '/all' })
           }
           icon={<ArrowLeft />}
           className="mb-6"

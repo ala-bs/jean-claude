@@ -20,7 +20,9 @@ vi.mock('./run-command-service', () => ({
 
 import {
   createMobilePreviewExpoLaunchService,
+  launchUrlNeedsLanRewrite,
   resolveExpoAppSchemes,
+  rewriteLaunchUrlToLanAddress,
 } from './mobile-preview-expo-launch-service';
 
 describe('mobilePreviewExpoLaunchService', () => {
@@ -1006,5 +1008,179 @@ describe('resolveExpoAppSchemes', () => {
     } finally {
       await rm(appPath, { recursive: true, force: true });
     }
+  });
+});
+
+describe('rewriteLaunchUrlToLanAddress', () => {
+  it.each([
+    ['exp://127.0.0.1:19001', 'exp://192.168.1.24:19001'],
+    ['exp://localhost:19001', 'exp://192.168.1.24:19001'],
+    ['exp://LOCALHOST:19001', 'exp://192.168.1.24:19001'],
+    ['exp://[::1]:19001', 'exp://192.168.1.24:19001'],
+    [
+      'exp://127.0.0.1:19001/--/deep/link?foo=bar&baz=1',
+      'exp://192.168.1.24:19001/--/deep/link?foo=bar&baz=1',
+    ],
+    ['exps://127.0.0.1:443/path', 'exps://192.168.1.24:443/path'],
+    ['myapp://127.0.0.1:8081/route', 'myapp://192.168.1.24:8081/route'],
+  ])('rewrites %s', (input, expected) => {
+    expect(
+      rewriteLaunchUrlToLanAddress({ url: input, lanAddress: '192.168.1.24' }),
+    ).toBe(expected);
+  });
+
+  it('rewrites the Metro origin inside a dev-client link query', () => {
+    const rewritten = rewriteLaunchUrlToLanAddress({
+      url: 'exp+mobile://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A19001',
+      lanAddress: '192.168.1.24',
+    });
+    const parsed = new URL(rewritten);
+    expect(parsed.protocol).toBe('exp+mobile:');
+    expect(parsed.hostname).toBe('expo-development-client');
+    expect(new URL(parsed.searchParams.get('url')!).host).toBe(
+      '192.168.1.24:19001',
+    );
+  });
+
+  it.each([
+    'exp://192.168.1.50:19001',
+    'exp://metro.local:19001/--/x',
+    'exp+mobile://expo-development-client/?url=http%3A%2F%2F10.0.0.4%3A19001',
+  ])('leaves routable host %s byte-for-byte unchanged', (url) => {
+    expect(
+      rewriteLaunchUrlToLanAddress({ url, lanAddress: '192.168.1.24' }),
+    ).toBe(url);
+  });
+});
+
+describe('launchUrlNeedsLanRewrite', () => {
+  it.each([
+    ['exp://127.0.0.1:19001', true],
+    ['exp://localhost:19001', true],
+    ['exp://[::1]:19001', true],
+    [
+      'exp+mobile://expo-development-client/?url=http%3A%2F%2Flocalhost%3A19001',
+      true,
+    ],
+    ['exp://192.168.1.50:19001', false],
+    ['not a url', false],
+  ] as const)('%s -> %s', (url, expected) => {
+    expect(launchUrlNeedsLanRewrite(url)).toBe(expected);
+  });
+});
+
+describe('physical iOS device deeplink launch', () => {
+  const baseDeps = () => ({
+    findProjectById: vi.fn().mockResolvedValue({ id: 'project-1', path: '/p' }),
+    findTaskById: vi
+      .fn()
+      .mockResolvedValue({ projectId: 'project-1', worktreePath: '/w' }),
+    resolveTaskRoot: vi.fn().mockResolvedValue('/canonical/worktree'),
+    resolveAppPath: vi.fn().mockResolvedValue('/canonical/worktree/apps/mobile'),
+    resolveAppSchemes: vi.fn().mockResolvedValue(new Set(['exp+mobile'])),
+    getRunStatus: vi.fn().mockReturnValue({
+      isRunning: true,
+      commands: [
+        {
+          id: createMobileDevServerCommandId('apps/mobile'),
+          name: 'Mobile dev server',
+          command: 'npx expo start --port 19001',
+          ports: [19001],
+          status: 'running',
+        },
+      ],
+    }),
+    fetch: vi.fn<typeof fetch>(),
+    openDeeplink: vi.fn(),
+    timeoutMs: 50,
+    maxResponseBytes: 4096,
+  });
+
+  const launchParams = {
+    requestId: 'request-1',
+    taskId: 'task-1',
+    projectId: 'project-1',
+    appPath: 'apps/mobile',
+    platform: 'ios' as const,
+    deviceId: 'device-1',
+    metroPort: 19001,
+  };
+
+  function respondWith(deps: ReturnType<typeof baseDeps>, url: string) {
+    deps.fetch.mockResolvedValue(
+      new Response(JSON.stringify({ url }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+  }
+
+  /**
+   * Faithful stand-in for the real `openDeeplink` wiring: on iOS it ends in
+   * `xcrun simctl openurl`, which refuses a CoreDevice id. Tests that inject a
+   * bare `vi.fn()` here can "pass" on a code path production can never reach.
+   */
+  function guardedOpenDeeplink(physicalIds: readonly string[]) {
+    return vi.fn(async (params: { platform: string; deviceId: string }) => {
+      if (params.platform === 'ios' && physicalIds.includes(params.deviceId)) {
+        throw new Error(
+          'Opening deeplinks is not supported on physical iOS devices.',
+        );
+      }
+    });
+  }
+
+  it('refuses a physical iOS device before doing any Metro work', async () => {
+    const deps = baseDeps();
+    respondWith(deps, 'exp://127.0.0.1:19001');
+    const openDeeplink = guardedOpenDeeplink(['device-1']);
+    const service = createMobilePreviewExpoLaunchService({
+      ...deps,
+      openDeeplink,
+      isPhysicalIosDevice: () => true,
+    });
+
+    // The message must be the actionable one, not the simulator-only guard:
+    // getting the guard's wording here means the early check was removed and we
+    // walked the whole launch flow into a dead end again.
+    await expect(service.launch(launchParams)).rejects.toThrow(
+      /not supported on physical iOS devices yet.*Build & Run/s,
+    );
+    expect(openDeeplink).not.toHaveBeenCalled();
+    expect(deps.fetch).not.toHaveBeenCalled();
+  });
+
+  it('leaves the simulator launch URL byte-for-byte unchanged', async () => {
+    const deps = baseDeps();
+    respondWith(deps, 'exp://127.0.0.1:19001');
+    const openDeeplink = guardedOpenDeeplink(['physical-1']);
+    const service = createMobilePreviewExpoLaunchService({
+      ...deps,
+      openDeeplink,
+      isPhysicalIosDevice: (id) => id === 'physical-1',
+    });
+
+    await expect(service.launch(launchParams)).resolves.toEqual({
+      url: 'exp://127.0.0.1:19001',
+    });
+    expect(openDeeplink).toHaveBeenCalledWith(
+      expect.objectContaining({ url: 'exp://127.0.0.1:19001' }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('never consults the iOS registry for android targets', async () => {
+    const deps = baseDeps();
+    respondWith(deps, 'exp://127.0.0.1:19001');
+    const isPhysicalIosDevice = vi.fn(() => true);
+    const service = createMobilePreviewExpoLaunchService({
+      ...deps,
+      isPhysicalIosDevice,
+    });
+
+    await expect(
+      service.launch({ ...launchParams, platform: 'android' as const }),
+    ).resolves.toEqual({ url: 'exp://127.0.0.1:19001' });
+    expect(isPhysicalIosDevice).not.toHaveBeenCalled();
   });
 });

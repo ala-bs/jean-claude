@@ -132,3 +132,51 @@ export function getPointerUpInput({
 export function getNextGestureFeedbackId(currentId: number): number {
   return currentId + 1;
 }
+
+export const MAX_PASTE_LENGTH = 1000;
+
+/**
+ * Turns clipboard text into device input events.
+ *
+ * Newlines cannot ride along inside a `text` event: on Android `adb shell`
+ * re-parses the payload as a shell command, and on iOS `\n` maps to Return
+ * anyway. So lines are sent as separate `text` events with an explicit `enter`
+ * key event between them. Other control characters are stripped because no
+ * backend can type them.
+ */
+export function getPasteInputs({
+  text: rawText,
+  platform,
+}: {
+  text: string;
+  platform: MobilePlatform | undefined;
+}):
+  | { ok: true; inputs: MobilePreviewInputEvent[] }
+  | { ok: false; reason: string } {
+  const normalized = rawText
+    .replace(/\r\n?/g, '\n')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, '');
+
+  if (normalized.length === 0) return { ok: true, inputs: [] };
+  if (normalized.length > MAX_PASTE_LENGTH) {
+    return {
+      ok: false,
+      reason: `Pasted text is too long (${normalized.length} characters, max ${MAX_PASTE_LENGTH}).`,
+    };
+  }
+  if (platform === 'android' && normalized.includes('%')) {
+    return {
+      ok: false,
+      reason:
+        'Pasted text contains "%", which Android cannot type. Remove it and try again.',
+    };
+  }
+
+  const inputs: MobilePreviewInputEvent[] = [];
+  normalized.split('\n').forEach((line, index) => {
+    if (index > 0) inputs.push({ type: 'key', key: 'enter' });
+    if (line.length > 0) inputs.push({ type: 'text', text: line });
+  });
+  return { ok: true, inputs };
+}

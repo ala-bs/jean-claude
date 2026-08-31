@@ -38,6 +38,7 @@ import { invalidateFeedResources } from '@/cache/feed-cache';
 import { setDocumentResource } from '@/cache/cache-actions';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCacheResource } from '@/cache/use-cache-resource';
+import { useNavigationStore } from '@/stores/navigation';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useToastStore } from '@/stores/toasts';
 
@@ -238,6 +239,31 @@ export function useSetTaskSourceBranch() {
   });
 }
 
+export function useSetTaskBranchName() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      taskId,
+      branchName,
+    }: {
+      taskId: string;
+      branchName: string;
+    }) => api.tasks.setBranchName({ taskId, branchName }),
+    onSuccess: (task, { taskId }) => {
+      ingestTask(task);
+      markTaskListsStale(task.projectId);
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks', taskId] });
+      queryClient.invalidateQueries({
+        queryKey: ['tasks', { projectId: task.projectId }],
+      });
+      queryClient.invalidateQueries({ queryKey: ['project-branches'] });
+      queryClient.invalidateQueries({ queryKey: ['worktree-status', taskId] });
+      invalidateFeedItems(queryClient);
+    },
+  });
+}
+
 export function useUpdateTaskPendingMessage() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -281,6 +307,10 @@ export function useDeleteTask() {
     onSuccess: (_, { id }) => {
       clearAllRunCommandLogs(id);
       setRunCommandRunning(id, false);
+      // The PR draft is persisted to localStorage and is never otherwise
+      // pruned, so a deleted task would leave its text and image file refs
+      // (pointing into a worktree that no longer exists) behind forever.
+      useNavigationStore.getState().clearPrDraft(id);
       removeTask(id, { deleteResource: false });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       invalidateFeedItems(queryClient);

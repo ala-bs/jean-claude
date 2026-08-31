@@ -1,20 +1,44 @@
 import {
-  AlertTriangle,
+  ArrowLeftRight,
+  Bell,
+  Bot,
   Box,
+  Brain,
+  Bug,
+  Calendar,
+  CalendarClock,
   Check,
   ChevronRight,
+  Cog,
   Cpu,
   Diamond,
+  Eye,
+  FileCode,
+  FileText,
   Folder,
+  FolderGit2,
+  GaugeCircle,
+  GitBranch,
   Grid3X3,
-  List,
-  MoreHorizontal,
+  KeyRound,
+  Layers,
+  LibraryBig,
+  MessageSquareQuote,
+  Palette,
   Play,
   Plug,
   Search,
   Settings,
+  Settings2,
+  Sliders,
   Sparkles,
-  Terminal,
+  StickyNote,
+  TextCursorInput,
+  Trash2,
+  Variable,
+  Wand2,
+  Workflow,
+  Wrench,
   X,
   Zap,
 } from 'lucide-react';
@@ -37,7 +61,6 @@ import {
   EditorSettings,
   EureciaSettings,
   MaintenanceSettings,
-  MobilePreviewSettings,
   NotificationsSettings,
   PromptPrefaceSettings,
   UsageDisplaySettings,
@@ -47,6 +70,7 @@ import {
   BackendConfigSettings,
   OpenCodeProcessModeSettings,
 } from '@/features/settings/ui-backend-config-settings';
+import { IconClaude, IconCodex, IconGithubCopilot } from '@/common/ui/icons';
 import {
   ProjectSettings,
   type ProjectSettingsMenuItem,
@@ -61,6 +85,7 @@ import { AgentsSettings } from '@/features/settings/ui-agents-settings';
 import { AiGenerationSettings } from '@/features/settings/ui-ai-generation-settings';
 import { api } from '@/lib/api';
 import { AutocompleteSettings } from '@/features/settings/ui-autocomplete-settings';
+import { AutoReviewSettings } from '@/features/settings/ui-auto-review-settings';
 import { AzureDevOpsTab } from '@/features/settings/ui-azure-devops-tab';
 import { DebugDatabase } from '@/features/settings/ui-debug-database';
 import { getAgentBackendBadge } from '@shared/agent-backend-metadata';
@@ -71,6 +96,7 @@ import { McpServersSettings } from '@/features/settings/ui-mcp-servers-settings'
 import { ModelPresetsSettings } from '@/features/settings/ui-model-presets-settings';
 import { PromptSnippetsSettings } from '@/features/settings/ui-prompt-snippets-settings';
 import { RateLimitSwapSettings } from '@/features/settings/ui-rate-limit-swap-settings';
+import { SettingsErrorBoundary } from '@/features/settings/ui-settings-error-boundary';
 import { SkillsSettings } from '@/features/settings/ui-skills-settings';
 import { SourcesSettings } from '@/features/settings/ui-sources-settings';
 import { TokensTab } from '@/features/settings/ui-tokens-tab';
@@ -79,6 +105,21 @@ import { TokensTab } from '@/features/settings/ui-tokens-tab';
 
 import { useCurrentSettingsProject } from './use-current-settings-project';
 
+/* ── Brand icon adapters ──
+   Nav leaves render `<Icon size={n} />`; SVGR components need width/height. */
+
+function brandIcon(
+  Brand: React.ComponentType<React.SVGProps<SVGSVGElement>>,
+): React.ElementType {
+  return function BrandNavIcon({ size = 14 }: { size?: number }) {
+    return <Brand width={size} height={size} />;
+  };
+}
+
+const IconClaudeNav = brandIcon(IconClaude);
+const IconCodexNav = brandIcon(IconCodex);
+const IconCopilotNav = brandIcon(IconGithubCopilot);
+
 /* ── Types ── */
 
 type GlobalSubItem = {
@@ -86,6 +127,7 @@ type GlobalSubItem = {
   label: string;
   beta?: boolean;
   layout?: SettingsContentLayout;
+  icon?: React.ElementType;
 };
 
 type SettingsContentLayout = 'standard' | 'fill';
@@ -104,6 +146,7 @@ type ProjectSubItem = {
   id: string;
   label: string;
   layout?: SettingsContentLayout;
+  icon?: React.ElementType;
 };
 
 type ProjectSection = {
@@ -122,18 +165,23 @@ function getGlobalSections(): GlobalSection[] {
   if (_cachedGlobalSections) return _cachedGlobalSections;
 
   const generalSubs: GlobalSubItem[] = [
-    { id: 'appearance', label: 'Appearance' },
-    { id: 'mobile-preview', label: 'Mobile Preview' },
-    { id: 'editor', label: 'Editor' },
-    { id: 'notifications', label: 'Notifications' },
+    { id: 'appearance', label: 'Appearance', icon: Palette },
+    { id: 'auto-review', label: 'Auto File Review', icon: Eye },
+    { id: 'editor', label: 'Editor', icon: Settings2 },
+    { id: 'notifications', label: 'Notifications', icon: Bell },
     ...(api.platform === 'darwin'
-      ? [{ id: 'calendar', label: 'Calendar' }]
+      ? [{ id: 'calendar', label: 'Calendar', icon: Calendar }]
       : []),
-    { id: 'usage', label: 'Usage Display' },
-    { id: 'work-activity', label: 'Work Activity' },
-    { id: 'eurecia', label: 'Eurecia' },
-    { id: 'agent-memory', label: 'Agent Memory', beta: true },
-    { id: 'maintenance', label: 'Maintenance' },
+    { id: 'usage', label: 'Usage Display', icon: GaugeCircle },
+    { id: 'work-activity', label: 'Work Activity', icon: CalendarClock },
+    { id: 'eurecia', label: 'Eurecia', icon: Plug },
+    {
+      id: 'agent-memory',
+      label: 'Agent Memory',
+      beta: true,
+      icon: Brain,
+    },
+    { id: 'maintenance', label: 'Maintenance', icon: Wrench },
   ];
 
   _cachedGlobalSections = [
@@ -152,10 +200,14 @@ function getGlobalSections(): GlobalSection[] {
       title: 'Coding Agents',
       subtitle: 'Backends, thinking defaults, and model presets',
       subs: [
-        { id: 'presets', label: 'Model Presets' },
-        { id: 'process-mode', label: 'Process Mode' },
-        { id: 'prompt-preface', label: 'Prompt Preface' },
-        { id: 'rate-limit-swap', label: 'Rate Limit Swap' },
+        { id: 'presets', label: 'Model Presets', icon: Sliders },
+        { id: 'process-mode', label: 'Process Mode', icon: Cog },
+        {
+          id: 'prompt-preface',
+          label: 'Prompt Preface',
+          icon: MessageSquareQuote,
+        },
+        { id: 'rate-limit-swap', label: 'Rate Limit Swap', icon: ArrowLeftRight },
         createBackendSubItem({ id: 'claude-code', label: 'Claude Code' }),
         createBackendSubItem({ id: 'opencode', label: 'OpenCode' }),
         createBackendSubItem({ id: 'codex', label: 'Codex' }),
@@ -185,15 +237,15 @@ function getGlobalSections(): GlobalSection[] {
       title: 'Skills & Agents',
       subtitle: 'Manage skills, sources, and backend subagents',
       subs: [
-        { id: 'sources', label: 'Sources', layout: 'fill' },
-        { id: 'skills', label: 'Skills', layout: 'fill' },
-        { id: 'agents', label: 'Agents', layout: 'fill' },
+        { id: 'sources', label: 'Sources', layout: 'fill', icon: LibraryBig },
+        { id: 'skills', label: 'Skills', layout: 'fill', icon: Wand2 },
+        { id: 'agents', label: 'Agents', layout: 'fill', icon: Bot },
       ],
     },
     {
       id: 'prompt-snippets',
       label: 'Snippets',
-      icon: Terminal,
+      icon: StickyNote,
       title: 'Prompt Snippets',
       subtitle: 'Reusable prompt templates with variables',
       layout: 'fill',
@@ -208,7 +260,7 @@ function getGlobalSections(): GlobalSection[] {
     {
       id: 'tokens',
       label: 'Tokens',
-      icon: MoreHorizontal,
+      icon: KeyRound,
       title: 'Tokens',
       subtitle: 'Provider authentication tokens',
     },
@@ -222,20 +274,28 @@ function getGlobalSections(): GlobalSection[] {
     {
       id: 'autocomplete',
       label: 'Autocomplete',
-      icon: Terminal,
+      icon: TextCursorInput,
       title: 'Autocomplete',
       subtitle: 'Inline code completion configuration',
     },
     {
       id: 'debug',
       label: 'Debug',
-      icon: List,
+      icon: Bug,
       title: 'Debug',
       subtitle: 'Database viewer and diagnostics',
     },
   ];
   return _cachedGlobalSections;
 }
+
+const BACKEND_NAV_ICONS: Partial<
+  Record<AgentBackendType, React.ElementType>
+> = {
+  'claude-code': IconClaudeNav,
+  codex: IconCodexNav,
+  copilot: IconCopilotNav,
+};
 
 function createBackendSubItem({
   id,
@@ -249,6 +309,7 @@ function createBackendSubItem({
     label,
     beta: getAgentBackendBadge(id) === 'Beta',
     layout: 'fill',
+    icon: BACKEND_NAV_ICONS[id] ?? Bot,
   };
 }
 
@@ -258,12 +319,17 @@ const PROJECT_SECTIONS: ProjectSection[] = [
     label: 'General',
     icon: Settings,
     subs: [
-      { id: 'details', label: 'Details' },
-      { id: 'commit-ignore', label: 'Commit Ignore' },
-      { id: 'worktree', label: 'Worktree' },
-      { id: 'feature-map', label: 'Feature Map' },
-      { id: 'prompt-preface', label: 'Prompt Preface' },
-      { id: 'autocomplete', label: 'Autocomplete' },
+      { id: 'details', label: 'Details', icon: FileText },
+      { id: 'commit-ignore', label: 'Commit Ignore', icon: FileCode },
+      { id: 'env-vars', label: 'Environment Variables', icon: Variable },
+      { id: 'worktree', label: 'Worktree', icon: GitBranch },
+      { id: 'feature-map', label: 'Feature Map', icon: Layers },
+      {
+        id: 'prompt-preface',
+        label: 'Prompt Preface',
+        icon: MessageSquareQuote,
+      },
+      { id: 'autocomplete', label: 'Autocomplete', icon: TextCursorInput },
     ],
   },
   { id: 'permissions', label: 'Permissions', icon: Zap },
@@ -272,8 +338,8 @@ const PROJECT_SECTIONS: ProjectSection[] = [
     label: 'Integrations',
     icon: Plug,
     subs: [
-      { id: 'integrations', label: 'Repo & Work Items' },
-      { id: 'pipelines', label: 'Pipelines' },
+      { id: 'integrations', label: 'Repo & Work Items', icon: FolderGit2 },
+      { id: 'pipelines', label: 'Pipelines', icon: Workflow },
     ],
   },
   { id: 'run-commands', label: 'Run Commands', icon: Play },
@@ -285,7 +351,7 @@ const PROJECT_SECTIONS: ProjectSection[] = [
     icon: Sparkles,
     layout: 'fill',
   },
-  { id: 'danger-zone', label: 'Danger Zone', icon: AlertTriangle },
+  { id: 'danger-zone', label: 'Danger Zone', icon: Trash2 },
 ];
 
 /* ── Shared style constants ── */
@@ -395,7 +461,7 @@ function globalLeaf(
   return {
     key: subId ? `${sectionId}:${subId}` : sectionId,
     label: label ?? sub?.label ?? section.label,
-    icon: section.icon,
+    icon: sub?.icon ?? section.icon,
     beta: sub?.beta,
     selection: subId ? { sectionId, subId } : { sectionId },
   };
@@ -413,7 +479,7 @@ function projectLeaf(
   return {
     key: subId ? `${sectionId}:${subId}` : sectionId,
     label: label ?? sub?.label ?? section.label,
-    icon: section.icon,
+    icon: sub?.icon ?? section.icon,
     selection: subId ? { sectionId, subId } : { sectionId },
   };
 }
@@ -425,6 +491,7 @@ function getGlobalNavGroups(): SettingsNavGroup[] {
       items: [
         globalLeaf('general', 'editor', 'General'),
         globalLeaf('general', 'appearance'),
+        globalLeaf('general', 'auto-review', 'Auto File Review'),
         globalLeaf('general', 'notifications'),
         globalLeaf('general', 'work-activity', 'Work Activity'),
         globalLeaf('general', 'agent-memory'),
@@ -483,6 +550,7 @@ function getProjectNavGroups(): SettingsNavGroup[] {
       items: [
         projectLeaf('project-general', 'details'),
         projectLeaf('project-general', 'commit-ignore'),
+        projectLeaf('project-general', 'env-vars'),
         projectLeaf('project-general', 'worktree'),
         projectLeaf('project-general', 'feature-map'),
         projectLeaf('project-general', 'autocomplete'),
@@ -532,7 +600,7 @@ const SETTINGS_SEARCH_ALIASES: Record<string, string> = {
   'global:general:eurecia': 'timesheet tenant custom axes login authentication',
   'global:general:usage': 'rate limit status title bar tokens usage',
   'global:general:agent-memory': 'agent memory evidence extraction learning beta',
-  'global:general:maintenance': 'cleanup gitignore housekeeping cache',
+  'global:general:maintenance': 'cleanup gitignore housekeeping cache worktrees unused prune disk space',
   'global:coding-agents:presets': 'models defaults thinking effort agent model presets',
   'global:coding-agents:process-mode': 'opencode server managed process lifecycle',
   'global:coding-agents:prompt-preface': 'instructions system prompt preface custom prompt',
@@ -671,7 +739,12 @@ function GlobalContent({ selection }: { selection: ActiveSelection }) {
   if (fillHeight) {
     return (
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-        <GlobalContentInner selection={selection} />
+        <SettingsErrorBoundary
+          key={`${selection.sectionId}:${selection.subId ?? ''}`}
+          sectionLabel={`${selection.sectionId}:${selection.subId ?? ''}`}
+        >
+          <GlobalContentInner selection={selection} />
+        </SettingsErrorBoundary>
       </div>
     );
   }
@@ -701,7 +774,12 @@ function GlobalContent({ selection }: { selection: ActiveSelection }) {
           </div>
         </div>
       )}
-      <GlobalContentInner selection={selection} />
+      <SettingsErrorBoundary
+        key={`${selection.sectionId}:${selection.subId ?? ''}`}
+        sectionLabel={`${selection.sectionId}:${selection.subId ?? ''}`}
+      >
+        <GlobalContentInner selection={selection} />
+      </SettingsErrorBoundary>
     </div>
   );
 }
@@ -713,8 +791,8 @@ function getGlobalSubtitle(sectionId: string, subId: string): string {
         return 'Where projects open and how they launch.';
       case 'appearance':
         return 'Visual effects and motion preferences.';
-      case 'mobile-preview':
-        return 'Mobile preview setup and proxy behavior.';
+      case 'auto-review':
+        return 'Patterns whose files count as reviewed automatically.';
       case 'notifications':
         return 'How and when jean-claude lets you know about runs.';
       case 'work-activity':
@@ -750,8 +828,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <EditorSettings />;
       case 'general:appearance':
         return <AppearanceSettings />;
-      case 'general:mobile-preview':
-        return <MobilePreviewSettings />;
+      case 'general:auto-review':
+        return <AutoReviewSettings />;
       case 'general:notifications':
         return <NotificationsSettings />;
       case 'general:work-activity':
@@ -821,8 +899,39 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
     case 'debug':
       return <DebugDatabase />;
     default:
-      return null;
+      // Previously `return null`, which rendered a silently blank panel and
+      // made mis-routed selections impossible to diagnose.
+      return (
+        <EmptySettingsContent
+          reason="No settings content is registered for this selection."
+          detail={`sectionId=${selection.sectionId} subId=${selection.subId ?? '—'}`}
+        />
+      );
   }
+}
+
+/**
+ * Visible fallback for settings selections that map to no content. Renders the
+ * offending selection so a blank panel is always self-explanatory.
+ */
+function EmptySettingsContent({
+  reason,
+  detail,
+}: {
+  reason: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-4">
+      <div className="text-sm font-semibold text-amber-200">
+        Nothing to show here
+      </div>
+      <div className="text-ink-2 mt-1 text-sm">{reason}</div>
+      <pre className="text-ink-3 mt-2 rounded bg-black/30 p-2 font-mono text-xs">
+        {detail}
+      </pre>
+    </div>
+  );
 }
 
 /* ── Resolve project menu item from section selection ── */
@@ -1267,17 +1376,32 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                   fillHeight ? { padding: 0 } : { padding: '28px 40px 44px' }
                 }
               >
-                {displayedActiveTab === 'global' && (
-                  <GlobalContent selection={globalSelection} />
-                )}
-
-                {displayedActiveTab === 'project' && resolvedProject && (
-                  <ProjectContent
-                    projectId={resolvedProject.id}
-                    selection={projectSelection}
-                    onProjectDeleted={handleProjectDeleted}
-                  />
-                )}
+                <SettingsErrorBoundary
+                  key={
+                    displayedActiveTab === 'global'
+                      ? `global:${globalSelection.sectionId}:${globalSelection.subId ?? ''}`
+                      : `project:${projectSelection.sectionId}:${projectSelection.subId ?? ''}`
+                  }
+                  sectionLabel={
+                    displayedActiveTab === 'global'
+                      ? `global:${globalSelection.sectionId}:${globalSelection.subId ?? ''}`
+                      : `project:${projectSelection.sectionId}:${projectSelection.subId ?? ''}`
+                  }
+                >
+                  {displayedActiveTab === 'global' ? (
+                    <GlobalContent selection={globalSelection} />
+                  ) : resolvedProject ? (
+                    <ProjectContent
+                      projectId={resolvedProject.id}
+                      selection={projectSelection}
+                      onProjectDeleted={handleProjectDeleted}
+                    />
+                  ) : (
+                    <div className="text-ink-3 text-sm">
+                      No project selected.
+                    </div>
+                  )}
+                </SettingsErrorBoundary>
               </div>
             </div>
 
