@@ -987,7 +987,10 @@ class AgentService {
         });
       }
       this.sessions.delete(stepId);
-      this.autoAcceptSteps.delete(stepId);
+      // NOTE: `autoAcceptSteps` is deliberately NOT cleared here. A session is
+      // torn down at the end of every turn, so clearing it would silently flip
+      // auto-accept off after each turn. It stays on until the user toggles it
+      // off (`setAutoAccept(stepId, false)`) or the app restarts.
       this.permissionRefreshGeneration.delete(stepId);
       this.permissionRefreshQueue.delete(stepId);
     }
@@ -2513,7 +2516,15 @@ class AgentService {
           type: 'permission',
           permissionRequest: request,
         });
-        if (this.autoAcceptSteps.has(stepId)) {
+        // A request that would flip the interaction mode on approval (plan
+        // mode's ExitPlanMode) must always be shown. Auto-accept now outlives
+        // the run that enabled it, so without this the user could turn on
+        // auto-accept during an `auto` turn and have a later plan silently
+        // approved and executed without ever seeing it.
+        const changesModeOnAllow = Boolean(
+          request.sessionAllowButton?.setModeOnAllow,
+        );
+        if (this.autoAcceptSteps.has(stepId) && !changesModeOnAllow) {
           dbg.agentPermission(
             'Auto-accepting request %s for step %s (session auto-accept)',
             request.requestId,

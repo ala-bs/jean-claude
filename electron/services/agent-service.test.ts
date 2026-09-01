@@ -1354,6 +1354,11 @@ describe('agentService provider runtime', () => {
     vi.clearAllMocks();
     resetProviderState();
     setDefaultMocks();
+    // `agentService` is a module singleton and auto-accept intentionally
+    // outlives a session now, so reset it between tests.
+    (
+      agentService as unknown as { autoAcceptSteps: Set<string> }
+    ).autoAcceptSteps.clear();
   });
 
   afterEach(async () => {
@@ -4383,6 +4388,90 @@ describe('agentService provider runtime', () => {
     expect(
       (config.permissionRules ?? []).some((rule) => rule.tool === 'script_edit'),
     ).toBe(false);
+  });
+
+  it('keeps auto-accept enabled after a turn completes', async () => {
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+
+    await agentService.setAutoAccept('step-1', true);
+    await agentService.start('step-1');
+
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+    // The session is torn down at the end of the turn; auto-accept must survive.
+    await waitForAssertion(() => {
+      expect(
+        (agentService as unknown as { sessions: Map<string, unknown> }).sessions.has(
+          'step-1',
+        ),
+      ).toBe(false);
+    });
+    expect(agentService.isAutoAcceptEnabled('step-1')).toBe(true);
+  });
+
+  it('does not auto-accept a plan approval when auto-accept is on', async () => {
+    // ExitPlanMode arrives as an ordinary permission request, but approving it
+    // flips the interaction mode. It must always be shown to the user.
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-plan',
+        toolName: 'ExitPlanMode',
+        input: { plan: 'do the thing' },
+        sessionAllowButton: {
+          label: 'Allow and Auto-Edit',
+          toolsToAllow: ['Edit', 'Write'],
+          setModeOnAllow: 'ask',
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.setAutoAccept('step-1', true);
+    const startPromise = agentService.start('step-1');
+
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'permission',
+        data: { requestId: 'permission-plan' },
+      });
+    });
+    expect(providerCalls.permissions).toEqual([]);
+
+    release();
+    await startPromise;
+  });
+
+  it('still grants script-edit on a second turn after auto-accept survives', async () => {
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+
+    await agentService.setAutoAccept('step-1', true);
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+    await waitForAssertion(() => {
+      expect(
+        (
+          agentService as unknown as { sessions: Map<string, unknown> }
+        ).sessions.has('step-1'),
+      ).toBe(false);
+    });
+
+    // Second turn: rules must be rederived from the surviving flag.
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(2);
+    });
+    const { config } = providerCalls.runStarts[1] as {
+      config: AgentBackendConfig;
+    };
+    expect(
+      (config.permissionRules ?? []).some((rule) => rule.tool === 'script_edit'),
+    ).toBe(true);
   });
 
   it('does not auto-accept questions when session auto-accept is on', async () => {
