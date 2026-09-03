@@ -16,6 +16,7 @@ import {
   useAddThreadReply,
   useMarkPullRequestDraft,
   usePublishPullRequest,
+  useRequeuePolicyEvaluation,
   useSetAutoComplete,
 } from './use-pull-requests';
 
@@ -124,6 +125,58 @@ describe('useMarkPullRequestDraft', () => {
       id: 42,
       isDraft: true,
     });
+  });
+});
+
+describe('useRequeuePolicyEvaluation', () => {
+  it('invalidates PR details and policy evaluations after CI is triggered', async () => {
+    vi.spyOn(api.azureDevOps, 'requeuePolicyEvaluation').mockResolvedValue();
+
+    const repoInfo = {
+      projectName: 'Project',
+      providerId: 'provider-1',
+      projectId: 'azure-project-1',
+      repoId: 'repo-1',
+    };
+    const prKey = [
+      'local-project-1',
+      'provider-1',
+      'azure-project-1',
+      'repo-1',
+      42,
+    ];
+    const queryClient = new QueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    let mutation: ReturnType<typeof useRequeuePolicyEvaluation> | null = null;
+
+    function Consumer() {
+      mutation = useRequeuePolicyEvaluation('local-project-1', 42, repoInfo);
+      return null;
+    }
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    flushSync(() => {
+      root!.render(
+        createElement(
+          QueryClientProvider,
+          { client: queryClient },
+          createElement(Consumer),
+        ),
+      );
+    });
+
+    await mutation!.mutateAsync({ evaluationId: 'eval-1' });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(
+      (call) => call[0]?.queryKey,
+    );
+    expect(invalidatedKeys).toContainEqual([
+      'pull-request-policy-evaluations',
+      ...prKey,
+    ]);
+    expect(invalidatedKeys).toContainEqual(['pull-request', ...prKey]);
   });
 });
 
