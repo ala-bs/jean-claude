@@ -1,10 +1,12 @@
+# pnpm 11 settings. `onlyBuiltDependencies` was removed in v11 — use `allowBuilds`.
 allowBuilds:
-  better-sqlite3: set this to true or false
-  electron: set this to true or false
-  electron-winstaller: set this to true or false
-  esbuild: set this to true or false
-  node-pty: set this to true or false
+  better-sqlite3: true
+  electron: true
+  # Transitive Electron 23 pulled in by react-devtools; skip its ~80MB download.
+  electron@23.3.13: false
+  electron-winstaller: true
+  esbuild: true
+  node-pty: true
 enablePrePostScripts: true
-onlyBuiltDependencies:
-  - electron
-  - esbuild
+overrides:
+  node-abi: 4.33.0
