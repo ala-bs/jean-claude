@@ -447,7 +447,7 @@ describe('TaskPanel zero-step PR workspace', () => {
     mocks.deletePrWorkspaceDialogProps = null;
     mocks.removeSessionAllowedTool.mockReset().mockResolvedValue(undefined);
     mocks.removalResult = null;
-    mocks.startCommand.mockReset().mockResolvedValue(undefined);
+    mocks.startCommand.mockReset().mockResolvedValue({ started: true });
     useNavigationStore.setState({ taskState: {}, addStepDrafts: {} });
     useBackgroundJobsStore.setState({ jobs: [] });
     useTaskMessagesStore.setState({ steps: {}, runCommandLogs: {}, runCommandRunning: {} });
