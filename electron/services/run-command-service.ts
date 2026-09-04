@@ -36,6 +36,42 @@ import { TaskRepository } from '../database/repositories/tasks';
 
 
 const execAsync = promisify(exec);
+// `lsof`/`netstat` can hang indefinitely (stalled network mounts, name
+// resolution, huge fd tables). Never let a port probe outlive this budget.
+// Caveat: for the piped win32 `netstat | findstr` probe the signal only reaches
+// the shell, so a wedged netstat can outlive us as an orphan — the promise
+// still rejects, which is what unblocks the caller.
+const PORT_PROBE_TIMEOUT_MS = 3000;
+const PORT_PROBE_SLOW_WARN_MS = 500;
+
+/**
+ * True when a probe was aborted by our own timeout rather than exiting with a
+ * non-zero status (which for `lsof` just means "nothing is listening").
+ */
+function isPortProbeTimeout(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { killed?: boolean }).killed === true
+  );
+}
+
+async function execPortProbe(command: string): Promise<string> {
+  const startedAt = Date.now();
+  try {
+    const { stdout } = await execAsync(command, {
+      timeout: PORT_PROBE_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+    });
+    return stdout;
+  } finally {
+    const durationMs = Date.now() - startedAt;
+    if (durationMs >= PORT_PROBE_SLOW_WARN_MS) {
+      dbg.runCommand('Slow port probe (%dms): %s', durationMs, command);
+    }
+  }
+}
+
 const RUN_COMMAND_LOG_FLUSH_INTERVAL_MS = 50;
 const PORT_SCAN_TAIL_LENGTH = 200;
 const RUN_COMMAND_LOG_FLUSH_BYTES = 16 * 1024;
@@ -576,23 +612,23 @@ export class RunCommandService {
   private async getPortsInUse(
     commands: ProjectCommand[],
   ): Promise<PortInUse[]> {
-    const portsInUse: PortInUse[] = [];
-
-    for (const command of commands) {
-      for (const port of command.ports) {
+    // Probe every port concurrently: a serial scan multiplies any single slow
+    // probe by the number of ports and stalls the whole start operation.
+    const probes = commands.flatMap((command) =>
+      command.ports.map(async (port): Promise<PortInUse | null> => {
         const processInfo = await this.checkPortInUse(port);
-        if (processInfo) {
-          portsInUse.push({
-            port,
-            commandId: command.id,
-            command: command.command,
-            processInfo,
-          });
-        }
-      }
-    }
+        if (!processInfo) return null;
+        return {
+          port,
+          commandId: command.id,
+          command: command.command,
+          processInfo,
+        };
+      }),
+    );
 
-    return portsInUse;
+    const results = await Promise.all(probes);
+    return results.filter((result) => result !== null);
   }
 
   private getPortOverrideEnvVar(command: ProjectCommand): string | null {
@@ -942,17 +978,19 @@ export class RunCommandService {
     dbg.runCommand('Checking if port %d is in use', port);
     try {
       if (process.platform === 'win32') {
-        const { stdout } = await execAsync(`netstat -ano | findstr :${port}`);
+        const stdout = await execPortProbe(`netstat -ano | findstr :${port}`);
         const match = stdout.match(/LISTENING\s+(\d+)/);
         const result = match ? `PID ${match[1]}` : null;
         dbg.runCommand('Port %d: %s', port, result ?? 'available');
         return result;
       } else {
-        const { stdout } = await execAsync(`lsof -ti:${port}`);
+        // -n/-P skip reverse DNS and /etc/services lookups, the most common
+        // source of multi-second lsof hangs.
+        const stdout = await execPortProbe(`lsof -nP -ti:${port}`);
         const pid = stdout.trim().split('\n')[0];
         if (pid) {
           try {
-            const { stdout: psOut } = await execAsync(`ps -p ${pid} -o comm=`);
+            const psOut = await execPortProbe(`ps -p ${pid} -o comm=`);
             const result = `${psOut.trim()} (PID ${pid})`;
             dbg.runCommand('Port %d in use by: %s', port, result);
             return result;
@@ -964,7 +1002,18 @@ export class RunCommandService {
         dbg.runCommand('Port %d is available', port);
         return null;
       }
-    } catch {
+    } catch (error) {
+      if (isPortProbeTimeout(error)) {
+        // We cannot tell whether the port is free, but blocking the start
+        // forever is worse: report available and let the command surface its
+        // own bind error.
+        dbg.runCommand(
+          'Port %d check timed out after %dms; treating as available',
+          port,
+          PORT_PROBE_TIMEOUT_MS,
+        );
+        return null;
+      }
       dbg.runCommand('Port %d check failed (likely available)', port);
       return null;
     }
@@ -974,7 +1023,7 @@ export class RunCommandService {
     dbg.runCommand('Killing processes on port %d', port);
     try {
       if (process.platform === 'win32') {
-        const { stdout } = await execAsync(`netstat -ano | findstr :${port}`);
+        const stdout = await execPortProbe(`netstat -ano | findstr :${port}`);
         const match = stdout.match(/LISTENING\s+(\d+)/);
         if (match) {
           const pid = Number(match[1]);
@@ -983,11 +1032,14 @@ export class RunCommandService {
             pid,
             port,
           );
-          // Use /T to kill the entire process tree on Windows
-          await execAsync(`taskkill /PID ${pid} /T /F`);
+          // Use /T to kill the entire process tree on Windows.
+          // Bounded like the probes so a wedged taskkill can't stall a start.
+          await execAsync(`taskkill /PID ${pid} /T /F`, {
+            timeout: PORT_PROBE_TIMEOUT_MS,
+          });
         }
       } else {
-        const { stdout } = await execAsync(`lsof -ti:${port}`);
+        const stdout = await execPortProbe(`lsof -nP -ti:${port}`);
         const pids = stdout.trim().split('\n').filter(Boolean).map(Number);
         for (const pid of pids) {
           dbg.runCommand(
@@ -999,7 +1051,15 @@ export class RunCommandService {
         }
       }
       dbg.runCommand('Port %d killed successfully', port);
-    } catch {
+    } catch (error) {
+      if (isPortProbeTimeout(error)) {
+        dbg.runCommand(
+          'Port %d kill aborted: lookup timed out after %dms; occupant may still be alive',
+          port,
+          PORT_PROBE_TIMEOUT_MS,
+        );
+        return;
+      }
       dbg.runCommand('Port %d may already be free', port);
     }
   }
