@@ -49,6 +49,7 @@ import {
   sendMetroReloadCommand,
 } from './mobile-preview-dev-menu';
 import { androidAdapter } from './mobile-preview-android-adapter';
+import { confirmQuit } from '../lib/quit-confirmation';
 import { iosIdbAdapter } from './mobile-preview-ios-idb-adapter';
 
 type MobilePreviewAdapter = {
@@ -1171,6 +1172,7 @@ export const mobilePreviewService = createMobilePreviewService({
   },
   lifecycle: {
     onBeforeQuit: (callback) => app.on('before-quit', callback),
+    confirmQuit,
   },
   validateTaskCanStart: validatePersistedMobilePreviewTaskCanStart,
   deviceUsageStore: {
