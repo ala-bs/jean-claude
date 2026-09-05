@@ -13,6 +13,7 @@ import { CommandPaletteOverlay } from '@/features/command-palette/ui-command-pal
 import { LearningCenterOverlay } from '@/features/onboarding/ui-learning-center-overlay';
 import { NewTaskOverlay } from '@/features/new-task/ui-new-task-overlay';
 import { PipelinesOverlay } from '@/features/pipelines/ui-pipelines-overlay';
+import { PrCompletionQueueOverlay } from '@/features/pull-request/ui-pr-completion-queue-overlay';
 import { ProjectOverlay } from '@/features/project/ui-project-overlay';
 import { ResourcesOverlay } from '@/features/resources/ui-resources-overlay';
 import { RunningCommandsOverlay } from '@/features/run-commands/ui-running-commands-overlay';
@@ -36,6 +37,7 @@ const RENDERED_OVERLAYS = new Set<string>([
   'azure-board',
   'running-commands',
   'pipelines',
+  'pr-completion-queue',
   'learning-center',
 ] satisfies OverlayType[]);
 
@@ -93,6 +95,11 @@ export function OverlayHost() {
       break;
     case 'pipelines':
       overlay = <PipelinesOverlay onClose={() => close('pipelines')} />;
+      break;
+    case 'pr-completion-queue':
+      overlay = (
+        <PrCompletionQueueOverlay onClose={() => close('pr-completion-queue')} />
+      );
       break;
     case 'learning-center':
       overlay = <LearningCenterOverlay onClose={() => close('learning-center')} />;

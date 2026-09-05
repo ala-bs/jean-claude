@@ -50,6 +50,7 @@ function createProject(overrides: Partial<Project> = {}): Project {
     workItemPriority: 'low',
     autoPullSourceBranch: false,
     commitWithNoVerify: false,
+    queuePrAutoComplete: false,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,

@@ -147,6 +147,7 @@ export interface ProjectTable {
   showPrsInFeed: number; // SQLite boolean: 1 = show (default), 0 = hide
   autoPullSourceBranch: number; // SQLite boolean: 1 = pull before creating worktree, 0 = skip
   commitWithNoVerify: number; // SQLite boolean: 1 = pass --no-verify to git commit, 0 = run hooks
+  queuePrAutoComplete: number; // SQLite boolean: 1 = serialize PR auto-complete one at a time, 0 = set immediately
   archivedAt: string | null;
   createdAt: Generated<string>;
   updatedAt: string;

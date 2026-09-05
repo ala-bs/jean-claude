@@ -792,6 +792,7 @@ export function ProjectSettings({
   const [defaultBranch, setDefaultBranch] = useState('');
   const [autoPullSourceBranch, setAutoPullSourceBranch] = useState(false);
   const [commitWithNoVerify, setCommitWithNoVerify] = useState(false);
+  const [queuePrAutoComplete, setQueuePrAutoComplete] = useState(false);
   const [defaultAgentBackend, setDefaultAgentBackend] =
     useState<AgentBackendType | null>(null);
   const [defaultAgentModelPreference, setDefaultAgentModelPreference] =
@@ -852,6 +853,7 @@ export function ProjectSettings({
       defaultBranch: project.defaultBranch ?? null,
       autoPullSourceBranch: project.autoPullSourceBranch,
       commitWithNoVerify: project.commitWithNoVerify,
+      queuePrAutoComplete: project.queuePrAutoComplete,
       defaultAgentBackend: project.defaultAgentBackend,
       defaultAgentModelPreference: project.defaultAgentModelPreference,
       prPriority: project.prPriority ?? 'normal',
@@ -876,6 +878,7 @@ export function ProjectSettings({
       defaultBranch: defaultBranch || null,
       autoPullSourceBranch,
       commitWithNoVerify,
+      queuePrAutoComplete,
       defaultAgentBackend,
       defaultAgentModelPreference,
       prPriority,
@@ -893,6 +896,7 @@ export function ProjectSettings({
       aiSkillSlots,
       autoPullSourceBranch,
       commitWithNoVerify,
+      queuePrAutoComplete,
       color,
       completionContext,
       defaultAgentBackend,
@@ -950,6 +954,7 @@ export function ProjectSettings({
       setDefaultBranch(project.defaultBranch ?? '');
       setAutoPullSourceBranch(project.autoPullSourceBranch);
       setCommitWithNoVerify(project.commitWithNoVerify);
+      setQueuePrAutoComplete(project.queuePrAutoComplete);
       setDefaultAgentBackend(project.defaultAgentBackend);
       setDefaultAgentModelPreference(project.defaultAgentModelPreference);
       setDefaultAgentPresetId(
@@ -1549,6 +1554,23 @@ export function ProjectSettings({
             />
             <p className="text-ink-3 mt-1 text-xs">
               Skips Git hooks for app-created commits in this project.
+            </p>
+          </div>
+
+          <div>
+            <Checkbox
+              id="queuePrAutoComplete"
+              checked={queuePrAutoComplete}
+              onChange={(checked) => {
+                markFieldDirty('queuePrAutoComplete');
+                setQueuePrAutoComplete(checked);
+              }}
+              label="Queue PR auto-complete one at a time"
+            />
+            <p className="text-ink-3 mt-1 text-xs">
+              Arms auto-complete on a single PR of this project at a time and
+              starts the next one once the current PR merges. Failed PRs are
+              skipped instead of blocking the queue.
             </p>
           </div>
 

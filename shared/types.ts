@@ -368,6 +368,7 @@ export interface Project {
   showPrsInFeed: boolean;
   autoPullSourceBranch: boolean;
   commitWithNoVerify: boolean;
+  queuePrAutoComplete: boolean;
   defaultAgentBackend: AgentBackendType | null; // null = use global default
   defaultAgentModelPreference: ModelPreference | null;
   completionContext: string | null;
@@ -408,6 +409,7 @@ export interface NewProject {
   showPrsInFeed?: boolean;
   autoPullSourceBranch?: boolean;
   commitWithNoVerify?: boolean;
+  queuePrAutoComplete?: boolean;
   defaultAgentBackend?: AgentBackendType | null;
   defaultAgentModelPreference?: ModelPreference | null;
   completionContext?: string | null;
@@ -448,6 +450,7 @@ export interface UpdateProject {
   showPrsInFeed?: boolean;
   autoPullSourceBranch?: boolean;
   commitWithNoVerify?: boolean;
+  queuePrAutoComplete?: boolean;
   defaultAgentBackend?: AgentBackendType | null;
   defaultAgentModelPreference?: ModelPreference | null;
   completionContext?: string | null;

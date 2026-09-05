@@ -121,6 +121,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     showPrsInFeed: true,
     autoPullSourceBranch: false,
     commitWithNoVerify: false,
+  queuePrAutoComplete: false,
     defaultAgentBackend: 'opencode',
     defaultAgentModelPreference: 'gpt-5.5',
     completionContext: null,
