@@ -186,18 +186,64 @@ export const AiUsageRepository = {
   },
 
   async rebuildTaskTotal(taskId: string): Promise<void> {
-    const events = (await db
+    // Runs on every `result-update` chunk of a live session. Aggregate in SQL
+    // instead of loading every event row for the task and reducing in JS —
+    // otherwise each chunk re-materialises the task's entire usage history,
+    // making the cost grow quadratically over the life of a task.
+    const aggregate = await db
       .selectFrom('ai_usage_events')
-      .selectAll()
       .where('taskId', '=', taskId)
-      .execute()) as AiUsageEvent[];
+      .select((eb) => [
+        eb.fn.coalesce(eb.fn.sum<number>('inputTokens'), eb.lit(0)).as('inputTokens'),
+        eb.fn.coalesce(eb.fn.sum<number>('outputTokens'), eb.lit(0)).as('outputTokens'),
+        eb.fn
+          .coalesce(eb.fn.sum<number>('cacheReadTokens'), eb.lit(0))
+          .as('cacheReadTokens'),
+        eb.fn
+          .coalesce(eb.fn.sum<number>('cacheCreationTokens'), eb.lit(0))
+          .as('cacheCreationTokens'),
+        eb.fn.coalesce(eb.fn.sum<number>('totalTokens'), eb.lit(0)).as('totalTokens'),
+        eb.fn
+          .coalesce(eb.fn.sum<number>('estimatedCostUsd'), eb.lit(0))
+          .as('estimatedCostUsd'),
+        eb.fn
+          .coalesce(eb.fn.sum<number>('providerCostUsd'), eb.lit(0))
+          .as('providerCostUsd'),
+        eb.fn
+          .coalesce(eb.fn.sum<number>('providerApiCostUsd'), eb.lit(0))
+          .as('providerApiCostUsd'),
+        eb.fn.countAll<number>().as('requests'),
+      ])
+      .executeTakeFirst();
 
-    if (events.length === 0) return;
+    if (!aggregate || Number(aggregate.requests) === 0) return;
 
-    const totals = events.map(eventFromRow).reduce(addTotals, {
+    const totals = {
       ...emptyTotals,
-    });
-    const projectId = events.find((event) => event.projectId)?.projectId;
+      inputTokens: Number(aggregate.inputTokens),
+      outputTokens: Number(aggregate.outputTokens),
+      cacheReadTokens: Number(aggregate.cacheReadTokens),
+      cacheCreationTokens: Number(aggregate.cacheCreationTokens),
+      totalTokens: Number(aggregate.totalTokens),
+      estimatedCostUsd: Number(aggregate.estimatedCostUsd),
+      providerCostUsd: Number(aggregate.providerCostUsd),
+      providerApiCostUsd: Number(aggregate.providerApiCostUsd),
+      requests: Number(aggregate.requests),
+    };
+
+    // Matches the old `events.find((event) => event.projectId)`: skip null AND
+    // empty-string projectIds, and keep insertion order deterministic (LIMIT 1
+    // without ORDER BY has no guaranteed row order).
+    const projectRow = await db
+      .selectFrom('ai_usage_events')
+      .select('projectId')
+      .where('taskId', '=', taskId)
+      .where('projectId', 'is not', null)
+      .where('projectId', '!=', '')
+      .orderBy('createdAt')
+      .limit(1)
+      .executeTakeFirst();
+    const projectId = projectRow?.projectId;
     if (!projectId) return;
     const snapshot = await getUsageDisplaySnapshot({ taskId, projectId });
 
