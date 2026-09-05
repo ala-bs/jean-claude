@@ -1142,6 +1142,12 @@ export class RunCommandService {
       );
       return this.getRunStatus(taskId);
     }
+    // A renderer holding a stale command cache can still ask for a command that
+    // has since been hidden, so visibility is enforced here too.
+    if (command.isHidden) {
+      dbg.runCommand('Command %s is hidden, refusing to start', runCommandId);
+      return this.getRunStatus(taskId);
+    }
 
     const didStop = await this.stopCommandWithoutLock({ taskId, runCommandId });
     if (!didStop) {
@@ -1241,11 +1247,23 @@ export class RunCommandService {
               `Command ${runCommandIds[invalidIndex]} not found for project ${projectId}`,
             );
           }
+          // Hidden members are dropped rather than rejected so a group stays
+          // runnable when only some of its commands are hidden.
+          const validCommands = (commands as ProjectCommand[]).filter(
+            (command) => !command.isHidden,
+          );
+          if (validCommands.length === 0) {
+            dbg.runCommand(
+              'All commands in group are hidden, refusing to start: %o',
+              runCommandIds,
+            );
+            return this.getRunStatus(taskId);
+          }
           return this.startGroupWithoutLock({
             taskId,
             projectId,
             workingDir,
-            validCommands: commands as ProjectCommand[],
+            validCommands,
             options,
           });
         },
@@ -1349,6 +1367,7 @@ export class RunCommandService {
       confirmBeforeRun: false,
       confirmMessage: null,
       isFavorite: false,
+      isHidden: false,
       sortOrder: 0,
       createdAt: new Date().toISOString(),
     };

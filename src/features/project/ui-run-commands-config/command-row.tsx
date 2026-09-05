@@ -1,5 +1,7 @@
 import {
   Check,
+  Eye,
+  EyeOff,
   GripVertical,
   HelpCircle,
   Plus,
@@ -453,7 +455,8 @@ export function CommandRow({
     <div
       ref={setNodeRef}
       style={style}
-      className={`border-glass-border bg-glass-subtle relative overflow-visible rounded-lg border ${showSuggestions && filteredSuggestions.length > 0 ? 'z-40' : ''} ${isDragging ? 'z-50 opacity-50' : ''}`}
+      data-hidden-command={command.isHidden ? 'true' : undefined}
+      className={`border-glass-border bg-glass-subtle relative overflow-visible rounded-lg border transition-opacity ${showSuggestions && filteredSuggestions.length > 0 ? 'z-40' : ''} ${isDragging ? 'z-50 opacity-50' : ''} ${command.isHidden && !isDragging ? 'opacity-55 focus-within:opacity-100 hover:opacity-100' : ''}`}
     >
       <div className="flex items-center gap-2 px-2 py-2">
         <button
@@ -580,6 +583,24 @@ export function CommandRow({
             className="h-3.5 w-3.5"
             fill={command.isFavorite ? 'currentColor' : 'none'}
           />
+        </button>
+        <button
+          type="button"
+          onClick={() => onUpdate({ isHidden: !command.isHidden })}
+          aria-label={command.isHidden ? 'Show command' : 'Hide command'}
+          aria-pressed={command.isHidden}
+          title={
+            command.isHidden
+              ? 'Hidden — not offered in run menus, the PR run control, or the Running Commands overlay'
+              : 'Hide this command from run menus without deleting it'
+          }
+          className={`hover:bg-glass-light rounded-md p-1.5 ${command.isHidden ? 'text-ink-2' : 'text-ink-4'}`}
+        >
+          {command.isHidden ? (
+            <EyeOff className="h-3.5 w-3.5" />
+          ) : (
+            <Eye className="h-3.5 w-3.5" />
+          )}
         </button>
         <button
           type="button"

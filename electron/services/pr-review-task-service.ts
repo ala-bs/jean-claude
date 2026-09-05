@@ -710,6 +710,9 @@ export function startPrCommand(
             `Command ${params.target.id} not found for project ${params.projectId}`,
           );
         }
+        if (command.isHidden) {
+          throw new Error(`Command ${params.target.id} is hidden`);
+        }
         runCommandIds = [command.id];
       } else {
         const group = await deps.findCommandGroupById(params.target.id);
@@ -718,19 +721,32 @@ export function startPrCommand(
             `Command group ${params.target.id} not found for project ${params.projectId}`,
           );
         }
-        runCommandIds = [...new Set(group.commandIds)];
-        if (runCommandIds.length === 0) {
+        const groupCommandIds = [...new Set(group.commandIds)];
+        if (groupCommandIds.length === 0) {
           throw new Error(`Command group ${params.target.id} is empty`);
         }
 
-        for (const runCommandId of runCommandIds) {
+        // Group membership is re-derived from the database here rather than
+        // taken from the renderer, so hidden members must be filtered out
+        // again or a partially-hidden group would still start them.
+        const visibleCommandIds: string[] = [];
+        for (const runCommandId of groupCommandIds) {
           const command = await deps.findCommandById(runCommandId);
           if (!command || command.projectId !== params.projectId) {
             throw new Error(
               `Command ${runCommandId} not found for project ${params.projectId}`,
             );
           }
+          if (!command.isHidden) {
+            visibleCommandIds.push(runCommandId);
+          }
         }
+        if (visibleCommandIds.length === 0) {
+          throw new Error(
+            `Command group ${params.target.id} has no visible commands`,
+          );
+        }
+        runCommandIds = visibleCommandIds;
       }
 
       const { task, created } = await createOrGetPrReviewTaskUnlocked(

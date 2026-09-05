@@ -41,6 +41,7 @@ export function buildCommandLogTabs({
         confirmBeforeRun: false,
         confirmMessage: null,
         isFavorite: false,
+        isHidden: false,
         createdAt: '',
       }),
     );

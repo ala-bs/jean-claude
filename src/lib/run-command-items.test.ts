@@ -30,6 +30,7 @@ function makeCommand(
     confirmBeforeRun: false,
     confirmMessage: null,
     isFavorite: false,
+    isHidden: false,
     sortOrder: 0,
     createdAt: '2026-07-13T10:00:00.000Z',
     ...overrides,

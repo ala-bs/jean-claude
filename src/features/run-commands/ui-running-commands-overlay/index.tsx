@@ -219,11 +219,16 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
 
   const pickerItems = useMemo(() => {
     const projectMap = new Map(projects?.map((p) => [p.id, p]));
-    return (pickerCommands ?? []).map((command) => ({
-      command,
-      projectName: projectMap.get(command.projectId)?.name ?? 'Unknown Project',
-      isFavorite: favoriteIds.has(command.id),
-    }));
+    // Hidden commands are excluded from the favorites list, so offering them
+    // here would render a star that can never turn on.
+    return (pickerCommands ?? [])
+      .filter((command) => !command.isHidden)
+      .map((command) => ({
+        command,
+        projectName:
+          projectMap.get(command.projectId)?.name ?? 'Unknown Project',
+        isFavorite: favoriteIds.has(command.id),
+      }));
   }, [favoriteIds, pickerCommands, projects]);
 
   const favorites = useMemo(() => {

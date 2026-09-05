@@ -55,14 +55,16 @@ export interface ProjectCommand {
   confirmMessage: string | null;
   /** Favorites can be run from the project root folder, without a task. */
   isFavorite: boolean;
+  /** Hidden commands stay configured but are not offered anywhere they can be run. */
+  isHidden: boolean;
   sortOrder: number;
   createdAt: string;
 }
 
 export type NewProjectCommand = Omit<
   ProjectCommand,
-  'id' | 'createdAt' | 'sortOrder' | 'isFavorite'
-> & { isFavorite?: boolean };
+  'id' | 'createdAt' | 'sortOrder' | 'isFavorite' | 'isHidden'
+> & { isFavorite?: boolean; isHidden?: boolean };
 export type UpdateProjectCommand = Partial<
   Pick<
     ProjectCommand,
@@ -77,6 +79,7 @@ export type UpdateProjectCommand = Partial<
     | 'confirmBeforeRun'
     | 'confirmMessage'
     | 'isFavorite'
+    | 'isHidden'
   >
 >;
 

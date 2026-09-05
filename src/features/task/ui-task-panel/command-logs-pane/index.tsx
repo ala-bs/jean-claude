@@ -229,7 +229,10 @@ export function CommandLogsPane({
   onClose: () => void;
 }) {
   const commandAvailability = useProjectCommandAvailability(projectId);
-  const { commands } = commandAvailability;
+  // `commands` gates restarting (hidden commands are not runnable), while
+  // `allCommands` names the tabs so hiding a command does not turn its existing
+  // log tab into a "Removed command" entry.
+  const { commands, allCommands } = commandAvailability;
   const {
     status,
     isCommandStarting,
@@ -268,12 +271,12 @@ export function CommandLogsPane({
   const tabs = useMemo(
     () =>
       buildCommandLogTabs({
-        commands,
+        commands: allCommands,
         projectId,
         runCommandLogs,
         runningCommandIds,
       }),
-    [commands, projectId, runCommandLogs, runningCommandIds],
+    [allCommands, projectId, runCommandLogs, runningCommandIds],
   );
 
   const filteredTabs = useMemo(() => {

@@ -26,6 +26,7 @@ function parseRow(row: {
   confirmBeforeRun: number;
   confirmMessage: string | null;
   isFavorite?: number;
+  isHidden?: number;
   sortOrder: number;
   createdAt: string;
 }): ProjectCommand {
@@ -43,6 +44,7 @@ function parseRow(row: {
     envVars: JSON.parse(row.envVars ?? '[]') as RunCommandEnvVar[],
     confirmBeforeRun: row.confirmBeforeRun === 1,
     isFavorite: row.isFavorite === 1,
+    isHidden: row.isHidden === 1,
   };
 }
 
@@ -84,6 +86,7 @@ export const ProjectCommandRepository = {
       .selectFrom('project_commands')
       .selectAll()
       .where('isFavorite', '=', 1)
+      .where('isHidden', '=', 0)
       .orderBy('sortOrder', 'asc')
       .orderBy('createdAt', 'asc')
       .execute();
@@ -119,6 +122,7 @@ export const ProjectCommandRepository = {
         confirmBeforeRun: data.confirmBeforeRun ? 1 : 0,
         confirmMessage: data.confirmMessage ?? null,
         isFavorite: data.isFavorite ? 1 : 0,
+        isHidden: data.isHidden ? 1 : 0,
         sortOrder: sql<number>`(
           SELECT MAX(
             COALESCE((SELECT MAX(sortOrder) FROM project_commands WHERE projectId = ${data.projectId}), -1),
@@ -184,6 +188,8 @@ export const ProjectCommandRepository = {
       updateData.confirmMessage = data.confirmMessage;
     if (data.isFavorite !== undefined)
       updateData.isFavorite = data.isFavorite ? 1 : 0;
+    if (data.isHidden !== undefined)
+      updateData.isHidden = data.isHidden ? 1 : 0;
 
     const row = await db
       .updateTable('project_commands')

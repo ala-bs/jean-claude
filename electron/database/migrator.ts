@@ -83,6 +83,7 @@ import * as m081 from './migrations/081_mobile_preview_device_usage';
 import * as m082 from './migrations/082_project_command_favorites';
 import * as m083 from './migrations/083_retire_pr_workspace_cleanup_pending';
 import * as m084 from './migrations/084_project_env_vars';
+import * as m085 from './migrations/085_project_command_hidden';
 
 const migrations: Record<string, Migration> = {
   '001_initial': m001,
@@ -168,6 +169,7 @@ const migrations: Record<string, Migration> = {
   '082_project_command_favorites': m082,
   '083_retire_pr_workspace_cleanup_pending': m083,
   '084_project_env_vars': m084,
+  '085_project_command_hidden': m085,
 };
 
 export const migrationProvider: MigrationProvider = {

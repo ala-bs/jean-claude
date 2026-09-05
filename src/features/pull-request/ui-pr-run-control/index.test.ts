@@ -120,6 +120,7 @@ function buildCommand(overrides: Partial<ProjectCommand> = {}): ProjectCommand {
     confirmBeforeRun: false,
     confirmMessage: null,
     isFavorite: false,
+    isHidden: false,
     sortOrder: 0,
     createdAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -287,6 +288,42 @@ describe('PrRunControl', () => {
     vi.mocked(api.projectCommandGroups.findByProjectId).mockResolvedValue([
       buildGroup({ commandIds: ['deleted-command'] }),
     ]);
+    renderControl();
+    await flushUpdates();
+
+    expect(document.body.textContent).not.toContain('Start project');
+  });
+
+  it('omits hidden commands and groups left with only hidden members', async () => {
+    vi.mocked(api.projectCommands.findByProjectId).mockResolvedValue([
+      commandOne,
+      buildCommand({ ...commandTwo, isHidden: true }),
+    ]);
+    vi.mocked(api.projectCommandGroups.findByProjectId).mockResolvedValue([
+      group,
+      buildGroup({
+        id: 'group-2',
+        name: 'Hidden only',
+        commandIds: ['command-2'],
+        sortOrder: 3,
+      }),
+    ]);
+    renderControl();
+    await flushUpdates();
+    await openPicker();
+    const text = document.body.textContent ?? '';
+
+    expect(text).toContain('Web server');
+    expect(text).toContain('Full stack');
+    expect(text).not.toContain('API server');
+    expect(text).not.toContain('Hidden only');
+  });
+
+  it('hides entirely when every command is hidden', async () => {
+    vi.mocked(api.projectCommands.findByProjectId).mockResolvedValue([
+      buildCommand({ ...commandOne, isHidden: true }),
+    ]);
+    vi.mocked(api.projectCommandGroups.findByProjectId).mockResolvedValue([]);
     renderControl();
     await flushUpdates();
 

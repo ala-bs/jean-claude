@@ -288,6 +288,7 @@ export interface ProjectCommandTable {
   confirmBeforeRun: Generated<number>; // 0 or 1
   confirmMessage: string | null;
   isFavorite: Generated<number>; // 0 or 1
+  isHidden: Generated<number>; // 0 or 1
   sortOrder: Generated<number>;
   createdAt: Generated<string>;
 }
