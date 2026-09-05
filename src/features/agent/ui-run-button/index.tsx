@@ -164,15 +164,24 @@ export function RunButton({
     });
   };
 
+  // Only reveal the logs pane once the command actually started. A ports-in-use
+  // conflict returns `started: false` so the pane stays closed until the user
+  // confirms the kill in KillPortsModal.
   const executeCommand = (runCommandId: string) => {
-    onRunCommand([runCommandId]);
-    void startCommand(runCommandId).catch(reportFailure('start command'));
+    void startCommand(runCommandId)
+      .then((result) => {
+        if (result.started) onRunCommand([runCommandId]);
+      })
+      .catch(reportFailure('start command'));
   };
 
   const executeGroup = (runCommandIds: string[]) => {
     if (runCommandIds.length === 0) return;
-    onRunCommand(runCommandIds);
-    void startGroup(runCommandIds).catch(reportFailure('start commands'));
+    void startGroup(runCommandIds)
+      .then((result) => {
+        if (result.started) onRunCommand(runCommandIds);
+      })
+      .catch(reportFailure('start commands'));
   };
 
   const handleCommandAction = (runCommandId: string) => {
@@ -409,7 +418,11 @@ export function RunButton({
         <KillPortsModal
           error={portsInUseError}
           onConfirm={() => {
-            void confirmKillPorts().catch(reportFailure('start commands'));
+            void confirmKillPorts()
+              .then((result) => {
+                if (result.started) onRunCommand(result.commandIds);
+              })
+              .catch(reportFailure('start commands'));
           }}
           onCancel={dismissPortsError}
           isLoading={isStartingAnyCommand}

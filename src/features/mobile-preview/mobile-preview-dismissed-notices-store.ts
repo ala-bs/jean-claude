@@ -5,8 +5,8 @@
  * `mobile-preview-expo-launch-store`: the mobile preview pane unmounts when the
  * workspace is closed and remounts when it is reopened (or when the runtime
  * `key` changes). Component-local dismissal state is destroyed by that unmount,
- * while the thing that *produces* the error — the auto-start effect, the Expo
- * launch effect, the retained main-process session — is not. The dismissed
+ * while the thing that *produces* the error — the Expo launch effect, the
+ * retained main-process session — is not. The dismissed
  * banner therefore came straight back on reopen.
  *
  * Keys already encode the attempt identity (device, dev server pid, port,
