@@ -165,6 +165,16 @@ export type MobilePreviewSession = {
   streamStrategy: MobilePreviewStreamStrategy;
   inputStatus: MobilePreviewInputStatus;
   error: string | null;
+  /**
+   * Why the stream is running on a slower strategy than the preferred one.
+   *
+   * Distinct from `error`: the session is healthy and streaming, just
+   * degraded. Routing this through `error` would render the full-pane
+   * `PreviewErrorState` until the first frame lands and then discard the
+   * reason forever, which is the opposite of what a persistent degradation
+   * notice should do.
+   */
+  degradedReason?: string | null;
 };
 
 export type MobilePreviewStartParams = {
@@ -358,6 +368,10 @@ export type ReactNativeDevToolsEmbeddedVisibilityParams = {
 };
 
 export type ReactNativeDevToolsEmbeddedCloseParams = {
+  viewId: string;
+};
+
+export type ReactNativeDevToolsEmbeddedReloadParams = {
   viewId: string;
 };
 

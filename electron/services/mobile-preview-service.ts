@@ -33,6 +33,10 @@ import {
 } from '../../shared/mobile-simulator-types';
 
 import {
+  disposeReactNativeDevToolsForSession,
+  disposeReactNativeDevToolsForTask,
+} from './mobile-preview-react-native-devtools-service';
+import {
   MobilePreviewDeviceUsageRepository,
   TaskRepository,
 } from '../database/repositories';
@@ -916,6 +920,16 @@ export function createMobilePreviewService({
       if (!activeSession) return;
 
       sessions.delete(sessionId);
+      // The embedded DevTools view outlives the preview pane closing so its
+      // console/network history survives; stopping the preview is the point
+      // where the debug target is really gone, so tear it down here. Scoped to
+      // this session's device: a task can preview several devices at once, and
+      // each has its own view.
+      disposeReactNativeDevToolsForSession({
+        taskId: activeSession.session.taskId,
+        platform: activeSession.session.platform,
+        deviceId: activeSession.session.deviceId,
+      });
       try {
         await activeSession.stop();
       } finally {
@@ -932,6 +946,9 @@ export function createMobilePreviewService({
 
     stopByTask(taskId: string): Promise<void> {
       terminalTaskIds.add(taskId);
+      // Also covers the case where the preview was already stopped but the
+      // DevTools view was intentionally kept alive for its history.
+      disposeReactNativeDevToolsForTask(taskId);
       invalidateTaskStarts(taskId);
       abortPendingStarts(taskId);
       const activeSessions = Array.from(sessions.values()).filter(

@@ -45,6 +45,7 @@ export default defineConfig({
       'src/features/work-item/**/*.test.tsx',
       'src/features/project/ui-project-settings/**/*.test.ts',
       'src/features/project/ui-run-commands-config/**/*.test.ts',
+      'src/features/project/ui-run-commands-config/**/*.test.tsx',
       'src/features/project/ui-work-item-title-parser-settings/**/*.test.ts',
       'src/features/settings/**/*.test.tsx',
       'src/features/common/ui-video-gif-converter/**/*.test.ts',
