@@ -14,7 +14,15 @@ import { formatError } from './utils-preview-error';
 import { getPreviewDeviceKey } from './utils-device-setup';
 import type { PreviewFacts } from './utils-setup-model';
 
-export const FIRST_PREVIEW_FRAME_SETUP_WAIT_MS = 15_000;
+/**
+ * Must outlast the main process' CoreSimulator first-frame watchdog
+ * (`CORE_SIMULATOR_FIRST_FRAME_TIMEOUT_MS`, 60s), otherwise this wait always
+ * loses the race on a cold simulator: it would expire before the backend gets
+ * a chance to fall back to simctl screenshots, and the saga would start the
+ * build against a stream that never painted. Keep the margin when either
+ * constant moves.
+ */
+export const FIRST_PREVIEW_FRAME_SETUP_WAIT_MS = 70_000;
 
 export type PreviewSetupCoordinator = ReturnType<
   typeof createPreviewSetupOperationCoordinator

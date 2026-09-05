@@ -118,7 +118,7 @@ export function useRunCommands({
       taskId: string;
     },
     adHocParams?: AdHocParams,
-  ) => {
+  ): Promise<{ started: boolean }> => {
     const uniqueCommandIds = [...new Set(commandIds)];
     const currentResetRunCommandLogs = resetRunCommandLogsRef.current;
     const currentTaskId = expectedContext?.taskId ?? taskIdRef.current;
@@ -129,7 +129,7 @@ export function useRunCommands({
       taskGenerationRef.current !== currentTaskGeneration ||
       (expectedContext && projectId !== expectedContext.projectId)
     ) {
-      return;
+      return { started: false };
     }
     const statusSequenceAtStart = statusEventSequenceRef.current;
     const operationToken = Symbol('run-command-start');
@@ -203,7 +203,7 @@ export function useRunCommands({
             taskId: currentTaskId,
           });
         }
-        return;
+        return { started: false };
       }
 
       if (
@@ -216,6 +216,9 @@ export function useRunCommands({
           current?.operation.operationToken === operationToken ? null : current,
         );
       }
+      // A superseded operation must not report success: the caller would open
+      // the logs pane for a command set that is no longer the active one.
+      return { started: isCurrentOperation() };
     } catch (error) {
       if (isCurrentOperation()) {
         setPortConflict((current) =>
@@ -316,31 +319,42 @@ export function useRunCommands({
     }
   };
 
-  const confirmKillPorts = async () => {
+  const confirmKillPorts = async (): Promise<{
+    commandIds: string[];
+    started: boolean;
+  }> => {
     const conflict = currentPortConflict;
-    if (!conflict || portConflictRef.current !== conflict) return;
+    if (!conflict || portConflictRef.current !== conflict) {
+      return { commandIds: [], started: false };
+    }
 
     const commandIds = [
       ...new Set(conflict.error.portsInUse.map((port) => port.commandId)),
     ];
     for (const commandId of commandIds) {
       await api.runCommands.killPortsForCommand(conflict.projectId, commandId);
-      if (portConflictRef.current !== conflict) return;
+      if (portConflictRef.current !== conflict) {
+        return { commandIds: [], started: false };
+      }
     }
 
     if (
       taskIdRef.current !== conflict.taskId ||
       taskGenerationRef.current !== conflict.taskGeneration
     ) {
-      return;
+      return { commandIds: [], started: false };
     }
     setPortConflict((current) => (current === conflict ? null : current));
-    await runStart(
+    const result = await runStart(
       conflict.operation.commandIds,
       conflict.operation.kind,
       conflict,
       conflict.operation.adHocParams,
     );
+    return {
+      commandIds: conflict.operation.commandIds,
+      started: result.started,
+    };
   };
 
   const dismissPortsError = () => {

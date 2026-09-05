@@ -315,6 +315,372 @@ describe('ClaudeCodeBackend prompt stream lifetime', () => {
     }
   });
 
+  describe('follow-up prompt injection', () => {
+    it('hands an injected prompt to the SDK on the same run', async () => {
+      const controller = makeControllableQuery();
+      const { backend, session } = await startBackend(controller);
+      try {
+        const iterator = controller.getPromptIterator()!;
+        await iterator.next(); // the initial user message
+
+        // The generator is now suspended waiting for more input.
+        const pulled = iterator.next();
+        expect(await settlesSoon(pulled)).toBe(false);
+
+        const accepted = await backend.sendUserMessage!(session.sessionId, [
+          { type: 'text', text: 'follow up' },
+        ]);
+        expect(accepted).toBe(true);
+
+        const delivered = await pulled;
+        expect(delivered.done).toBe(false);
+        expect(delivered.value).toMatchObject({
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [{ type: 'text', text: 'follow up' }],
+          },
+        });
+      } finally {
+        controller.end();
+        await backend.dispose();
+      }
+    });
+
+    it('cancels the pending stdin close so the injected prompt is not killed', async () => {
+      const controller = makeControllableQuery();
+      const { backend, session } = await startBackend(controller);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const iterator = controller.getPromptIterator()!;
+        await iterator.next();
+        let closed = false;
+        const pulled = iterator.next().then((r) => {
+          if (r.done) closed = true;
+          return r;
+        });
+
+        // A real result arms the 30s stdin close.
+        controller.send(realResult);
+        await vi.advanceTimersByTimeAsync(50);
+
+        expect(
+          await backend.sendUserMessage!(session.sessionId, [
+            { type: 'text', text: 'follow up' },
+          ]),
+        ).toBe(true);
+
+        // Well past the close grace armed by that result.
+        await vi.advanceTimersByTimeAsync(60 * 1000);
+        expect(closed).toBe(false);
+        expect((await pulled).value).toMatchObject({
+          message: { content: [{ type: 'text', text: 'follow up' }] },
+        });
+
+        // The prompt being delivered is not enough — the input stream must
+        // still be OPEN afterwards. Without cancelScheduledClose the pending
+        // close fires, stdin shuts, and the CLI can never answer the prompt it
+        // was just handed.
+        const afterInjection = iterator.next();
+        await vi.advanceTimersByTimeAsync(60 * 1000);
+        expect(await settlesSoon(afterInjection)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+        controller.end();
+        await backend.dispose();
+      }
+    });
+
+    it('terminates the run if the CLI never answers an injected prompt', async () => {
+      const controller = makeControllableQuery();
+      const { backend, session } = await startBackend(controller);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const iterator = controller.getPromptIterator()!;
+        await iterator.next();
+        void iterator.next();
+
+        controller.send(realResult);
+        await vi.advanceTimersByTimeAsync(50);
+        await backend.sendUserMessage!(session.sessionId, [
+          { type: 'text', text: 'follow up' },
+        ]);
+        await vi.advanceTimersByTimeAsync(50);
+
+        // Injection clears deferredResultEvents and the close timer, so without
+        // the awaiting-injected-response watchdog NOTHING would ever end this
+        // run: stdin stays open and the step wedges on `running` forever.
+        let closed = false;
+        void iterator.next().then((r) => {
+          if (r.done) closed = true;
+        });
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1_000);
+        expect(closed).toBe(true);
+      } finally {
+        vi.useRealTimers();
+        controller.end();
+        await backend.dispose();
+      }
+    });
+
+    /**
+     * The session is still alive and the SDK generator is still running — only
+     * the *input stream* has closed (the post-result grace elapsed). Returning
+     * false here is what makes agent-service fall back to a restart rather than
+     * silently dropping the user's prompt into a stream nobody reads.
+     */
+    /**
+     * Without this the follow-up never reaches the timeline: no prompt group
+     * opens, the prompt is invisible in the stream and gone from history on
+     * reload, and the live background jobs stay pinned under the previous
+     * group instead of the new one.
+     */
+    it('emits a user-prompt timeline entry for the injected prompt', async () => {
+      const controller = makeControllableQuery();
+      const { backend, session } = await startBackend(controller);
+      try {
+        const events = session.events[Symbol.asyncIterator]();
+        // The run's own initial prompt entry.
+        const first = await events.next();
+        expect(first.value).toMatchObject({
+          type: 'entry',
+          entry: { type: 'user-prompt', value: 'go' },
+        });
+
+        await backend.sendUserMessage!(session.sessionId, [
+          { type: 'text', text: 'follow up' },
+        ]);
+
+        // Same shape as a run's initial prompt, so an injected prompt renders
+        // exactly like the start of a run.
+        expect((await events.next()).value).toMatchObject({
+          type: 'entry',
+          entry: {
+            type: 'user-prompt',
+            value: 'follow up',
+            isSynthetic: true,
+          },
+        });
+      } finally {
+        controller.end();
+        await backend.dispose();
+      }
+    });
+
+    it('does not emit a timeline entry when the injection is refused', async () => {
+      const controller = makeControllableQuery();
+      const { backend, session } = await startBackend(controller);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const events = session.events[Symbol.asyncIterator]();
+        await events.next(); // initial prompt entry
+
+        const iterator = controller.getPromptIterator()!;
+        await iterator.next();
+        void iterator.next();
+        controller.send(realResult);
+        await vi.advanceTimersByTimeAsync(30 * 1000 + 1_000);
+
+        expect(
+          await backend.sendUserMessage!(session.sessionId, [
+            { type: 'text', text: 'follow up' },
+          ]),
+        ).toBe(false);
+
+        // A refused injection must not leave an orphan prompt in the timeline:
+        // the next event is the result's, never a 'follow up' user-prompt.
+        const next = await events.next();
+        expect(next.value).not.toMatchObject({
+          entry: { type: 'user-prompt', value: 'follow up' },
+        });
+      } finally {
+        vi.useRealTimers();
+        controller.end();
+        await backend.dispose();
+      }
+    });
+
+    /**
+     * The watchdog must not punish a legitimate injected turn. Waiting for a
+     * `result` to disarm it would kill any turn whose first action is a long
+     * silent foreground tool call — closing stdin mid-turn, breaking the
+     * permission channel and the background jobs this path exists to protect.
+     */
+    it('disarms the watchdog once the CLI starts answering the injected prompt', async () => {
+      const controller = makeControllableQuery();
+      const { backend, session } = await startBackend(controller);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const iterator = controller.getPromptIterator()!;
+        await iterator.next();
+        void iterator.next();
+
+        controller.send(realResult);
+        await vi.advanceTimersByTimeAsync(50);
+        await backend.sendUserMessage!(session.sessionId, [
+          { type: 'text', text: 'follow up' },
+        ]);
+        await vi.advanceTimersByTimeAsync(50);
+
+        let closed = false;
+        void iterator.next().then((r) => {
+          if (r.done) closed = true;
+        });
+
+        // The agent starts the turn, then runs a long silent tool call.
+        controller.send({
+          type: 'assistant',
+          message: { role: 'assistant', content: [] },
+          parent_tool_use_id: null,
+        });
+        await vi.advanceTimersByTimeAsync(50);
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1_000);
+
+        expect(closed).toBe(false);
+      } finally {
+        vi.useRealTimers();
+        controller.end();
+        await backend.dispose();
+      }
+    });
+
+    /**
+     * A background bash/Monitor completion resumes the MAIN agent, so its
+     * messages are top-level (no `parent_tool_use_id`) — unlike subagent
+     * output. Such a message can already be in flight when the user's prompt is
+     * injected, and must not be mistaken for a response to a prompt the CLI has
+     * not even been handed yet.
+     */
+    it('does not let a message in flight before the prompt reached stdin disarm the watchdog', async () => {
+      const controller = makeControllableQuery();
+      const { backend, session } = await startBackend(controller);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const iterator = controller.getPromptIterator()!;
+        await iterator.next(); // initial prompt written
+
+        controller.send(realResult);
+        await vi.advanceTimersByTimeAsync(50);
+        await backend.sendUserMessage!(session.sessionId, [
+          { type: 'text', text: 'follow up' },
+        ]);
+        await vi.advanceTimersByTimeAsync(50);
+
+        // Deliberately do NOT pull the prompt iterator: the injected prompt is
+        // queued but has not been written to stdin yet. (Pulling it to observe
+        // the close would itself deliver the prompt, so the stream's open/shut
+        // state is read via a later injection attempt instead.)
+
+        // A top-level assistant message from the previous turn lands now.
+        controller.send({
+          type: 'assistant',
+          message: { role: 'assistant', content: [] },
+          parent_tool_use_id: null,
+        });
+        await vi.advanceTimersByTimeAsync(50);
+
+        // The watchdog must still be armed, so total silence still ends the run.
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1_000);
+
+        // Stream closed => a further injection is refused.
+        expect(
+          await backend.sendUserMessage!(session.sessionId, [
+            { type: 'text', text: 'later' },
+          ]),
+        ).toBe(false);
+      } finally {
+        vi.useRealTimers();
+        controller.end();
+        await backend.dispose();
+      }
+    });
+
+    /**
+     * Background subagents are streaming precisely when injection happens, so
+     * "any message" is NOT evidence the CLI answered the injected prompt. If
+     * unrelated chatter could disarm the watchdog there would be nothing left
+     * to end the run: injection resets `sawRealResult`, so no stdin close is
+     * scheduled either, and the step wedges on `running` forever.
+     */
+    it('keeps the injected-prompt watchdog armed through unrelated background chatter', async () => {
+      const controller = makeControllableQuery();
+      const { backend, session } = await startBackend(controller);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const iterator = controller.getPromptIterator()!;
+        await iterator.next();
+        void iterator.next();
+
+        controller.send(realResult);
+        await vi.advanceTimersByTimeAsync(50);
+        await backend.sendUserMessage!(session.sessionId, [
+          { type: 'text', text: 'follow up' },
+        ]);
+        await vi.advanceTimersByTimeAsync(50);
+
+        let closed = false;
+        void iterator.next().then((r) => {
+          if (r.done) closed = true;
+        });
+
+        // A background subagent keeps streaming, but never answers the prompt.
+        controller.send(backgroundTasksChanged(['bg-1']));
+        await vi.advanceTimersByTimeAsync(50);
+        expect(closed).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1_000);
+        expect(closed).toBe(true);
+      } finally {
+        vi.useRealTimers();
+        controller.end();
+        await backend.dispose();
+      }
+    });
+
+    it('refuses injection once the input stream has closed under a live session', async () => {
+      const controller = makeControllableQuery();
+      const { backend, session } = await startBackend(controller);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const iterator = controller.getPromptIterator()!;
+        await iterator.next();
+        let closed = false;
+        void iterator.next().then((r) => {
+          if (r.done) closed = true;
+        });
+
+        controller.send(realResult);
+        await vi.advanceTimersByTimeAsync(30 * 1000 + 1_000);
+        // Input stream closed, but the run/session still exists.
+        expect(closed).toBe(true);
+
+        expect(
+          await backend.sendUserMessage!(session.sessionId, [
+            { type: 'text', text: 'follow up' },
+          ]),
+        ).toBe(false);
+      } finally {
+        vi.useRealTimers();
+        controller.end();
+        await backend.dispose();
+      }
+    });
+
+    it('refuses injection after the run has ended', async () => {
+      const controller = makeControllableQuery();
+      const { backend, session } = await startBackend(controller);
+      controller.end();
+      await vi.waitFor(async () => {
+        expect(
+          await backend.sendUserMessage!(session.sessionId, [
+            { type: 'text', text: 'follow up' },
+          ]),
+        ).toBe(false);
+      });
+      await backend.dispose();
+    });
+  });
+
   // Replays the sequence from a real transcript that broke permissions: the
   // agent launched 11 background subagents, then emitted a `result` with NO
   // `origin` field and `num_turns: 17`. Both the origin and zero-turn

@@ -40,6 +40,7 @@ import { DiffSearchBar } from './diff-search-bar';
 import { getLanguageFromPath } from './language-utils';
 import { SideBySideDiffTable } from './side-by-side-table';
 import { useCodeFolding } from './use-code-folding';
+import { useScrollToFirstChange } from './use-scroll-to-first-change';
 
 
 
@@ -188,6 +189,19 @@ export function DiffView({
 
   // Code folding based on new file content (tree-sitter in main process)
   const folding = useCodeFolding(newString, language, filePath);
+
+  // Auto-scroll to the first change when opening a file (no explicit target line)
+  useScrollToFirstChange({
+    enabled: !!state && !scrollToLine,
+    filePath,
+    lines: state?.lines,
+    scrollContainerRef,
+    viewMode,
+    oldString,
+    newString,
+    hiddenLines: folding.hiddenLines,
+  });
+
   const hasChanges = state?.lines.some((line) => line.type !== 'context') ?? false;
 
   if (isLoading || !state) {
