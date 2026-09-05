@@ -13,7 +13,7 @@
     "node": ">=22.12.0 <23"
   },
   "scripts": {
-    "postinstall": "node scripts/ensure-electron-installed.mjs && electron-rebuild && (fetch-scrcpy-server 2.3 || node -e \"console.warn('Failed to fetch scrcpy server; Android preview will fall back to screenshots until it is fetched.')\")",
+    "postinstall": "node scripts/ensure-electron-installed.mjs && electron-rebuild --force && (fetch-scrcpy-server 2.3 || node -e \"console.warn('Failed to fetch scrcpy server; Android preview will fall back to screenshots until it is fetched.')\")",
     "dev": "electron-vite dev",
     "dev:quiet": "DEBUG= electron-vite dev",
     "dev:tmp": "JC_DISABLE_NATIVE_USAGE_TRACKING=1 JC_SKIP_INSTANCE_LOCK=1 ./scripts/dev-tmp.sh",
