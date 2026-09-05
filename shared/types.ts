@@ -316,6 +316,58 @@ export interface BranchInfo {
   isCheckedOut?: boolean;
 }
 
+/**
+ * Working-tree and remote-tracking state of a project's main repository.
+ * `ahead`/`behind` are null when the branch has no upstream configured.
+ */
+export interface ProjectGitStatus {
+  isGitRepository: boolean;
+  branch: string;
+  isDetached: boolean;
+  upstream: string | null;
+  ahead: number | null;
+  behind: number | null;
+  remoteUrl: string | null;
+  staged: number;
+  unstaged: number;
+  untracked: number;
+  conflicted: number;
+}
+
+/**
+ * A branch/tag pointing at a commit. Read from `--decorate=full`, so the kind
+ * comes from git's own ref namespace rather than being guessed from the name —
+ * a local branch called `team/feature` is indistinguishable from a remote one
+ * by string shape alone.
+ */
+export interface ProjectGitRef {
+  /** Display name with the `refs/heads/`-style namespace stripped. */
+  name: string;
+  kind: 'branch' | 'remote' | 'tag' | 'other';
+  /** True when HEAD is currently on this ref. */
+  isHead: boolean;
+}
+
+export interface ProjectGitCommit {
+  hash: string;
+  shortHash: string;
+  parents: string[];
+  author: string;
+  date: string;
+  refs: ProjectGitRef[];
+  subject: string;
+}
+
+/**
+ * One line of `git log --graph` output. `graph` holds the raw lane characters
+ * git drew for this row; `commit` is null for connector-only rows (the lines
+ * git emits between commits to route merge edges).
+ */
+export interface ProjectGitGraphRow {
+  graph: string;
+  commit: ProjectGitCommit | null;
+}
+
 export interface DetectedProjectLogo {
   path: string;
   label: string;

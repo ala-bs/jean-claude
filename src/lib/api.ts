@@ -47,6 +47,8 @@ import type {
   Project,
   ProjectEnvVar,
   ProjectFeatureMap,
+  ProjectGitGraphRow,
+  ProjectGitStatus,
   ProjectLogoHistoryItem,
   ProjectTodo,
   Provider,
@@ -629,6 +631,19 @@ export interface Api {
     getBranchesForPath: (projectPath: string) => Promise<BranchInfo[]>;
     getCurrentBranch: (projectId: string) => Promise<string>;
     isGitRepository: (projectId: string) => Promise<boolean>;
+    /** Git operations scoped to the project's main repository (not a worktree). */
+    git: {
+      getStatus: (projectId: string) => Promise<ProjectGitStatus>;
+      getGraph: (
+        projectId: string,
+        limit?: number,
+      ) => Promise<ProjectGitGraphRow[]>;
+      /** `interactive` allows credential prompts; omit it for background refreshes. */
+      fetch: (projectId: string, interactive?: boolean) => Promise<void>;
+      push: (projectId: string) => Promise<void>;
+      pull: (projectId: string) => Promise<void>;
+      checkoutBranch: (projectId: string, branchName: string) => Promise<void>;
+    };
     getCommitIgnore: (projectId: string) => Promise<string>;
     updateCommitIgnore: (projectId: string, content: string) => Promise<void>;
     getDetected: () => Promise<DetectedProject[]>;
@@ -2264,6 +2279,26 @@ export const api: Api = hasWindowApi
         getBranchesForPath: async () => [],
         getCurrentBranch: async () => '',
         isGitRepository: async () => false,
+        git: {
+          getStatus: async () => ({
+            isGitRepository: false,
+            branch: '',
+            isDetached: false,
+            upstream: null,
+            ahead: null,
+            behind: null,
+            remoteUrl: null,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflicted: 0,
+          }),
+          getGraph: async () => [],
+          fetch: async () => {},
+          push: async () => {},
+          pull: async () => {},
+          checkoutBranch: async () => {},
+        },
         getCommitIgnore: async () => '',
         updateCommitIgnore: async () => {},
         getDetected: async () => [],

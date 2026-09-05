@@ -179,6 +179,20 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('projects:getCurrentBranch', projectId),
     isGitRepository: (projectId: string) =>
       ipcRenderer.invoke('projects:isGitRepository', projectId),
+    git: {
+      getStatus: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:getStatus', projectId),
+      getGraph: (projectId: string, limit?: number) =>
+        ipcRenderer.invoke('projects:git:getGraph', projectId, limit),
+      fetch: (projectId: string, interactive?: boolean) =>
+        ipcRenderer.invoke('projects:git:fetch', projectId, interactive),
+      push: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:push', projectId),
+      pull: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:pull', projectId),
+      checkoutBranch: (projectId: string, branchName: string) =>
+        ipcRenderer.invoke('projects:git:checkoutBranch', projectId, branchName),
+    },
     getCommitIgnore: (projectId: string) =>
       ipcRenderer.invoke('projects:getCommitIgnore', projectId),
     updateCommitIgnore: (projectId: string, content: string) =>

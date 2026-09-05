@@ -322,6 +322,14 @@ import {
   updateProjectCommitIgnore,
 } from '../services/worktree-service';
 import {
+  checkoutProjectBranch,
+  fetchProjectRemotes,
+  getProjectGitGraph,
+  getProjectGitStatus,
+  pullProject,
+  pushProject,
+} from '../services/project-git-service';
+import {
   cleanupProjectLogoPath,
   cleanupProjectLogos,
   deleteGeneratedProjectLogo,
@@ -482,6 +490,7 @@ import { generatePrDescriptionForTask } from '../services/pr-description-generat
 import { generateSummary } from '../services/summary-generation-service';
 import { generateTaskName } from '../services/name-generation-service';
 import { generateWorkItemVerificationNote } from '../services/work-item-verification-note-service';
+import { getNonInteractiveGitEnv } from '../lib/git-non-interactive-env';
 import { handlePromptResponse } from '../services/global-prompt-service';
 import { McpTemplateRepository } from '../database/repositories/mcp-templates';
 import { mobilePreviewExpoLaunchService } from '../services/mobile-preview-expo-launch-service';
@@ -825,21 +834,6 @@ async function updateStepAndEmit(
   return step;
 }
 
-/**
- * Adds `-o BatchMode=yes` to an ssh command line.
- *
- * Inserted right after the program name rather than appended: ssh honours the
- * *first* occurrence of a repeated option, so a user whose GIT_SSH_COMMAND
- * already contains `-o BatchMode=no` would otherwise keep their value and the
- * command could still block on a prompt.
- */
-function withBatchMode(sshCommand: string | undefined): string {
-  const command = sshCommand?.trim() || 'ssh';
-  const firstSpace = command.indexOf(' ');
-  if (firstSpace === -1) return `${command} -o BatchMode=yes`;
-  return `${command.slice(0, firstSpace)} -o BatchMode=yes${command.slice(firstSpace)}`;
-}
-
 async function runGit(
   args: string[],
   cwd: string,
@@ -852,17 +846,7 @@ async function runGit(
       stdio: ['ignore', 'pipe', 'pipe'],
       // This helper has no way to answer a credential prompt, so make git and
       // ssh fail immediately instead of blocking until the timeout fires.
-      // SSH_ASKPASS_REQUIRE alone is not enough: it only disables the askpass
-      // helper, and ssh will still open /dev/tty directly — which succeeds
-      // when the app was launched from a terminal (pnpm dev), leaving the
-      // command blocked on an invisible prompt. BatchMode is the actual
-      // fail-fast switch. Callers that need to prompt use the askpass broker.
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-        SSH_ASKPASS_REQUIRE: 'never',
-        GIT_SSH_COMMAND: withBatchMode(process.env.GIT_SSH_COMMAND),
-      },
+      env: { ...process.env, ...getNonInteractiveGitEnv() },
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -1695,6 +1679,54 @@ export function registerIpcHandlers() {
     }
     return isGitRepository(project.path);
   });
+  /**
+   * Resolves a project's repository path, so the git handlers below never act
+   * on a path supplied by the renderer.
+   */
+  const requireProjectPath = async (projectId: string): Promise<string> => {
+    const project = await ProjectRepository.findById(projectId);
+    if (!project) {
+      throw new Error(`Project ${projectId} not found`);
+    }
+    return project.path;
+  };
+
+  ipcMain.handle('projects:git:getStatus', async (_, projectId: string) => {
+    return getProjectGitStatus(await requireProjectPath(projectId));
+  });
+  ipcMain.handle(
+    'projects:git:getGraph',
+    async (_, projectId: string, limit?: number) => {
+      return getProjectGitGraph({
+        repoPath: await requireProjectPath(projectId),
+        limit,
+      });
+    },
+  );
+  ipcMain.handle(
+    'projects:git:fetch',
+    async (_, projectId: string, interactive?: boolean) => {
+      return fetchProjectRemotes(await requireProjectPath(projectId), {
+        interactive,
+      });
+    },
+  );
+  ipcMain.handle('projects:git:push', async (_, projectId: string) => {
+    return pushProject(await requireProjectPath(projectId));
+  });
+  ipcMain.handle('projects:git:pull', async (_, projectId: string) => {
+    return pullProject(await requireProjectPath(projectId));
+  });
+  ipcMain.handle(
+    'projects:git:checkoutBranch',
+    async (_, projectId: string, branchName: string) => {
+      return checkoutProjectBranch({
+        repoPath: await requireProjectPath(projectId),
+        branchName,
+      });
+    },
+  );
+
   ipcMain.handle('projects:getCommitIgnore', async (_, projectId: string) => {
     const project = await ProjectRepository.findById(projectId);
     if (!project) {
