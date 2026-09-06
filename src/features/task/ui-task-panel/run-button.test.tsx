@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   commands: [] as Array<Record<string, unknown>>,
   groups: [] as Array<Record<string, unknown>>,
   startCommand: vi.fn(),
+  portsInUseError: null as Record<string, unknown> | null,
+  confirmKillPorts: vi.fn(),
 }));
 
 vi.mock('@/hooks/use-project-commands', () => ({
@@ -48,8 +50,8 @@ vi.mock('@/hooks/use-run-commands', () => ({
     startGroup: vi.fn(),
     stopCommand: vi.fn(),
     stopGroup: vi.fn(),
-    portsInUseError: null,
-    confirmKillPorts: vi.fn(),
+    portsInUseError: mocks.portsInUseError,
+    confirmKillPorts: mocks.confirmKillPorts,
     dismissPortsError: vi.fn(),
   }),
 }));
@@ -75,6 +77,8 @@ describe('RunButton command availability', () => {
   let container: HTMLDivElement;
   let root: Root;
 
+  const onRunCommand = vi.fn();
+
   async function renderButton() {
     await act(async () =>
       root.render(
@@ -85,7 +89,7 @@ describe('RunButton command availability', () => {
               projectId="project-1"
               workingDir="/repo"
               onToggleLogs={vi.fn()}
-              onRunCommand={vi.fn()}
+              onRunCommand={onRunCommand}
               isLogsPaneOpen={false}
             />
           </RootKeyboardBindings>
@@ -100,7 +104,12 @@ describe('RunButton command availability', () => {
     root = createRoot(container);
     mocks.commands = [];
     mocks.groups = [];
-    mocks.startCommand = vi.fn().mockResolvedValue(undefined);
+    mocks.startCommand = vi.fn().mockResolvedValue({ started: true });
+    mocks.portsInUseError = null;
+    mocks.confirmKillPorts = vi
+      .fn()
+      .mockResolvedValue({ commandIds: ['command-1'], started: true });
+    onRunCommand.mockReset();
     useToastStore.setState({ toasts: [] });
     useTaskMessagesStore.setState({ runCommandLogs: {}, runCommandRunning: {} });
   });
@@ -174,5 +183,79 @@ describe('RunButton command availability', () => {
         message: 'PR review task task-1 was archived',
       }),
     ]);
+  });
+
+  async function clickRunItem() {
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Run command"]')!
+        .click(),
+    );
+    const runItem = [
+      ...document.body.querySelectorAll<HTMLElement>('button'),
+    ].find((element) => element.textContent?.includes('Dev'));
+    await act(async () => runItem!.click());
+  }
+
+  it('opens the logs pane once the command actually starts', async () => {
+    mocks.commands = [command];
+
+    await renderButton();
+    await clickRunItem();
+
+    expect(onRunCommand).toHaveBeenCalledWith(['command-1']);
+  });
+
+  // The pane used to open optimistically, so a ports-in-use conflict left an
+  // empty logs pane sitting behind the kill-ports modal.
+  it('keeps the logs pane closed when the start hits a port conflict', async () => {
+    mocks.commands = [command];
+    mocks.startCommand = vi.fn().mockResolvedValue({ started: false });
+
+    await renderButton();
+    await clickRunItem();
+
+    expect(mocks.startCommand).toHaveBeenCalledWith('command-1');
+    expect(onRunCommand).not.toHaveBeenCalled();
+  });
+
+  it('opens the logs pane after the user confirms killing the ports', async () => {
+    mocks.commands = [command];
+    mocks.portsInUseError = {
+      type: 'PortsInUseError',
+      message: 'Port 3000 in use',
+      portsInUse: [{ port: 3000, commandId: 'command-1', command: 'pnpm dev' }],
+    };
+
+    await renderButton();
+    expect(onRunCommand).not.toHaveBeenCalled();
+
+    const confirmButton = [
+      ...document.body.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((element) => element.textContent?.includes('Kill'));
+    await act(async () => confirmButton!.click());
+
+    expect(mocks.confirmKillPorts).toHaveBeenCalled();
+    expect(onRunCommand).toHaveBeenCalledWith(['command-1']);
+  });
+
+  it('keeps the logs pane closed when the restart after kill fails', async () => {
+    mocks.commands = [command];
+    mocks.portsInUseError = {
+      type: 'PortsInUseError',
+      message: 'Port 3000 in use',
+      portsInUse: [{ port: 3000, commandId: 'command-1', command: 'pnpm dev' }],
+    };
+    mocks.confirmKillPorts = vi
+      .fn()
+      .mockResolvedValue({ commandIds: [], started: false });
+
+    await renderButton();
+    const confirmButton = [
+      ...document.body.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((element) => element.textContent?.includes('Kill'));
+    await act(async () => confirmButton!.click());
+
+    expect(onRunCommand).not.toHaveBeenCalled();
   });
 });

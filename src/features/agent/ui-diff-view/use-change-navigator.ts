@@ -8,7 +8,7 @@ import {
   type DiffLine,
 } from './diff-utils';
 
-interface Hunk {
+export interface Hunk {
   /** Index of the first non-context line in the DiffLine[] array */
   startLineIndex: number;
   /** Index of the last non-context line in the DiffLine[] array */
@@ -20,7 +20,7 @@ interface Hunk {
  * A hunk is a maximal run of consecutive non-context lines
  * (merges adjacent deletions + additions into one navigable unit).
  */
-function computeHunks(lines: DiffLine[]): Hunk[] {
+export function computeHunks(lines: DiffLine[]): Hunk[] {
   const hunks: Hunk[] = [];
   let i = 0;
 
@@ -44,7 +44,7 @@ function computeHunks(lines: DiffLine[]): Hunk[] {
  * This is needed because side-by-side mode renders rows differently
  * than the flat DiffLine[] array.
  */
-function buildLineToRowMapping(
+export function buildLineToRowMapping(
   oldString: string,
   newString: string,
 ): Map<number, number> {
@@ -87,6 +87,43 @@ function buildLineToRowMapping(
   return mapping;
 }
 
+/**
+ * Get the `data-line-index` attribute value for a given hunk's start line.
+ * In inline mode, data-line-index = DiffLine index.
+ * In side-by-side mode, data-line-index = row index from the mapping.
+ * In current-state mode, data-line-index = newLineNumber - 1 (new file row index).
+ */
+export function getHunkDataLineIndex({
+  hunkStartLineIndex,
+  lines,
+  viewMode,
+  lineToRowMap,
+}: {
+  hunkStartLineIndex: number;
+  lines: DiffLine[];
+  viewMode: 'inline' | 'side-by-side' | 'current-state';
+  lineToRowMap: Map<number, number> | null;
+}): number | null {
+  if (viewMode === 'inline') {
+    return hunkStartLineIndex;
+  }
+  if (viewMode === 'current-state') {
+    // Find the first DiffLine in/after hunk start that has a newLineNumber
+    for (let i = hunkStartLineIndex; i < lines.length; i++) {
+      if (lines[i].newLineNumber !== undefined) {
+        return lines[i].newLineNumber! - 1;
+      }
+      // Stop if we hit context (left the hunk)
+      if (i > hunkStartLineIndex && lines[i].type === 'context') break;
+    }
+    return null;
+  }
+  if (lineToRowMap) {
+    return lineToRowMap.get(hunkStartLineIndex) ?? null;
+  }
+  return null;
+}
+
 export function useChangeNavigator({
   lines,
   scrollContainerRef,
@@ -119,33 +156,14 @@ export function useChangeNavigator({
     return null;
   }, [viewMode, oldString, newString]);
 
-  /**
-   * Get the data-line-index value for a given hunk's start line.
-   * In inline mode, data-line-index = DiffLine index.
-   * In side-by-side mode, data-line-index = row index from the mapping.
-   * In current-state mode, data-line-index = newLineNumber - 1 (new file row index).
-   */
   const getDataLineIndex = useCallback(
-    (hunkStartLineIndex: number): number | null => {
-      if (viewMode === 'inline') {
-        return hunkStartLineIndex;
-      }
-      if (viewMode === 'current-state') {
-        // Find the first DiffLine in/after hunk start that has a newLineNumber
-        for (let i = hunkStartLineIndex; i < lines.length; i++) {
-          if (lines[i].newLineNumber !== undefined) {
-            return lines[i].newLineNumber! - 1;
-          }
-          // Stop if we hit context (left the hunk)
-          if (i > hunkStartLineIndex && lines[i].type === 'context') break;
-        }
-        return null;
-      }
-      if (lineToRowMap) {
-        return lineToRowMap.get(hunkStartLineIndex) ?? null;
-      }
-      return null;
-    },
+    (hunkStartLineIndex: number): number | null =>
+      getHunkDataLineIndex({
+        hunkStartLineIndex,
+        lines,
+        viewMode,
+        lineToRowMap,
+      }),
     [viewMode, lineToRowMap, lines],
   );
 

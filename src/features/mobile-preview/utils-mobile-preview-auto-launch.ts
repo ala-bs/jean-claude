@@ -5,7 +5,16 @@ import {
 } from '@shared/mobile-simulator-types';
 
 export type MobilePreviewAutoLaunchDecision =
-  | { status: 'idle' }
+  | {
+      status: 'idle';
+      /**
+       * Set when the device simply cannot be launched (physical iPhone), as
+       * opposed to the runtime being stopped. The hook must NOT drop the
+       * shared completed-launch memo in that case — the memo belongs to
+       * whichever simulator was launched before this device was selected.
+       */
+      keepCompletedLaunch?: boolean;
+    }
   | {
       status: 'waiting' | 'ready' | 'unsupported';
       message: string;
@@ -51,7 +60,7 @@ export function getMobilePreviewAutoLaunchDecision({
   isLoadingDevices: boolean;
   selectedDevice: Pick<
     MobilePreviewDevice,
-    'id' | 'platform' | 'state'
+    'id' | 'platform' | 'state' | 'kind'
   > | null;
   isExpoApp: boolean;
   taskId: string;
@@ -76,6 +85,14 @@ export function getMobilePreviewAutoLaunchDecision({
       status: 'waiting',
       message: 'Select a device to attach this runtime',
     };
+  }
+  // `exp://` deeplinking into an already-installed app is simulator-only on
+  // iOS (there is no `simctl openurl` for CoreDevice hardware), so launching
+  // here can only reject with the main-process guard and paint an error the
+  // user cannot act on. Stay idle instead — Build & Run
+  // (`expo run:ios --device`) is the supported path. Do NOT re-enable this.
+  if (selectedDevice.platform === 'ios' && selectedDevice.kind === 'physical') {
+    return { status: 'idle', keepCompletedLaunch: true };
   }
   if (selectedDevice.state !== 'booted' && !isSelectedDeviceReady) {
     return {

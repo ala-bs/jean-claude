@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  BellOff,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -47,9 +48,20 @@ function isOptimisticQueued(evaluation: EvaluationWithOptimistic) {
   return evaluation._optimisticQueued;
 }
 
-function getStatusIcon(evaluation: EvaluationWithOptimistic) {
+function getStatusIcon(
+  evaluation: EvaluationWithOptimistic,
+  isIgnored?: boolean,
+) {
   const cls = 'h-3.5 w-3.5 shrink-0';
 
+  if (isIgnored) {
+    return (
+      <BellOff
+        className={clsx(cls, 'text-ink-4')}
+        aria-label="Ignored for auto-complete"
+      />
+    );
+  }
   if (isOptimisticQueued(evaluation)) {
     return <Loader2 className={clsx(cls, 'animate-spin text-yellow-400')} />;
   }
@@ -502,7 +514,12 @@ function CheckRow({
         onClick={handleRowClick}
       >
         {/* Status icon */}
-        <span className="shrink-0">{getStatusIcon(evaluation)}</span>
+        <span className="shrink-0">
+          {getStatusIcon(
+            evaluation,
+            canSetPolicyIgnored && isIgnoredForAutoComplete,
+          )}
+        </span>
 
         {/* Name */}
         <span
@@ -539,20 +556,26 @@ function CheckRow({
         )}
 
         {canSetPolicyIgnored && isIgnoredForAutoComplete && (
-          <span className="text-status-done bg-status-done/10 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium">
+          <span className="text-ink-4 bg-glass-medium flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium">
+            <BellOff className="h-2.5 w-2.5" />
             Ignored
           </span>
         )}
 
-        {/* Status label */}
-        <span
+        {/* Status label (hidden for failures on ignored policies) */}
+        {!(
+          isIgnoredForAutoComplete &&
+          (evaluation.status === 'rejected' || evaluation.status === 'broken')
+        ) && (
+          <span
           className={clsx(
             'min-w-[52px] shrink-0 text-right text-xs font-medium',
             getStatusColor(evaluation),
           )}
         >
-          {getStatusLabel(evaluation)}
-        </span>
+            {getStatusLabel(evaluation)}
+          </span>
+        )}
 
         {/* Queue action button */}
         {showQueue && (

@@ -31,6 +31,7 @@ const electronMocks = vi.hoisted(() => {
       isDestroyed: ReturnType<typeof vi.fn>;
       loadURL: ReturnType<typeof vi.fn>;
       on: ReturnType<typeof vi.fn>;
+      reload: ReturnType<typeof vi.fn>;
       removeListener: ReturnType<typeof vi.fn>;
       setWindowOpenHandler: ReturnType<typeof vi.fn>;
     };
@@ -65,6 +66,7 @@ const electronMocks = vi.hoisted(() => {
           currentUrl = url;
         }),
         on: vi.fn(),
+        reload: vi.fn(),
         removeListener: vi.fn(),
         setWindowOpenHandler: vi.fn(),
       };
@@ -94,7 +96,10 @@ vi.mock('../lib/debug', () => ({
 
 import {
   closeEmbeddedReactNativeDevTools,
+  disposeReactNativeDevToolsForSession,
+  disposeReactNativeDevToolsForTask,
   openEmbeddedReactNativeDevTools,
+  reloadEmbeddedReactNativeDevTools,
   resolveReactNativeDevTools,
   setEmbeddedReactNativeDevToolsVisibility,
 } from './mobile-preview-react-native-devtools-service';
@@ -291,5 +296,135 @@ describe('React Native DevTools service', () => {
     );
     expect(JSON.stringify(electronMocks.log.mock.calls)).not.toContain('secret');
     closeEmbeddedReactNativeDevTools(owner, { viewId: 'view-4' });
+  });
+
+  it('reuses the frontend URL across resolves so DevTools history survives', async () => {
+    const metroResponse = () =>
+      new Response(
+        JSON.stringify([
+          {
+            id: 'device-1',
+            title: 'Example app',
+            appId: 'com.example',
+            deviceName: 'iPhone',
+            webSocketDebuggerUrl:
+              'ws://127.0.0.1:8081/inspector/debug?device=device-1&page=1',
+            reactNative: { capabilities: { nativePageReloads: true } },
+          },
+        ]),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => metroResponse()));
+
+    const first = await resolveReactNativeDevTools({ metroPort: 8081 });
+    const second = await resolveReactNativeDevTools({ metroPort: 8081 });
+
+    // A changing launchId would change the URL, forcing a reload that wipes
+    // the console and network panels.
+    expect(second.frontendUrl).toBe(first.frontendUrl);
+    expect(first.frontendUrl).toContain('launchId=');
+  });
+
+  it('keeps a view alive on close of one device but disposes the whole task', async () => {
+    const owner = createOwner(5);
+    await openEmbeddedReactNativeDevTools(owner, {
+      viewId: 'rn-devtools:task-a:ios:device-1',
+      frontendUrl: FRONTEND_URL,
+      bounds: BOUNDS,
+    });
+    await openEmbeddedReactNativeDevTools(owner, {
+      viewId: 'rn-devtools:task-b:ios:device-9',
+      frontendUrl: FRONTEND_URL,
+      bounds: BOUNDS,
+    });
+    const [taskAView, taskBView] = electronMocks.views;
+
+    // Another task's teardown must not touch this task's view.
+    disposeReactNativeDevToolsForTask('task-b');
+    expect(taskAView.webContents.close).not.toHaveBeenCalled();
+    expect(taskBView.webContents.close).toHaveBeenCalled();
+
+    disposeReactNativeDevToolsForTask('task-a');
+    expect(taskAView.webContents.close).toHaveBeenCalled();
+  });
+
+  it('disposes only the given device view, leaving siblings of the same task', async () => {
+    const owner = createOwner(7);
+    await openEmbeddedReactNativeDevTools(owner, {
+      viewId: 'rn-devtools:task-a:ios:device-1',
+      frontendUrl: FRONTEND_URL,
+      bounds: BOUNDS,
+    });
+    await openEmbeddedReactNativeDevTools(owner, {
+      viewId: 'rn-devtools:task-a:android:device-2',
+      frontendUrl: FRONTEND_URL,
+      bounds: BOUNDS,
+    });
+    const [iosView, androidView] = electronMocks.views;
+
+    disposeReactNativeDevToolsForSession({
+      taskId: 'task-a',
+      platform: 'ios',
+      deviceId: 'device-1',
+    });
+
+    expect(iosView.webContents.close).toHaveBeenCalled();
+    expect(androidView.webContents.close).not.toHaveBeenCalled();
+  });
+
+  it('evicts the least recently shown view past the retention cap', async () => {
+    const owner = createOwner(8);
+    // Seven views for one window; the cap is six.
+    for (let index = 0; index < 7; index += 1) {
+      await openEmbeddedReactNativeDevTools(owner, {
+        viewId: `rn-devtools:task-a:ios:device-${index}`,
+        frontendUrl: FRONTEND_URL,
+        bounds: BOUNDS,
+      });
+      // Keep the first view the most recently *shown* one.
+      setEmbeddedReactNativeDevToolsVisibility(owner, {
+        viewId: 'rn-devtools:task-a:ios:device-0',
+        visible: true,
+      });
+    }
+
+    const views = electronMocks.views;
+    // device-0 stayed visible, so it must survive; device-1 is the oldest
+    // unshown view and is the eviction candidate.
+    expect(views[0].webContents.close).not.toHaveBeenCalled();
+    expect(views[1].webContents.close).toHaveBeenCalled();
+    expect(views[6].webContents.close).not.toHaveBeenCalled();
+  });
+
+  it('reloads a view whose frontend URL is unchanged after a Metro restart', async () => {
+    const owner = createOwner(9);
+    await openEmbeddedReactNativeDevTools(owner, {
+      viewId: 'rn-devtools:task-a:ios:device-1',
+      frontendUrl: FRONTEND_URL,
+      bounds: BOUNDS,
+    });
+    const [view] = electronMocks.views;
+
+    reloadEmbeddedReactNativeDevTools(owner, {
+      viewId: 'rn-devtools:task-a:ios:device-1',
+    });
+
+    expect(view.webContents.reload).toHaveBeenCalled();
+  });
+
+  it('ignores task ids that only prefix-match another task', async () => {
+    const owner = createOwner(6);
+    await openEmbeddedReactNativeDevTools(owner, {
+      viewId: 'rn-devtools:task-10:ios:device-1',
+      frontendUrl: FRONTEND_URL,
+      bounds: BOUNDS,
+    });
+    const [view] = electronMocks.views;
+
+    disposeReactNativeDevToolsForTask('task-1');
+    expect(view.webContents.close).not.toHaveBeenCalled();
+
+    disposeReactNativeDevToolsForTask('task-10');
+    expect(view.webContents.close).toHaveBeenCalled();
   });
 });

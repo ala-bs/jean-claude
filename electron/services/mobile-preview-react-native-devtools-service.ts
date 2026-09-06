@@ -6,6 +6,7 @@ import type {
   ReactNativeDevToolsEmbeddedBoundsParams,
   ReactNativeDevToolsEmbeddedCloseParams,
   ReactNativeDevToolsEmbeddedOpenParams,
+  ReactNativeDevToolsEmbeddedReloadParams,
   ReactNativeDevToolsEmbeddedVisibilityParams,
   ReactNativeDevToolsOpenParams,
   ReactNativeDevToolsPanel,
@@ -46,11 +47,54 @@ const embeddedViews = new Map<
   {
     ownerWebContentsId: number;
     ownerWindow: BrowserWindow;
+    viewId: string;
     view: WebContentsView;
+    lastUsedTick: number;
     cleanupDiagnostics: () => void;
     cleanupOwnerListeners: () => void;
   }
 >();
+
+/**
+ * Views deliberately outlive the pane that opened them, so nothing in the
+ * renderer reliably releases one that is never returned to (a pane reopened on
+ * a different device, or the transient `:none` device id). Bound the number of
+ * retained views per window and evict the least recently shown, so retention
+ * cannot grow into an unbounded pile of live Chromium renderers.
+ */
+const MAX_EMBEDDED_VIEWS_PER_OWNER = 6;
+let embeddedViewTick = 0;
+
+function evictExcessEmbeddedViews(ownerWebContentsId: number) {
+  const ownerEntries = Array.from(embeddedViews.entries())
+    .filter(([, entry]) => entry.ownerWebContentsId === ownerWebContentsId)
+    .sort(([, a], [, b]) => a.lastUsedTick - b.lastUsedTick);
+  const excess = ownerEntries.length - MAX_EMBEDDED_VIEWS_PER_OWNER;
+  if (excess <= 0) return;
+
+  ownerEntries.slice(0, excess).forEach(([key, entry]) => {
+    dbg.mobilePreview(
+      'RN DevTools evicting least-recently-used view [%s]',
+      entry.viewId,
+    );
+    disposeEmbeddedView(key);
+  });
+}
+
+/**
+ * Renderer-side view ids look like `rn-devtools:<taskId>:<platform>:<deviceId>`.
+ * Views outlive the pane being closed, so task-scoped teardown matches on the
+ * task segment rather than the full key.
+ */
+const EMBEDDED_VIEW_ID_PREFIX = 'rn-devtools:';
+
+function getTaskIdFromViewId(viewId: string) {
+  if (!viewId.startsWith(EMBEDDED_VIEW_ID_PREFIX)) return null;
+  const rest = viewId.slice(EMBEDDED_VIEW_ID_PREFIX.length);
+  const separatorIndex = rest.indexOf(':');
+  const taskId = separatorIndex === -1 ? rest : rest.slice(0, separatorIndex);
+  return taskId.length > 0 ? taskId : null;
+}
 
 function asString(value: unknown) {
   return typeof value === 'string' ? value : null;
@@ -360,6 +404,21 @@ function buildDevToolsFrontendUrl({
   return `${metroUrl.origin}/debugger-frontend/rn_fusebox.html?${params.toString()}`;
 }
 
+/**
+ * The frontend reloads whenever its URL changes, which wipes console and
+ * network history. A random per-resolve launch id therefore threw away the
+ * session on every refetch, so derive a stable one from the debug target.
+ */
+function getStableLaunchId({
+  metroPort,
+  target,
+}: {
+  metroPort: number;
+  target: ReactNativeDevToolsTarget;
+}) {
+  return `jc-${metroPort}-${encodeURIComponent(target.id)}`;
+}
+
 function absolutizeDevToolsFrontendUrl({
   metroBaseUrl,
   target,
@@ -436,14 +495,13 @@ export async function resolveReactNativeDevTools({
           return normalized ? [normalized] : [];
         })
       : [];
-    const launchId = crypto.randomUUID();
     const compatibleTargets = targets.filter(isCompatibleTarget).map((target) => ({
       ...target,
       devtoolsFrontendUrl: absolutizeDevToolsFrontendUrl({
         metroBaseUrl,
         target,
         panel,
-        launchId,
+        launchId: getStableLaunchId({ metroPort, target }),
       }),
     }));
     const target = compatibleTargets[compatibleTargets.length - 1] ?? null;
@@ -458,7 +516,12 @@ export async function resolveReactNativeDevTools({
     return {
       metroBaseUrl,
       frontendUrl: target
-        ? absolutizeDevToolsFrontendUrl({ metroBaseUrl, target, panel, launchId })
+        ? absolutizeDevToolsFrontendUrl({
+            metroBaseUrl,
+            target,
+            panel,
+            launchId: getStableLaunchId({ metroPort, target }),
+          })
         : null,
       targets: compatibleTargets,
       error: target ? null : 'No Hermes debug targets found. Launch app and reload it.',
@@ -523,7 +586,9 @@ export async function openEmbeddedReactNativeDevTools(
     embeddedViews.set(key, {
       ownerWebContentsId: owner.id,
       ownerWindow,
+      viewId,
       view,
+      lastUsedTick: (embeddedViewTick += 1),
       cleanupDiagnostics,
       cleanupOwnerListeners: () => {
         owner.removeListener('destroyed', disposeForOwner);
@@ -535,6 +600,11 @@ export async function openEmbeddedReactNativeDevTools(
     ownerWindow.once('closed', disposeForOwner);
     view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   }
+
+  const entry = embeddedViews.get(key);
+  if (entry) entry.lastUsedTick = (embeddedViewTick += 1);
+  // Evict before the await so a burst of opens cannot pile up past the cap.
+  evictExcessEmbeddedViews(owner.id);
 
   view.setBounds(safeBounds);
   if (view.webContents.getURL() !== safeUrl) {
@@ -566,7 +636,30 @@ export function setEmbeddedReactNativeDevToolsVisibility(
   const entry = embeddedViews.get(getEmbeddedViewKey(owner, viewId));
   if (!entry) return;
 
+  // Showing a view marks it as recently used, so the view the user is actually
+  // looking at is never the eviction candidate.
+  if (visible) entry.lastUsedTick = (embeddedViewTick += 1);
   entry.view.setVisible(visible);
+}
+
+/**
+ * Forces the DevTools frontend to reload.
+ *
+ * The frontend URL is now a pure function of the Metro port and target id, so
+ * a view that survived a Metro or app restart can stay bound to a dead
+ * websocket with an identical URL and would never reload on its own. This is
+ * the user's escape hatch, wired to the DevTools tab's Refresh button.
+ */
+export function reloadEmbeddedReactNativeDevTools(
+  owner: WebContents,
+  { viewId }: ReactNativeDevToolsEmbeddedReloadParams,
+): void {
+  validateViewId(viewId);
+  const entry = embeddedViews.get(getEmbeddedViewKey(owner, viewId));
+  if (!entry || entry.view.webContents.isDestroyed()) return;
+
+  dbg.mobilePreview('RN DevTools [%s] reloading frontend', viewId);
+  entry.view.webContents.reload();
 }
 
 export function closeEmbeddedReactNativeDevTools(
@@ -575,4 +668,75 @@ export function closeEmbeddedReactNativeDevTools(
 ): void {
   validateViewId(viewId);
   disposeEmbeddedView(getEmbeddedViewKey(owner, viewId));
+}
+
+function disposeEmbeddedViewsWhere(
+  predicate: (viewId: string) => boolean,
+  reason: string,
+): void {
+  const keys = Array.from(embeddedViews.entries())
+    .filter(([, entry]) => predicate(entry.viewId))
+    .map(([key]) => key);
+  if (keys.length === 0) return;
+
+  dbg.mobilePreview(
+    'RN DevTools disposing %d view(s) (%s)',
+    keys.length,
+    reason,
+  );
+  keys.forEach(disposeEmbeddedView);
+}
+
+/**
+ * Builds the renderer's view id for one device. Must stay in sync with
+ * `devToolsViewId` in the mobile preview pane.
+ */
+export function getReactNativeDevToolsViewId({
+  taskId,
+  platform,
+  deviceId,
+}: {
+  taskId: string;
+  platform: string;
+  deviceId: string;
+}) {
+  return `${EMBEDDED_VIEW_ID_PREFIX}${taskId}:${platform}:${deviceId || 'none'}`;
+}
+
+/**
+ * Destroys the DevTools view for a single preview session.
+ *
+ * A task can run previews on several devices at once, each with its own view,
+ * so stopping one device must not take down another device's console/network
+ * history for the same still-running task.
+ */
+export function disposeReactNativeDevToolsForSession(params: {
+  taskId: string;
+  platform: string;
+  deviceId: string;
+}): void {
+  if (typeof params.taskId !== 'string' || params.taskId.length === 0) return;
+
+  const viewId = getReactNativeDevToolsViewId(params);
+  disposeEmbeddedViewsWhere(
+    (entryViewId) => entryViewId === viewId,
+    `session ${viewId}`,
+  );
+}
+
+/**
+ * Destroys every DevTools view belonging to a task, across all windows.
+ *
+ * Embedded views deliberately survive the preview pane closing so console and
+ * network history is still there when it reopens. This is the real teardown
+ * point: the preview stopped, or the task was completed or deleted, so the
+ * debugger session it was attached to is gone for good.
+ */
+export function disposeReactNativeDevToolsForTask(taskId: string): void {
+  if (typeof taskId !== 'string' || taskId.length === 0) return;
+
+  disposeEmbeddedViewsWhere(
+    (viewId) => getTaskIdFromViewId(viewId) === taskId,
+    `task ${taskId}`,
+  );
 }

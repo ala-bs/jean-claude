@@ -168,6 +168,7 @@ import type {
   ReactNativeDevToolsEmbeddedBoundsParams,
   ReactNativeDevToolsEmbeddedCloseParams,
   ReactNativeDevToolsEmbeddedOpenParams,
+  ReactNativeDevToolsEmbeddedReloadParams,
   ReactNativeDevToolsEmbeddedVisibilityParams,
   ReactNativeDevToolsOpenParams,
   ReactNativeDevToolsResolveParams,
@@ -1567,6 +1568,9 @@ export interface Api {
     setEmbeddedReactNativeDevToolsVisibility: (
       params: ReactNativeDevToolsEmbeddedVisibilityParams,
     ) => Promise<void>;
+    reloadEmbeddedReactNativeDevTools: (
+      params: ReactNativeDevToolsEmbeddedReloadParams,
+    ) => Promise<void>;
     closeEmbeddedReactNativeDevTools: (
       params: ReactNativeDevToolsEmbeddedCloseParams,
     ) => Promise<void>;
@@ -2771,6 +2775,7 @@ export const api: Api = hasWindowApi
         },
         setEmbeddedReactNativeDevToolsBounds: async () => {},
         setEmbeddedReactNativeDevToolsVisibility: async () => {},
+        reloadEmbeddedReactNativeDevTools: async () => {},
         closeEmbeddedReactNativeDevTools: async () => {},
         getAndroidAppStatus: async () => {
           throw new Error('API not available');

@@ -30,6 +30,7 @@ import {
   getTodoProgress,
   getToolActivitySummary,
 } from '../ui-subagent-entry/last-activity';
+import { BackgroundJobsSection } from '../../ui-background-jobs-section';
 import { CommentableWrapper } from '../ui-commentable-text-entry';
 import { MarkdownContent } from '../../ui-markdown-content';
 import { RunningTimer } from '../ui-running-timer';
@@ -1343,9 +1344,12 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   taskId,
   onOpenFileInReview,
   onOpenFileInEditor,
+  backgroundJobsStepId = null,
 }: {
   group: PromptGroup;
   isLast?: boolean;
+  /** Step whose background jobs belong to this group (last group only) */
+  backgroundJobsStepId?: string | null;
   /** Whether the parent task is currently running */
   isTaskRunning?: boolean;
   previousPromptDate?: string;
@@ -1575,7 +1579,11 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
           />
 
           {/* Body */}
-          <div className="px-3.5 py-2.5">
+          {/* Column gap (not a margin) so a hidden jobs section leaves no gap */}
+          <div className="flex flex-col gap-2.5 px-3.5 py-2.5">
+            {backgroundJobsStepId && (
+              <BackgroundJobsSection stepId={backgroundJobsStepId} />
+            )}
             {detailsExpanded ? (
               /* Expanded: full child timeline */
               <div className="flex flex-col gap-0.5">

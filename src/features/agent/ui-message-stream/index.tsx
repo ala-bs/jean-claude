@@ -624,6 +624,9 @@ export const MessageStream = memo(function MessageStream({
                   <PromptGroupEntry
                     group={streamMessage}
                     isLast={index === lastPromptGroupIndex}
+                    backgroundJobsStepId={
+                      index === lastPromptGroupIndex ? (stepId ?? null) : null
+                    }
                     isTaskRunning={
                       index === lastPromptGroupIndex && isRunning
                     }

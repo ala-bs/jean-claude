@@ -4,11 +4,12 @@ import { create } from 'zustand';
 import { api } from '@/lib/api';
 
 /**
- * Per-session auto-accept flags, keyed by step id.
+ * Auto-accept flags, keyed by step id.
  *
  * Purely in-memory on both sides of the bridge: the main process holds the
- * authoritative set and this store mirrors it for the UI. Both are cleared
- * when the app restarts, which is what makes the mode "session only".
+ * authoritative set and this store mirrors it for the UI. The flag stays on
+ * across turns — it is dropped only when the user toggles it off or the app
+ * restarts.
  */
 type AutoAcceptState = {
   enabledByStepId: Record<string, boolean>;
@@ -29,9 +30,8 @@ export function useAutoAccept(stepId: string | undefined) {
   );
   const setEnabledAction = useAutoAcceptStore((state) => state.setEnabled);
 
-  // Main owns the flag and drops it when the step's session is torn down, so
-  // re-read it instead of trusting a mirror that can outlive the session (or be
-  // reset by a renderer reload).
+  // Main owns the flag, so re-read it rather than trusting a mirror that a
+  // renderer reload can reset independently of the main-process value.
   useEffect(() => {
     if (!stepId) return;
     let cancelled = false;

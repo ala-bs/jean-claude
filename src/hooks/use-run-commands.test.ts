@@ -312,7 +312,7 @@ describe('useRunCommands task switching', () => {
     await act(async () => firstPromise);
 
     expect(controls.portsInUseError?.message).toBe('first conflict');
-    let retryPromise!: Promise<void>;
+    let retryPromise!: Promise<unknown>;
     await act(async () => {
       retryPromise = controls.confirmKillPorts();
       await flushPromises();
@@ -329,6 +329,64 @@ describe('useRunCommands task switching', () => {
 
     retry.resolve(status('command-1'));
     await act(async () => retryPromise);
+  });
+
+  // Callers gate the command-logs pane on `started`, so a ports-in-use result
+  // must never report success.
+  it('reports started:false on a port conflict and started:true on success', async () => {
+    apiMocks.getStatus.mockResolvedValue({ isRunning: false, commands: [] });
+    apiMocks.startCommand.mockResolvedValueOnce({
+      type: 'PortsInUseError',
+      message: 'conflict',
+      portsInUse: [{ port: 3000, commandId: 'command-1', command: 'pnpm dev' }],
+    } as never);
+
+    await act(async () => root.render(createElement(Harness, { taskId: 'task-1' })));
+
+    let conflictResult: unknown;
+    await act(async () => {
+      conflictResult = await controls.startCommand('command-1');
+    });
+    expect(conflictResult).toEqual({ started: false });
+
+    apiMocks.startCommand.mockResolvedValueOnce(status('command-1'));
+    apiMocks.killPortsForCommand.mockResolvedValue(undefined as never);
+
+    let killResult: unknown;
+    await act(async () => {
+      killResult = await controls.confirmKillPorts();
+    });
+    expect(killResult).toEqual({ commandIds: ['command-1'], started: true });
+    expect(controls.portsInUseError).toBeNull();
+  });
+
+  it('reports started:false for a superseded start', async () => {
+    apiMocks.getStatus.mockResolvedValue({ isRunning: false, commands: [] });
+    const first = deferred<RunStatus>();
+    const second = deferred<RunStatus>();
+    apiMocks.startCommand
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    await act(async () => root.render(createElement(Harness, { taskId: 'task-1' })));
+    let firstPromise!: Promise<unknown>;
+    let secondPromise!: Promise<unknown>;
+    await act(async () => {
+      firstPromise = controls.startCommand('command-1');
+      secondPromise = controls.startCommand('command-1');
+      await flushPromises();
+    });
+
+    let firstResult: unknown;
+    let secondResult: unknown;
+    await act(async () => {
+      first.resolve(status('command-1'));
+      second.resolve(status('command-1'));
+      firstResult = await firstPromise;
+      secondResult = await secondPromise;
+    });
+    expect(firstResult).toEqual({ started: false });
+    expect(secondResult).toEqual({ started: true });
   });
 });
 

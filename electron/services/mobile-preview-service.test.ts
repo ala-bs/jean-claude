@@ -34,6 +34,14 @@ vi.mock('../database/repositories', () => ({
 vi.mock('./run-command-service', () => ({
   runCommandService: { getRunStatus: vi.fn() },
 }));
+const devToolsMocks = vi.hoisted(() => ({
+  disposeForSession: vi.fn(),
+  disposeForTask: vi.fn(),
+}));
+vi.mock('./mobile-preview-react-native-devtools-service', () => ({
+  disposeReactNativeDevToolsForSession: devToolsMocks.disposeForSession,
+  disposeReactNativeDevToolsForTask: devToolsMocks.disposeForTask,
+}));
 
 import {
   createMobilePreviewService,
@@ -460,6 +468,64 @@ describe('mobile preview service', () => {
     expect(service.getActiveSession(firstSession.id)).toBeNull();
     expect(service.getActiveSession(secondSession.id)).toBeNull();
     expect(service.getActiveSession(otherSession.id)).toEqual(otherSession);
+  });
+
+  it('disposes only the stopped device DevTools view, not the whole task', async () => {
+    const { service } = createService();
+    const firstSession = await service.start({
+      taskId: 'task-1',
+      projectPath: '/project',
+      platform: 'ios',
+      deviceId: 'device-1',
+    });
+    await service.start({
+      taskId: 'task-1',
+      projectPath: '/project',
+      platform: 'ios',
+      deviceId: 'device-2',
+    });
+    devToolsMocks.disposeForSession.mockClear();
+    devToolsMocks.disposeForTask.mockClear();
+
+    await service.stop(firstSession.id);
+
+    // device-2 is still previewing the same task: its console/network history
+    // must survive stopping device-1.
+    expect(devToolsMocks.disposeForSession).toHaveBeenCalledTimes(1);
+    expect(devToolsMocks.disposeForSession).toHaveBeenCalledWith({
+      taskId: 'task-1',
+      platform: 'ios',
+      deviceId: 'device-1',
+    });
+    expect(devToolsMocks.disposeForTask).not.toHaveBeenCalled();
+  });
+
+  it('disposes every DevTools view for a task when the task goes terminal', async () => {
+    const { service } = createService();
+    await service.start({
+      taskId: 'task-1',
+      projectPath: '/project',
+      platform: 'ios',
+      deviceId: 'device-1',
+    });
+    devToolsMocks.disposeForTask.mockClear();
+
+    await service.stopByTask('task-1');
+
+    expect(devToolsMocks.disposeForTask).toHaveBeenCalledWith('task-1');
+  });
+
+  it('disposes task DevTools views even when no preview session is live', async () => {
+    const { service } = createService();
+    devToolsMocks.disposeForTask.mockClear();
+
+    // Task completed/deleted after the preview was already stopped: the view
+    // is deliberately kept alive for its history, so this is its only teardown.
+    await service.stopByTask('task-without-session');
+
+    expect(devToolsMocks.disposeForTask).toHaveBeenCalledWith(
+      'task-without-session',
+    );
   });
 
   it('returns terminal cleanup promptly while a task stream is stuck starting', async () => {
