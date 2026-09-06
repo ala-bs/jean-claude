@@ -870,35 +870,64 @@ function ResultBlock({
   /** Task ID for comment anchoring */
   taskId?: string;
 }) {
-  if (isError) {
-    return (
-      <div className="flex items-center gap-2 text-xs text-red-400">
-        <AlertCircle className="h-3 w-3 shrink-0" />
-        <span>{resultText || 'Unknown error'}</span>
-      </div>
-    );
-  }
+  const tint = isError ? 'var(--color-status-fail)' : 'var(--color-acc)';
 
   const content = (
-    <div className="text-ink-1 font-mono text-xs leading-relaxed">
-      <div className="flex items-baseline gap-2">
-        <span className="text-acc-ink w-3 shrink-0 text-center">✓</span>
-        <div className="min-w-0 flex-1">
-          {resultText && (
-            <div className="mb-0.5">
-              <MarkdownContent
-                content={resultText}
-                onFilePathClick={onFilePathClick}
-              />
-            </div>
-          )}
-        </div>
+    <div
+      className="text-ink-1 rounded-md font-mono text-xs leading-relaxed"
+      style={{
+        background: `color-mix(in oklch, ${tint} 6%, transparent)`,
+        border: `1px solid color-mix(in oklch, ${tint} 22%, transparent)`,
+      }}
+    >
+      <div
+        className="flex items-center gap-1.5 px-2.5 py-1"
+        style={{
+          borderBottom: `1px solid color-mix(in oklch, ${tint} 16%, transparent)`,
+        }}
+      >
+        {isError ? (
+          <>
+            <AlertCircle
+              aria-hidden
+              className="text-status-fail h-3 w-3 shrink-0"
+            />
+            <span className="text-status-fail text-[9.5px] tracking-wider uppercase">
+              error
+            </span>
+          </>
+        ) : (
+          <>
+            <span aria-hidden className="text-acc-ink text-[10px]">
+              ✓
+            </span>
+            <span className="text-acc-ink text-[9.5px] tracking-wider uppercase">
+              result
+            </span>
+          </>
+        )}
       </div>
-      {stats && (
-        <div className="text-ink-4 mt-2 flex gap-3.5 pl-5 font-mono text-[10.5px]">
-          {stats}
-        </div>
-      )}
+      <div className="px-2.5 py-2">
+        {isError ? (
+          <div className="text-status-fail">
+            {resultText || 'Unknown error'}
+          </div>
+        ) : (
+          resultText && (
+            <MarkdownContent
+              content={resultText}
+              onFilePathClick={onFilePathClick}
+            />
+          )
+        )}
+        {stats && (
+          <div
+            className={`text-ink-4 flex gap-3.5 font-mono text-[10.5px] ${resultText ? 'mt-2' : ''}`}
+          >
+            {stats}
+          </div>
+        )}
+      </div>
     </div>
   );
 
@@ -919,6 +948,7 @@ function AssistantMessageBlock({
   entryId,
   taskId,
   onFilePathClick,
+  index,
 }: {
   text: string;
   entryId: string;
@@ -928,14 +958,21 @@ function AssistantMessageBlock({
     lineStart?: number,
     lineEnd?: number,
   ) => void;
+  /** 1-based position of this message within the group (shown as a marker) */
+  index: number;
 }) {
   const content = (
-    <div className="text-ink-2 font-mono text-xs leading-relaxed">
-      <div className="flex items-baseline gap-2">
-        <span className="text-ink-4 w-3 shrink-0 text-center">·</span>
-        <div className="min-w-0 flex-1">
-          <MarkdownContent content={text} onFilePathClick={onFilePathClick} />
-        </div>
+    <div className="text-ink-2 rounded-md border border-white/[0.07] bg-white/[0.02] font-mono text-xs leading-relaxed">
+      <div className="flex items-center gap-1.5 border-b border-white/[0.06] px-2.5 py-1">
+        <span className="text-ink-4 rounded-sm bg-white/[0.07] px-1.5 py-px text-[9.5px] font-semibold tabular-nums">
+          {index}
+        </span>
+        <span className="text-ink-4 text-[9.5px] tracking-wider uppercase">
+          message
+        </span>
+      </div>
+      <div className="px-2.5 py-2">
+        <MarkdownContent content={text} onFilePathClick={onFilePathClick} />
       </div>
     </div>
   );
@@ -1663,7 +1700,7 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
                 {/* Append result or running summary at bottom when expanded */}
                 {!isActiveGroup && group.resultEntry && (
                   <div
-                    className="mt-2.5 border-t border-dashed border-white/[0.08] pt-2.5"
+                    className="mt-2.5"
                     onContextMenu={
                       onResultContextMenu
                         ? (e) => onResultContextMenu(e, group.resultEntry!)
@@ -1717,13 +1754,14 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
                     </div>
                   </div>
                 )}
-                {precedingLongMessages.map((m) => (
+                {precedingLongMessages.map((m, i) => (
                   <AssistantMessageBlock
                     key={m.entryId}
                     text={m.text}
                     entryId={m.entryId}
                     taskId={taskId}
                     onFilePathClick={onFilePathClick}
+                    index={i + 1}
                   />
                 ))}
                 {resultSummary ? (
