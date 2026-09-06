@@ -266,6 +266,16 @@ export function CommandLogsPane({
     [status],
   );
 
+  // Keyed by command id so the focus strip can tell "never started" (no entry)
+  // apart from "stopped" and "errored".
+  const commandStatusById = useMemo(
+    () =>
+      new Map(
+        (status?.commands ?? []).map((entry) => [entry.id, entry.status]),
+      ),
+    [status],
+  );
+
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
 
   const tabs = useMemo(
@@ -311,6 +321,17 @@ export function CommandLogsPane({
   const isActiveConfigured = commands.some(
     (command) => command.id === activeCommandId,
   );
+  const activeCommandName = useMemo(() => {
+    const tab = tabs.find((entry) => entry.id === activeCommandId);
+    return tab ? getRunCommandDisplayName(tab) : '';
+  }, [activeCommandId, tabs]);
+  const activeStatusLabel = isActiveStarting
+    ? 'Starting'
+    : isActiveRunning
+      ? 'Running'
+      : activeCommandId
+        ? (commandStatusById.get(activeCommandId) ?? 'not started')
+        : 'not started';
 
   const restartCommand = useCallback(
     async (commandId: string) => {
@@ -532,62 +553,73 @@ export function CommandLogsPane({
                 <Button
                   key={tab.id}
                   type="button"
+                  variant="tab"
+                  size="xs"
+                  active={isActive}
+                  aria-pressed={isActive}
                   onClick={() => onSelectCommand(tab.id)}
                   className={clsx(
-                    'max-w-64 rounded border px-2.5 py-1 text-xs font-medium transition-colors',
-                    isActive
-                      ? 'bg-acc text-ink-0 border-transparent'
-                      : 'text-ink-1 bg-bg-1 hover:bg-glass-medium',
-                    isRunning && !isActive
-                      ? 'border-status-done/40'
-                      : 'border-transparent',
+                    'max-w-56 shrink-0',
+                    isActive && 'ring-acc ring-1 ring-inset',
                   )}
                   title={`${displayName}${isRunning ? ' (running)' : ''}`}
                   aria-label={`${displayName}${isRunning ? ', running' : ''}`}
                 >
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    {isRunning && (
-                      <Loader2
-                        className={clsx(
-                          'h-3 w-3 shrink-0 animate-spin',
-                          isActive ? 'text-ink-0' : 'text-status-done',
-                        )}
-                        aria-hidden
-                      />
+                  <span
+                    className={clsx(
+                      'h-1.5 w-1.5 shrink-0 rounded-full',
+                      isRunning ? 'bg-status-done animate-pulse' : 'bg-ink-3/40',
                     )}
-                    <span className="truncate">{displayName}</span>
-                    {isRunning && (
-                      <span
-                        className={clsx(
-                          'shrink-0 text-[10px] font-semibold uppercase',
-                          isActive ? 'text-ink-0/80' : 'text-status-done',
-                        )}
-                      >
-                        Running
-                      </span>
-                    )}
-                  </span>
+                    aria-hidden
+                  />
+                  <span className="truncate">{displayName}</span>
                 </Button>
               );
             })}
           </div>
           <Separator />
 
-          {activeCommandId && (
-            <InteractiveLog
-              log={activeLogView}
-              taskId={taskId}
-              runCommandId={activeCommandId}
-              isRunning={isActiveRunning}
-              workingDir={workingDir}
-              ignoreBrowserShortcuts
-              emptyText={
-                normalizedSearchQuery
-                  ? `No log lines match "${searchQuery.trim()}".`
-                  : 'Waiting for output...'
-              }
+          {/* Focus strip: the single unambiguous answer to "which command am I
+              looking at?" — the header controls all act on this command. */}
+          <div className="bg-glass-light flex shrink-0 items-center gap-2 px-4 py-1.5">
+            <span
+              className="bg-acc h-3.5 w-0.5 shrink-0 rounded-full"
+              aria-hidden
             />
-          )}
+            <span className="text-ink-0 truncate font-mono text-xs">
+              {activeCommandName}
+            </span>
+            <span
+              className={clsx(
+                'ml-auto flex shrink-0 items-center gap-1 text-[10px] font-semibold tracking-wide uppercase',
+                isActiveRunning
+                  ? 'text-status-done'
+                  : activeStatusLabel === 'errored'
+                    ? 'text-status-fail'
+                    : 'text-ink-3',
+              )}
+            >
+              {isActiveStarting && (
+                <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+              )}
+              {activeStatusLabel}
+            </span>
+          </div>
+          <Separator />
+
+          <InteractiveLog
+            log={activeLogView}
+            taskId={taskId}
+            runCommandId={activeCommandId}
+            isRunning={isActiveRunning}
+            workingDir={workingDir}
+            ignoreBrowserShortcuts
+            emptyText={
+              normalizedSearchQuery
+                ? `No log lines match "${searchQuery.trim()}".`
+                : 'Waiting for output...'
+            }
+          />
         </>
       ) : (
         <div className="text-ink-3 flex flex-1 items-center justify-center px-4 text-sm">
