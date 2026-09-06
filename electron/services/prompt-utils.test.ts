@@ -4,8 +4,11 @@ import {
   buildAgentPromptMarkdown,
   buildPromptActivityText,
   buildTaskCreationActivityText,
+  getPromptDisplayText,
+  interleavePromptParts,
   sanitizeAttachedFilesXml,
 } from './prompt-utils';
+import type { PromptImagePart, PromptPart } from '@shared/agent-backend-types';
 
 describe('buildAgentPromptMarkdown', () => {
   it('serializes text and agent-facing image data as markdown', () => {
@@ -36,6 +39,128 @@ describe('buildAgentPromptMarkdown', () => {
     ]);
 
     expect(markdown).toBe('![image](data:image/png;base64,image-data)');
+  });
+
+  it('inlines a placeholder-anchored image where it was pasted', () => {
+    const markdown = buildAgentPromptMarkdown([
+      {
+        type: 'text',
+        text: '1. fix header\n![a.png](jc-image://aaa)\n2. fix modal',
+      },
+      {
+        type: 'image',
+        data: 'a-data',
+        mimeType: 'image/png',
+        filename: 'a.png',
+        placeholderToken: 'aaa',
+      },
+    ]);
+
+    expect(markdown).toBe(
+      '1. fix header\n![a.png](data:image/png;base64,a-data)\n2. fix modal',
+    );
+  });
+
+  it('appends images whose placeholder is gone', () => {
+    const markdown = buildAgentPromptMarkdown([
+      { type: 'text', text: '![a.png](jc-image://aaa)' },
+      {
+        type: 'image',
+        data: 'a-data',
+        mimeType: 'image/png',
+        filename: 'a.png',
+        placeholderToken: 'aaa',
+      },
+      {
+        type: 'image',
+        data: 'b-data',
+        mimeType: 'image/png',
+        filename: 'b.png',
+        placeholderToken: 'bbb',
+      },
+    ]);
+
+    expect(markdown).toBe(
+      '![a.png](data:image/png;base64,a-data)\n\n![b.png](data:image/png;base64,b-data)',
+    );
+  });
+});
+
+describe('interleavePromptParts', () => {
+  const anchored: PromptImagePart = {
+    type: 'image',
+    data: 'a-data',
+    mimeType: 'image/png',
+    filename: 'a.png',
+    placeholderToken: 'aaa',
+  };
+  const loose: PromptImagePart = {
+    type: 'image',
+    data: 'b-data',
+    mimeType: 'image/png',
+    filename: 'b.png',
+  };
+
+  it('moves an anchored image into its placeholder slot', () => {
+    expect(
+      interleavePromptParts([
+        { type: 'text', text: '1. header\n![a.png](jc-image://aaa)\n2. modal' },
+        anchored,
+      ]),
+    ).toEqual([
+      { type: 'text', text: '1. header\n' },
+      anchored,
+      { type: 'text', text: '\n2. modal' },
+    ]);
+  });
+
+  it('leaves prompts without any placeholder byte-identical', () => {
+    const parts: PromptPart[] = [{ type: 'text', text: 'hello' }, loose];
+    expect(interleavePromptParts(parts)).toBe(parts);
+  });
+
+  it('keeps unanchored images and file parts trailing, in order', () => {
+    expect(
+      interleavePromptParts([
+        { type: 'text', text: 'see ![a.png](jc-image://aaa)' },
+        anchored,
+        loose,
+        { type: 'file', filePath: '/tmp/x.ts', filename: 'x.ts' },
+      ]),
+    ).toEqual([
+      { type: 'text', text: 'see ' },
+      anchored,
+      loose,
+      { type: 'file', filePath: '/tmp/x.ts', filename: 'x.ts' },
+    ]);
+  });
+
+  it('never drops an image whose placeholder the user deleted', () => {
+    const parts: PromptPart[] = [
+      { type: 'text', text: 'no marker here' },
+      anchored,
+    ];
+    expect(interleavePromptParts(parts)).toEqual([
+      { type: 'text', text: 'no marker here' },
+      anchored,
+    ]);
+  });
+});
+
+describe('getPromptDisplayText', () => {
+  it('replaces placeholders with readable labels', () => {
+    expect(
+      getPromptDisplayText([
+        { type: 'text', text: 'see ![a.png](jc-image://aaa) here' },
+        {
+          type: 'image',
+          data: 'a-data',
+          mimeType: 'image/png',
+          filename: 'a.png',
+          placeholderToken: 'aaa',
+        },
+      ]),
+    ).toBe('see [image: a.png] here');
   });
 });
 

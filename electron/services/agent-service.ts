@@ -84,7 +84,7 @@ import {
 } from '../database/repositories';
 import {
   buildAgentPromptMarkdown,
-  getPromptText,
+  getPromptDisplayText,
   textPrompt,
 } from './prompt-utils';
 import {
@@ -135,6 +135,7 @@ import { shellEditTracker } from './shell-edit-tracker';
 import { startAgentWithPrReviewLifecycle } from './pr-review-task-service';
 import { stepPermissionService } from './step-permission-service';
 import { StepService } from './step-service';
+import { stripPromptImagePlaceholders } from '@shared/prompt-image-placeholders';
 import { TaskStepRepository } from '../database/repositories/task-steps';
 
 /** In-memory store for queued prompt parts, keyed by QueuedPrompt.id.
@@ -1892,7 +1893,7 @@ class AgentService {
       void this.generateAndPersistTaskName(
         taskId,
         stepId,
-        options.initialPrompt ?? getPromptText(parts),
+        options.initialPrompt ?? getPromptDisplayText(parts),
       ).catch((err) => {
         dbg.agent('Error generating task name: %O', err);
       });
@@ -3002,7 +3003,7 @@ class AgentService {
       this.trackBackendRun(stepId, () =>
         this.runBackend(stepId, parts, activeSession, {
           generateNameOnInit: isFirstStep,
-          initialPrompt: step.promptTemplate,
+          initialPrompt: stripPromptImagePlaceholders(step.promptTemplate),
           isInitialPrompt: true,
           onRunStarting: markRunStarting,
         })
@@ -3536,7 +3537,7 @@ class AgentService {
       ? {
           ...admitAgentMemoryPromptCapture({
             capture,
-            content: getPromptText(parts),
+            content: getPromptDisplayText(parts),
             source: 'immediate',
             stepId,
           }),
@@ -3779,7 +3780,7 @@ class AgentService {
     const admittedCapture = capture
       ? admitAgentMemoryPromptCapture({
           capture,
-          content: getPromptText(parts),
+          content: getPromptDisplayText(parts),
           source: 'queued',
           stepId,
         })
@@ -3791,7 +3792,7 @@ class AgentService {
         queuedPromptParts.get(existingPrompt.id) ??
         textPrompt(existingPrompt.content);
       const combinedParts = appendPromptParts(existingParts, parts);
-      existingPrompt.content = getPromptText(combinedParts);
+      existingPrompt.content = getPromptDisplayText(combinedParts);
       queuedPromptParts.set(existingPrompt.id, combinedParts);
       if (admittedCapture && session.agentMemoryCaptureEligible) {
         const existingCapture = queuedPromptCaptures.get(existingPrompt.id);
@@ -3840,7 +3841,7 @@ class AgentService {
 
     const queuedPrompt: QueuedPrompt = {
       id,
-      content: getPromptText(parts),
+      content: getPromptDisplayText(parts),
       createdAt: Date.now(),
       agentMemoryCapture:
         admittedCapture && session.agentMemoryCaptureEligible

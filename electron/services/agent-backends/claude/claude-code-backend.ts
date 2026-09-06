@@ -31,6 +31,7 @@ import type {
   NormalizedPermissionResponse,
   NormalizedQuestion,
   NormalizedQuestionRequest,
+  PromptImagePart,
   PromptPart,
 } from '@shared/agent-backend-types';
 import type {
@@ -59,6 +60,7 @@ import {
 import { dbg } from '../../../lib/debug';
 import { getChildProcessEnv } from '../../../lib/child-process-env';
 import type { ResolvedPermissionRule } from '../../../../shared/permission-types';
+import { splitPromptTextByImages } from '@shared/prompt-image-placeholders';
 
 
 
@@ -142,31 +144,45 @@ function buildSdkUserMessage(
   const promptText = getPromptText(parts);
   const images = getPromptImages(parts);
 
-  const content: Array<
+  type ContentBlock =
     | { type: 'text'; text: string }
     | {
         type: 'image';
         source: { type: 'base64'; media_type: string; data: string };
-      }
-  > = [];
+      };
 
-  // Always emit the text block, even when empty: this mirrors what the SDK
+  const imageBlock = (img: PromptImagePart): ContentBlock => ({
+    type: 'image',
+    source: { type: 'base64', media_type: img.mimeType, data: img.data },
+  });
+
+  const content: ContentBlock[] = [];
+
+  // Anthropic content blocks are ordered, so an image pasted between two list
+  // items can be sent in exactly that slot instead of after the whole prompt.
+  // Only prompts that actually carry a placeholder are interleaved; everything
+  // else keeps the single joined text block the SDK has always been sent.
+  const { blocks, trailing } = splitPromptTextByImages({
+    text: promptText,
+    images,
+  });
+
+  for (const block of blocks) {
+    content.push(
+      block.type === 'text'
+        ? { type: 'text', text: block.text }
+        : imageBlock(block.image),
+    );
+  }
+
+  // Always emit a text block, even when empty: this mirrors what the SDK
   // itself writes for a bare-string prompt, and an empty `content` array is a
   // different wire shape that the CLI may reject.
-  if (promptText || images.length === 0) {
+  if (content.length === 0 && (promptText || images.length === 0)) {
     content.push({ type: 'text', text: promptText });
   }
 
-  for (const img of images) {
-    content.push({
-      type: 'image',
-      source: {
-        type: 'base64',
-        media_type: img.mimeType,
-        data: img.data,
-      },
-    });
-  }
+  for (const img of trailing) content.push(imageBlock(img));
 
   return {
     type: 'user',

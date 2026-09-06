@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { getTaskPromptPreview } from '@/lib/task-prompt-preview';
 import { GitBranch } from 'lucide-react';
 import { Link } from '@tanstack/react-router';
 import { useMemo } from 'react';
@@ -47,7 +48,7 @@ export function ActiveTasksSummary({ projectId }: { projectId: string }) {
               )}
             />
             <span className="text-ink-1 min-w-0 flex-1 truncate text-xs">
-              {task.name || task.prompt}
+              {task.name || getTaskPromptPreview(task.prompt)}
             </span>
             {task.branchName && (
               <span className="text-ink-3 flex shrink-0 items-center gap-1 font-mono text-[11px]">

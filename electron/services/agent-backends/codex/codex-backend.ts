@@ -11,6 +11,7 @@ import type {
   AgentSession,
   AgentTaskContext,
   NormalizedPermissionResponse,
+  PromptImagePart,
   PromptPart,
 } from '@shared/agent-backend-types';
 import type { InteractionMode } from '@shared/types';
@@ -23,6 +24,7 @@ import {
 import { flattenScope } from '../../permission-settings-service';
 import { getAllowedDirectories } from '../../directory-access';
 import { getOrCreateCodexAppServer } from './codex-app-server';
+import { interleavePromptParts } from '../../prompt-utils';
 
 import type { CodexJsonRpcNotification } from './codex-json-rpc-client';
 import type { CodexNormalizationContext } from './normalize-codex-message-v2';
@@ -456,15 +458,17 @@ export class CodexBackend implements AgentBackend {
   }
 }
 
+function codexImageItem(image: PromptImagePart): unknown {
+  return { type: 'image', url: `data:${image.mimeType};base64,${image.data}` };
+}
+
 function partsToCodexInput(parts: PromptPart[]): unknown[] {
-  return parts.flatMap<unknown>((part) => {
-    if (part.type === 'text') return [{ type: 'text', text: part.text }];
-    if (part.type === 'image') {
-      return [
-        { type: 'image', url: `data:${part.mimeType};base64,${part.data}` },
-      ];
-    }
-    return [{ type: 'text', text: `Attached file: ${part.filePath}` }];
+  // Codex input items are ordered, so images pasted mid-prompt are emitted in
+  // their original slot rather than after all the text.
+  return interleavePromptParts(parts).map((part) => {
+    if (part.type === 'text') return { type: 'text', text: part.text };
+    if (part.type === 'image') return codexImageItem(part);
+    return { type: 'text', text: `Attached file: ${part.filePath}` };
   });
 }
 

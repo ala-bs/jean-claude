@@ -41,6 +41,7 @@ import {
 import { useTask, useTasks } from '@/hooks/use-tasks';
 import { api } from '@/lib/api';
 import { ConfirmRunModal } from '@/features/agent/ui-run-button/confirm-run-modal';
+import { getTaskPromptPreview } from '@/lib/task-prompt-preview';
 import { IconButton } from '@/common/ui/icon-button';
 import { InteractiveLog } from '@/features/common/interactive-log';
 import { Kbd } from '@/common/ui/kbd';
@@ -118,7 +119,7 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
           taskName: rootProjectId
             ? 'Project root'
             : (task?.name ??
-              task?.prompt.split('\n')[0].slice(0, 30) ??
+              (task ? getTaskPromptPreview(task.prompt).slice(0, 30) : undefined) ??
               taskId),
           projectName: project?.name ?? 'Unknown Project',
           commandStatus: cmd,
@@ -140,7 +141,7 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
         taskId: target.taskId,
         taskName:
           task?.name ??
-          task?.prompt.split('\n')[0].slice(0, 30) ??
+          (task ? getTaskPromptPreview(task.prompt).slice(0, 30) : undefined) ??
           target.taskId,
         projectName: project?.name ?? 'Unknown Project',
         commandStatus: {
