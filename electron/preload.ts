@@ -87,6 +87,7 @@ import { AGENT_CHANNELS } from '@shared/agent-types';
 import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 import type { DebugLogEntry } from '@shared/debug-log-types';
+import type { ProjectGitLogFilter } from '@shared/types';
 import type { StartAdHocRunCommandParams } from '@shared/run-command-types';
 
 const devBadgeLabel = process.env.JC_DEV_BADGE_LABEL?.trim() || undefined;
@@ -184,8 +185,36 @@ contextBridge.exposeInMainWorld('api', {
     git: {
       getStatus: (projectId: string) =>
         ipcRenderer.invoke('projects:git:getStatus', projectId),
-      getGraph: (projectId: string, limit?: number) =>
-        ipcRenderer.invoke('projects:git:getGraph', projectId, limit),
+      getGraph: (
+        projectId: string,
+        limit?: number,
+        skip?: number,
+        filter?: ProjectGitLogFilter,
+      ) =>
+        ipcRenderer.invoke(
+          'projects:git:getGraph',
+          projectId,
+          limit,
+          skip,
+          filter,
+        ),
+      getCommitCount: (projectId: string, filter?: ProjectGitLogFilter) =>
+        ipcRenderer.invoke('projects:git:getCommitCount', projectId, filter),
+      getCommitDetail: (projectId: string, commitHash: string) =>
+        ipcRenderer.invoke('projects:git:getCommitDetail', projectId, commitHash),
+      getCommitFileContent: (
+        projectId: string,
+        commitHash: string,
+        filePath: string,
+      ) =>
+        ipcRenderer.invoke(
+          'projects:git:getCommitFileContent',
+          projectId,
+          commitHash,
+          filePath,
+        ),
+      getWorkingTreeFiles: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:getWorkingTreeFiles', projectId),
       fetch: (projectId: string, interactive?: boolean) =>
         ipcRenderer.invoke('projects:git:fetch', projectId, interactive),
       push: (projectId: string) =>

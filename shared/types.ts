@@ -334,6 +334,24 @@ export interface ProjectGitStatus {
   conflicted: number;
 }
 
+/** Which bucket of `ProjectGitStatus`'s counts a changed path falls into. */
+export type ProjectWorkingTreeFileState =
+  | 'staged'
+  | 'unstaged'
+  | 'untracked'
+  | 'conflicted';
+
+/**
+ * A single changed path in the working tree.
+ *
+ * A file edited both in the index and on disk is reported once per side, which
+ * is what makes the totals here line up with `ProjectGitStatus`'s counts.
+ */
+export interface ProjectWorkingTreeFile {
+  path: string;
+  state: ProjectWorkingTreeFileState;
+}
+
 /**
  * A branch/tag pointing at a commit. Read from `--decorate=full`, so the kind
  * comes from git's own ref namespace rather than being guessed from the name —
@@ -366,6 +384,75 @@ export interface ProjectGitCommit {
 export interface ProjectGitGraphRow {
   graph: string;
   commit: ProjectGitCommit | null;
+}
+
+/**
+ * History filters applied by the project panel.
+ *
+ * These are resolved by git rather than in the renderer: the pane only holds a
+ * page of commits at a time, so filtering client-side would search a fraction
+ * of the repository while reporting a match count for the whole of it.
+ */
+export interface ProjectGitLogFilter {
+  /** Free-text query matched against commit subjects, or a commit hash prefix. */
+  query?: string;
+  /**
+   * Branches to walk. Empty or omitted walks every ref, matching the
+   * unfiltered graph.
+   */
+  branches?: string[];
+}
+
+/** How a commit search query was interpreted, so the UI can say which it used. */
+export type ProjectGitSearchKind = 'text' | 'hash';
+
+export interface ProjectGitSearchMeta {
+  kind: ProjectGitSearchKind;
+}
+
+export type ProjectCommitFileStatus = 'added' | 'modified' | 'deleted';
+
+export interface ProjectCommitDiffFile {
+  path: string;
+  status: ProjectCommitFileStatus;
+  additions: number;
+  deletions: number;
+}
+
+/**
+ * A commit's metadata plus the files it touched.
+ *
+ * `additions`/`deletions` are summed from the per-file numstat so the pane's
+ * header does not need a second pass over the files.
+ */
+export interface ProjectCommitDetail {
+  hash: string;
+  shortHash: string;
+  parents: string[];
+  author: string;
+  authorEmail: string;
+  date: string;
+  subject: string;
+  body: string;
+  refs: ProjectGitRef[];
+  files: ProjectCommitDiffFile[];
+  additions: number;
+  deletions: number;
+  /** True when the file list was capped; the pane says so rather than lying. */
+  truncated: boolean;
+}
+
+/**
+ * Both sides of one file in a commit, for the diff viewer.
+ *
+ * Added files have an empty `oldContent` and deleted files an empty
+ * `newContent`; `isBinary` short-circuits both, since rendering bytes as text
+ * would produce a meaningless diff.
+ */
+export interface ProjectCommitFileContent {
+  oldContent: string;
+  newContent: string;
+  isBinary: boolean;
 }
 
 export interface DetectedProjectLogo {

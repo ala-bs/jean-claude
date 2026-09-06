@@ -197,6 +197,16 @@ const DEFAULT_TOOL_DIFF_PREVIEW_PANE_WIDTH = 520;
 const MIN_TOOL_DIFF_PREVIEW_PANE_WIDTH = 360;
 const MAX_TOOL_DIFF_PREVIEW_PANE_WIDTH = 1400;
 
+// Constants for the project panel's commit diff pane width
+const DEFAULT_COMMIT_DIFF_PANE_WIDTH = 460;
+const MIN_COMMIT_DIFF_PANE_WIDTH = 340;
+const MAX_COMMIT_DIFF_PANE_WIDTH = 1200;
+
+// Constants for the project panel's active tasks rail width
+const DEFAULT_TASKS_RAIL_WIDTH = 340;
+const MIN_TASKS_RAIL_WIDTH = 260;
+const MAX_TASKS_RAIL_WIDTH = 720;
+
 // Constants for mobile preview pane width
 const DEFAULT_MOBILE_PREVIEW_PANE_WIDTH = 420;
 const MIN_MOBILE_PREVIEW_PANE_WIDTH = 320;
@@ -260,6 +270,12 @@ interface NavigationState {
   // App-level: tool diff preview pane width (global setting)
   toolDiffPreviewPaneWidth: number;
 
+  // App-level: project panel commit diff pane width (global setting)
+  commitDiffPaneWidth: number;
+
+  // App-level: project panel active tasks rail width (global setting)
+  tasksRailWidth: number;
+
   // App-level: mobile preview pane width (global setting)
   mobilePreviewPaneWidth: number;
 
@@ -313,6 +329,8 @@ interface NavigationState {
   setFileExplorerPaneWidth: (width: number) => void;
   setCommandLogsPaneWidth: (width: number) => void;
   setToolDiffPreviewPaneWidth: (width: number) => void;
+  setCommitDiffPaneWidth: (width: number) => void;
+  setTasksRailWidth: (width: number) => void;
   setMobilePreviewPaneWidth: (width: number) => void;
   setMobilePreviewFps: (fps: number) => void;
   setMobilePreviewQuality: (quality: MobilePreviewQuality) => void;
@@ -381,6 +399,8 @@ const useStore = create<NavigationState>()(
       fileExplorerPaneWidth: DEFAULT_FILE_EXPLORER_PANE_WIDTH,
       commandLogsPaneWidth: DEFAULT_COMMAND_LOGS_PANE_WIDTH,
       toolDiffPreviewPaneWidth: DEFAULT_TOOL_DIFF_PREVIEW_PANE_WIDTH,
+      commitDiffPaneWidth: DEFAULT_COMMIT_DIFF_PANE_WIDTH,
+      tasksRailWidth: DEFAULT_TASKS_RAIL_WIDTH,
       mobilePreviewPaneWidth: DEFAULT_MOBILE_PREVIEW_PANE_WIDTH,
       mobilePreviewFps: DEFAULT_MOBILE_PREVIEW_FPS,
       mobilePreviewQuality: DEFAULT_MOBILE_PREVIEW_QUALITY,
@@ -442,6 +462,22 @@ const useStore = create<NavigationState>()(
           toolDiffPreviewPaneWidth: Math.min(
             Math.max(MIN_TOOL_DIFF_PREVIEW_PANE_WIDTH, width),
             MAX_TOOL_DIFF_PREVIEW_PANE_WIDTH,
+          ),
+        }),
+
+      setCommitDiffPaneWidth: (width) =>
+        set({
+          commitDiffPaneWidth: Math.min(
+            Math.max(MIN_COMMIT_DIFF_PANE_WIDTH, width),
+            MAX_COMMIT_DIFF_PANE_WIDTH,
+          ),
+        }),
+
+      setTasksRailWidth: (width) =>
+        set({
+          tasksRailWidth: Math.min(
+            Math.max(MIN_TASKS_RAIL_WIDTH, width),
+            MAX_TASKS_RAIL_WIDTH,
           ),
         }),
 
@@ -1639,6 +1675,30 @@ export function useToolDiffPreviewPaneWidth() {
     setWidth,
     minWidth: MIN_TOOL_DIFF_PREVIEW_PANE_WIDTH,
     maxWidth: MAX_TOOL_DIFF_PREVIEW_PANE_WIDTH,
+  };
+}
+
+// Hook for the project panel's commit diff pane width
+export function useCommitDiffPaneWidth() {
+  const width = useStore((state) => state.commitDiffPaneWidth);
+  const setWidth = useStore((state) => state.setCommitDiffPaneWidth);
+  return {
+    width,
+    setWidth,
+    minWidth: MIN_COMMIT_DIFF_PANE_WIDTH,
+    maxWidth: MAX_COMMIT_DIFF_PANE_WIDTH,
+  };
+}
+
+// Hook for the project panel's active tasks rail width
+export function useTasksRailWidth() {
+  const width = useStore((state) => state.tasksRailWidth);
+  const setWidth = useStore((state) => state.setTasksRailWidth);
+  return {
+    width,
+    setWidth,
+    minWidth: MIN_TASKS_RAIL_WIDTH,
+    maxWidth: MAX_TASKS_RAIL_WIDTH,
   };
 }
 

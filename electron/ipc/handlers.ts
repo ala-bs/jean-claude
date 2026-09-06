@@ -49,6 +49,7 @@ import {
   type NewToken,
   PRESET_EDITORS,
   type Project,
+  type ProjectGitLogFilter,
   SETTINGS_DEFINITIONS,
   type SkillCreationStepMeta,
   type Task,
@@ -325,8 +326,12 @@ import {
 import {
   checkoutProjectBranch,
   fetchProjectRemotes,
+  getProjectCommitCount,
+  getProjectCommitDetail,
+  getProjectCommitFileContent,
   getProjectGitGraph,
   getProjectGitStatus,
+  getProjectWorkingTreeFiles,
   pullProject,
   pushProject,
 } from '../services/project-git-service';
@@ -1697,11 +1702,55 @@ export function registerIpcHandlers() {
   });
   ipcMain.handle(
     'projects:git:getGraph',
-    async (_, projectId: string, limit?: number) => {
+    async (
+      _,
+      projectId: string,
+      limit?: number,
+      skip?: number,
+      filter?: ProjectGitLogFilter,
+    ) => {
       return getProjectGitGraph({
         repoPath: await requireProjectPath(projectId),
         limit,
+        skip,
+        query: filter?.query,
+        branches: filter?.branches,
       });
+    },
+  );
+  ipcMain.handle(
+    'projects:git:getCommitCount',
+    async (_, projectId: string, filter?: ProjectGitLogFilter) => {
+      return getProjectCommitCount({
+        repoPath: await requireProjectPath(projectId),
+        query: filter?.query,
+        branches: filter?.branches,
+      });
+    },
+  );
+  ipcMain.handle(
+    'projects:git:getCommitDetail',
+    async (_, projectId: string, commitHash: string) => {
+      return getProjectCommitDetail({
+        repoPath: await requireProjectPath(projectId),
+        commitHash,
+      });
+    },
+  );
+  ipcMain.handle(
+    'projects:git:getCommitFileContent',
+    async (_, projectId: string, commitHash: string, filePath: string) => {
+      return getProjectCommitFileContent({
+        repoPath: await requireProjectPath(projectId),
+        commitHash,
+        filePath,
+      });
+    },
+  );
+  ipcMain.handle(
+    'projects:git:getWorkingTreeFiles',
+    async (_, projectId: string) => {
+      return getProjectWorkingTreeFiles(await requireProjectPath(projectId));
     },
   );
   ipcMain.handle(

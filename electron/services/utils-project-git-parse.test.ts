@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseGraphLine, parseStatus } from './utils-project-git-parse';
+import {
+  buildGraphArgs,
+  looksLikeCommitHash,
+  parseCommitDetail,
+  parseCommitDiffFiles,
+  parseGraphLine,
+  parseStatus,
+  parseStatusFiles,
+} from './utils-project-git-parse';
 
 const NUL = String.fromCharCode(0);
 const US = String.fromCharCode(31);
@@ -207,5 +215,250 @@ describe('parseGraphLine', () => {
     const row = parseGraphLine(graphLine('* ', { subject: 'fix: a, b -> c' }));
 
     expect(row?.commit?.subject).toBe('fix: a, b -> c');
+  });
+});
+
+describe('parseStatusFiles', () => {
+  it('reads ordinary, renamed, untracked and conflicted entries', () => {
+    const files = parseStatusFiles(
+      [
+        '# branch.head main',
+        '1 M. N... 100644 100644 100644 aaa bbb src/staged.ts',
+        '1 .M N... 100644 100644 100644 aaa bbb src/unstaged.ts',
+        '2 R. N... 100644 100644 100644 aaa bbb R100 src/new.ts\tsrc/old.ts',
+        'u UU N... 100644 100644 100644 100644 aaa bbb ccc src/conflict.ts',
+        '? src/untracked.ts',
+      ].join('\n'),
+    );
+
+    expect(files).toEqual([
+      { path: 'src/staged.ts', state: 'staged' },
+      { path: 'src/unstaged.ts', state: 'unstaged' },
+      // A rename is reported under its new path; the old one is not listed.
+      { path: 'src/new.ts', state: 'staged' },
+      { path: 'src/conflict.ts', state: 'conflicted' },
+      { path: 'src/untracked.ts', state: 'untracked' },
+    ]);
+  });
+
+  it('lists a file modified on both sides once per side', () => {
+    // This is what makes the totals match ProjectGitStatus's counts.
+    const files = parseStatusFiles(
+      '1 MM N... 100644 100644 100644 aaa bbb src/both.ts',
+    );
+
+    expect(files).toEqual([
+      { path: 'src/both.ts', state: 'staged' },
+      { path: 'src/both.ts', state: 'unstaged' },
+    ]);
+  });
+
+  it('keeps spaces in a path intact', () => {
+    // porcelain v2 leaves spaces unquoted, so the path must be re-joined
+    // rather than read as a single whitespace-delimited field.
+    const files = parseStatusFiles(
+      '1 .M N... 100644 100644 100644 aaa bbb docs/my notes.md',
+    );
+
+    expect(files).toEqual([{ path: 'docs/my notes.md', state: 'unstaged' }]);
+  });
+
+  it('agrees with parseStatus on the counts', () => {
+    const stdout = [
+      '1 M. N... 100644 100644 100644 aaa bbb a.ts',
+      '1 MM N... 100644 100644 100644 aaa bbb b.ts',
+      'u UU N... 100644 100644 100644 100644 aaa bbb ccc c.ts',
+      '? d.ts',
+    ].join('\n');
+
+    const counts = parseStatus(stdout);
+    const files = parseStatusFiles(stdout);
+    const countOf = (state: string) =>
+      files.filter((file) => file.state === state).length;
+
+    expect(countOf('staged')).toBe(counts.staged);
+    expect(countOf('unstaged')).toBe(counts.unstaged);
+    expect(countOf('untracked')).toBe(counts.untracked);
+    expect(countOf('conflicted')).toBe(counts.conflicted);
+  });
+});
+
+describe('buildGraphArgs', () => {
+  it('walks every ref and draws lane art when unfiltered', () => {
+    const args = buildGraphArgs({ limit: 60 });
+
+    expect(args).toContain('--graph');
+    expect(args).toContain('--all');
+    expect(args).not.toContain('--fixed-strings');
+  });
+
+  it('drops the lane art once a filter selects commits out of the history', () => {
+    // The art describes a contiguous walk; keeping it would draw edges between
+    // commits that are not actually parent and child.
+    expect(buildGraphArgs({ limit: 60, query: 'fix' })).not.toContain('--graph');
+    expect(buildGraphArgs({ limit: 60, branches: ['main'] })).not.toContain(
+      '--graph',
+    );
+  });
+
+  it('searches literally, so a query with regex characters is not a syntax error', () => {
+    const args = buildGraphArgs({ limit: 60, query: 'fix(ui)' });
+
+    expect(args).toContain('--grep=fix(ui)');
+    expect(args).toContain('--fixed-strings');
+    expect(args).toContain('--regexp-ignore-case');
+  });
+
+  it('replaces the ref set with explicit branches rather than adding to it', () => {
+    const args = buildGraphArgs({ limit: 60, branches: ['main', 'feature/x'] });
+
+    // `--all` alongside a branch list would silently walk everything.
+    expect(args).not.toContain('--all');
+    expect(args).toContain('main');
+    expect(args).toContain('feature/x');
+  });
+
+  it('terminates revision parsing so a ref cannot be read as a path', () => {
+    expect(buildGraphArgs({ limit: 60 }).at(-1)).toBe('--');
+  });
+
+  it('pages by commit offset', () => {
+    expect(buildGraphArgs({ limit: 60, skip: 120 })).toContain('--skip=120');
+    expect(buildGraphArgs({ limit: 60 })).not.toContain('--skip=0');
+  });
+});
+
+describe('looksLikeCommitHash', () => {
+  it('accepts hex strings long enough to name a commit', () => {
+    expect(looksLikeCommitHash('5b5146a3')).toBe(true);
+    expect(looksLikeCommitHash('ABCD')).toBe(true);
+  });
+
+  it('rejects text queries and prefixes too short to be worth resolving', () => {
+    expect(looksLikeCommitHash('fix')).toBe(false);
+    expect(looksLikeCommitHash('ab')).toBe(false);
+    expect(looksLikeCommitHash('reduce task churn')).toBe(false);
+    // 'g' is not a hex digit.
+    expect(looksLikeCommitHash('deadbeeg')).toBe(false);
+  });
+});
+
+describe('parseCommitDiffFiles', () => {
+  const numstat = ['3\t1\tsrc/a.ts', '10\t0\tsrc/b.ts'].join('\n');
+
+  it('joins name-status and numstat on the path', () => {
+    const files = parseCommitDiffFiles({
+      nameStatus: ['M\tsrc/a.ts', 'A\tsrc/b.ts'].join('\n'),
+      numstat,
+    });
+
+    expect(files).toEqual([
+      { path: 'src/a.ts', status: 'modified', additions: 3, deletions: 1 },
+      { path: 'src/b.ts', status: 'added', additions: 10, deletions: 0 },
+    ]);
+  });
+
+  it('reports a binary file as zero counts rather than NaN', () => {
+    const files = parseCommitDiffFiles({
+      nameStatus: 'M\tlogo.png',
+      numstat: '-\t-\tlogo.png',
+    });
+
+    expect(files).toEqual([
+      { path: 'logo.png', status: 'modified', additions: 0, deletions: 0 },
+    ]);
+  });
+
+  it('keeps the new path of a rename, which is the side content can be read from', () => {
+    const files = parseCommitDiffFiles({
+      nameStatus: 'R100\tsrc/old.ts\tsrc/new.ts',
+      numstat: '0\t0\tsrc/new.ts',
+    });
+
+    expect(files[0].path).toBe('src/new.ts');
+    expect(files[0].status).toBe('modified');
+  });
+
+  it('falls back to zero counts for a path missing from numstat', () => {
+    const files = parseCommitDiffFiles({
+      nameStatus: 'D\tsrc/gone.ts',
+      numstat: '',
+    });
+
+    expect(files).toEqual([
+      { path: 'src/gone.ts', status: 'deleted', additions: 0, deletions: 0 },
+    ]);
+  });
+});
+
+describe('parseCommitDetail', () => {
+  const fields = (values: string[]) => values.join(US);
+
+  it('reads the header emitted by COMMIT_DETAIL_FORMAT', () => {
+    const detail = parseCommitDetail(
+      fields([
+        '5b5146a3f0',
+        '5b5146a',
+        'aaaa bbbb',
+        'Patrick Lin',
+        'patrick@example.dev',
+        '2026-09-06T14:20:00+02:00',
+        'HEAD -> refs/heads/main, refs/remotes/origin/main',
+        'clarify active command focus',
+        'A longer explanation.',
+      ]),
+    );
+
+    expect(detail).not.toBeNull();
+    expect(detail?.shortHash).toBe('5b5146a');
+    expect(detail?.parents).toEqual(['aaaa', 'bbbb']);
+    expect(detail?.authorEmail).toBe('patrick@example.dev');
+    expect(detail?.subject).toBe('clarify active command focus');
+    expect(detail?.body).toBe('A longer explanation.');
+    expect(detail?.refs).toEqual([
+      { name: 'main', kind: 'branch', isHead: true },
+      { name: 'origin/main', kind: 'remote', isHead: false },
+    ]);
+  });
+
+  it('treats a root commit as having no parents', () => {
+    const detail = parseCommitDetail(
+      fields([
+        'aaaa',
+        'aaaa',
+        '',
+        'Patrick Lin',
+        'patrick@example.dev',
+        '2026-09-06T14:20:00+02:00',
+        '',
+        'initial commit',
+        '',
+      ]),
+    );
+
+    expect(detail?.parents).toEqual([]);
+  });
+
+  it('keeps a body that itself contains the separator byte', () => {
+    const detail = parseCommitDetail(
+      fields([
+        'aaaa',
+        'aaaa',
+        'bbbb',
+        'Patrick Lin',
+        'patrick@example.dev',
+        '2026-09-06T14:20:00+02:00',
+        '',
+        'subject',
+        `before${US}after`,
+      ]),
+    );
+
+    expect(detail?.body).toBe(`before${US}after`);
+  });
+
+  it('returns null for output too short to be a commit header', () => {
+    expect(parseCommitDetail('')).toBeNull();
+    expect(parseCommitDetail(fields(['aaaa', 'aaaa']))).toBeNull();
   });
 });

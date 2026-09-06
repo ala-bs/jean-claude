@@ -45,12 +45,16 @@ import type {
   NewTaskStep,
   NewToken,
   Project,
+  ProjectCommitDetail,
+  ProjectCommitFileContent,
   ProjectEnvVar,
   ProjectFeatureMap,
   ProjectGitGraphRow,
+  ProjectGitLogFilter,
   ProjectGitStatus,
   ProjectLogoHistoryItem,
   ProjectTodo,
+  ProjectWorkingTreeFile,
   Provider,
   PrWorkspaceResolutionResult,
   Task,
@@ -638,7 +642,34 @@ export interface Api {
       getGraph: (
         projectId: string,
         limit?: number,
+        /** Commits to skip before the window, for paging older history. */
+        skip?: number,
+        /** Resolved by git, so search covers the whole repo and not just what is loaded. */
+        filter?: ProjectGitLogFilter,
       ) => Promise<ProjectGitGraphRow[]>;
+      /**
+       * Reachable commits, for the history pane's load progress — or matching
+       * commits when a filter is passed, so the search count is honest.
+       */
+      getCommitCount: (
+        projectId: string,
+        filter?: ProjectGitLogFilter,
+      ) => Promise<number>;
+      /** A commit's metadata plus the files it touched. Null when unknown. */
+      getCommitDetail: (
+        projectId: string,
+        commitHash: string,
+      ) => Promise<ProjectCommitDetail | null>;
+      /** Both sides of one file in a commit, for the diff viewer. */
+      getCommitFileContent: (
+        projectId: string,
+        commitHash: string,
+        filePath: string,
+      ) => Promise<ProjectCommitFileContent>;
+      /** Changed paths behind the status counts. Fetched lazily, not polled. */
+      getWorkingTreeFiles: (
+        projectId: string,
+      ) => Promise<ProjectWorkingTreeFile[]>;
       /** `interactive` allows credential prompts; omit it for background refreshes. */
       fetch: (projectId: string, interactive?: boolean) => Promise<void>;
       push: (projectId: string) => Promise<void>;
@@ -2308,6 +2339,14 @@ export const api: Api = hasWindowApi
             conflicted: 0,
           }),
           getGraph: async () => [],
+          getCommitCount: async () => 0,
+          getCommitDetail: async () => null,
+          getCommitFileContent: async () => ({
+            oldContent: '',
+            newContent: '',
+            isBinary: false,
+          }),
+          getWorkingTreeFiles: async () => [],
           fetch: async () => {},
           push: async () => {},
           pull: async () => {},

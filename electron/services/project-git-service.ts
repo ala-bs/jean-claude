@@ -1,12 +1,24 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-import type { ProjectGitGraphRow, ProjectGitStatus } from '@shared/types';
+import type {
+  ProjectCommitDetail,
+  ProjectCommitFileContent,
+  ProjectGitGraphRow,
+  ProjectGitStatus,
+  ProjectWorkingTreeFile,
+} from '@shared/types';
 
 import {
   buildGraphArgs,
+  COMMIT_DETAIL_FORMAT,
+  GRAPH_FORMAT,
+  looksLikeCommitHash,
+  parseCommitDetail,
+  parseCommitDiffFiles,
   parseGraphLine,
   parseStatus,
+  parseStatusFiles,
   remoteFromUpstream,
 } from './utils-project-git-parse';
 import {
@@ -138,11 +150,163 @@ export async function getProjectGitStatus(
   return { isGitRepository: true, ...parsed, remoteUrl };
 }
 
+/** Enough to inspect a messy tree without rendering an unbounded list. */
+const MAX_WORKING_TREE_FILES = 500;
+
+/**
+ * Changed paths in the working tree, for the sync bar's popover.
+ *
+ * Separate from `getProjectGitStatus` on purpose: that call polls on a timer
+ * and only needs counts, so it must not carry a payload proportional to the
+ * size of the diff.
+ */
+export async function getProjectWorkingTreeFiles(
+  repoPath: string,
+): Promise<ProjectWorkingTreeFile[]> {
+  if (!(await isGitRepository(repoPath))) return [];
+
+  try {
+    const { stdout } = await git(repoPath, [
+      'status',
+      '--porcelain=v2',
+      // Same reasoning as `getProjectGitStatus`: `all` would enumerate every
+      // file under an unignored `node_modules` and blow the output buffer.
+      '--untracked-files=normal',
+    ]);
+    return parseStatusFiles(stdout).slice(0, MAX_WORKING_TREE_FILES);
+  } catch (error) {
+    dbg.worktree(
+      'getProjectWorkingTreeFiles failed for %s: %o',
+      repoPath,
+      error,
+    );
+    return [];
+  }
+}
+
+/**
+ * Total reachable commit count, used by the history pane's load progress.
+ *
+ * Counts the same ref set the graph walks so "loaded / total" cannot exceed
+ * 100%, and stays a single `rev-list --count` rather than paging the log.
+ */
+export async function getProjectCommitCount(params: {
+  repoPath: string;
+  includeAllBranches?: boolean;
+  /** Free-text query, or a commit hash prefix. Counts matches when set. */
+  query?: string;
+  /** Branches to count over instead of every ref. */
+  branches?: string[];
+}): Promise<number> {
+  const { repoPath, includeAllBranches = true } = params;
+  if (!(await isGitRepository(repoPath))) return 0;
+
+  const query = params.query?.trim() ?? '';
+  const branches = await resolveBranchRefs(repoPath, params.branches ?? []);
+
+  // A hash query resolves to one commit or none, and `rev-list --count` over a
+  // single revision would instead count its whole ancestry.
+  if (query.length > 0 && looksLikeCommitHash(query)) {
+    const hash = await resolveCommitHash(repoPath, query);
+    if (hash) return 1;
+  }
+
+  try {
+    const args = ['rev-list', '--count'];
+    if (branches.length === 0) {
+      args.push(includeAllBranches ? '--all' : 'HEAD');
+    }
+    if (query.length > 0) {
+      args.push(`--grep=${query}`, '--fixed-strings', '--regexp-ignore-case');
+    }
+    if (branches.length > 0) args.push(...branches);
+    args.push('--');
+
+    const { stdout } = await git(repoPath, args);
+    const count = Number.parseInt(stdout.trim(), 10);
+    return Number.isFinite(count) ? count : 0;
+  } catch (error) {
+    // An empty repository has no HEAD to walk; zero is the honest answer.
+    dbg.worktree('getProjectCommitCount failed for %s: %o', repoPath, error);
+    return 0;
+  }
+}
+
+/**
+ * Narrows a caller-supplied branch list to refs that actually exist.
+ *
+ * The names arrive from the renderer and are passed to `git log` as revision
+ * arguments, so they cannot be trusted: a value like `--output=/tmp/x` would
+ * otherwise be read as an option. Rather than pattern-matching for dangerous
+ * shapes, this intersects the request with the repository's real refs, so only
+ * names git already knows about can ever be forwarded.
+ */
+async function resolveBranchRefs(
+  repoPath: string,
+  requested: string[],
+): Promise<string[]> {
+  if (requested.length === 0) return [];
+
+  const { stdout } = await git(repoPath, [
+    'for-each-ref',
+    '--format=%(refname:short)',
+    'refs/heads',
+    'refs/remotes',
+  ]);
+  const known = new Set(
+    stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0),
+  );
+
+  const resolved = requested.filter((name) => known.has(name));
+  if (resolved.length !== requested.length) {
+    dbg.worktree(
+      'resolveBranchRefs: dropped %d unknown ref(s) for %s',
+      requested.length - resolved.length,
+      repoPath,
+    );
+  }
+  return resolved;
+}
+
+/**
+ * Resolves a query that looks like a commit hash to its full hash.
+ *
+ * Returns null when the prefix names no commit, which is what lets an ambiguous
+ * query like `deadbeef` fall back to a text search instead of returning
+ * nothing.
+ */
+async function resolveCommitHash(
+  repoPath: string,
+  query: string,
+): Promise<string | null> {
+  try {
+    const { stdout } = await git(repoPath, [
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `${query.trim()}^{commit}`,
+    ]);
+    return stdout.trim() || null;
+  } catch {
+    // Exit 1 simply means the prefix does not name a commit.
+    return null;
+  }
+}
+
 export async function getProjectGitGraph(params: {
   repoPath: string;
   limit?: number;
+  /** Commits to skip before the window, for paging older history. */
+  skip?: number;
   /** When false, only the current branch's history is walked. */
   includeAllBranches?: boolean;
+  /** Free-text query, or a commit hash prefix. */
+  query?: string;
+  /** Branches to walk instead of every ref. */
+  branches?: string[];
 }): Promise<ProjectGitGraphRow[]> {
   const { repoPath } = params;
   if (!(await isGitRepository(repoPath))) return [];
@@ -152,9 +316,41 @@ export async function getProjectGitGraph(params: {
     MAX_GRAPH_LIMIT,
   );
 
+  const query = params.query?.trim() ?? '';
+  const branches = await resolveBranchRefs(repoPath, params.branches ?? []);
+
+  // A hash prefix names exactly one commit, so it is resolved directly rather
+  // than run through `--grep`, which only ever searches messages and would
+  // report "no matches" for a perfectly valid sha.
+  if (query.length > 0 && looksLikeCommitHash(query)) {
+    const hash = await resolveCommitHash(repoPath, query);
+    if (hash) {
+      // A single hit has no second page; skipping past it yields nothing.
+      if (params.skip && params.skip > 0) return [];
+      try {
+        const { stdout } = await git(repoPath, [
+          'log',
+          '--decorate=full',
+          '--max-count=1',
+          `--pretty=format:${GRAPH_FORMAT}`,
+          hash,
+          '--',
+        ]);
+        const row = parseGraphLine(stdout.split('\n')[0] ?? '');
+        return row ? [row] : [];
+      } catch (error) {
+        dbg.worktree('getProjectGitGraph hash lookup failed: %o', error);
+        return [];
+      }
+    }
+  }
+
   const args = buildGraphArgs({
     limit,
+    skip: params.skip,
     includeAllBranches: params.includeAllBranches,
+    query,
+    branches,
   });
 
   try {
@@ -169,6 +365,173 @@ export async function getProjectGitGraph(params: {
     dbg.worktree('getProjectGitGraph failed for %s: %o', repoPath, error);
     return [];
   }
+}
+
+/** Ceiling on the file list of one commit, so a huge merge cannot stall the pane. */
+const MAX_COMMIT_DIFF_FILES = 300;
+
+/**
+ * A commit's metadata and the files it touched.
+ *
+ * Uses `diff-tree` rather than `<hash>^..<hash>`: the caret form fails outright
+ * on a root commit, which has no parent to diff against. `--root` handles that
+ * case, and `-m --first-parent` makes a merge show its diff against the branch
+ * it landed on instead of the empty combined diff git produces by default.
+ */
+export async function getProjectCommitDetail(params: {
+  repoPath: string;
+  commitHash: string;
+}): Promise<ProjectCommitDetail | null> {
+  const { repoPath, commitHash } = params;
+  if (!(await isGitRepository(repoPath))) return null;
+
+  const hash = await resolveCommitHash(repoPath, commitHash);
+  if (!hash) {
+    dbg.worktree('getProjectCommitDetail: unknown commit %s', commitHash);
+    return null;
+  }
+
+  const diffTree = (mode: '--name-status' | '--numstat') => [
+    'diff-tree',
+    '--no-commit-id',
+    '-r',
+    '--root',
+    '-m',
+    '--first-parent',
+    mode,
+    hash,
+    '--',
+  ];
+
+  try {
+    const [header, nameStatus, numstat] = await Promise.all([
+      git(repoPath, [
+        'log',
+        '--decorate=full',
+        '--max-count=1',
+        `--pretty=format:${COMMIT_DETAIL_FORMAT}`,
+        hash,
+        '--',
+      ]),
+      git(repoPath, diffTree('--name-status')),
+      git(repoPath, diffTree('--numstat')),
+    ]);
+
+    const detail = parseCommitDetail(header.stdout);
+    if (!detail) return null;
+
+    const allFiles = parseCommitDiffFiles({
+      nameStatus: nameStatus.stdout,
+      numstat: numstat.stdout,
+    });
+    const files = allFiles.slice(0, MAX_COMMIT_DIFF_FILES);
+
+    return {
+      ...detail,
+      files,
+      // Summed over every file, not just the shown ones, so a truncated commit
+      // still reports its real size.
+      additions: allFiles.reduce((total, file) => total + file.additions, 0),
+      deletions: allFiles.reduce((total, file) => total + file.deletions, 0),
+      truncated: allFiles.length > files.length,
+    };
+  } catch (error) {
+    dbg.worktree('getProjectCommitDetail failed for %s: %o', hash, error);
+    return null;
+  }
+}
+
+/** Files past this size are not worth diffing in a side panel. */
+const MAX_DIFF_FILE_BYTES = 2 * 1024 * 1024;
+
+/** Reads one blob, returning null when the path did not exist at that revision. */
+async function readBlobAt(
+  repoPath: string,
+  rev: string,
+  filePath: string,
+): Promise<string | null> {
+  try {
+    const { stdout } = await git(repoPath, ['show', `${rev}:${filePath}`]);
+    return stdout;
+  } catch {
+    // The path did not exist on that side of the diff.
+    return null;
+  }
+}
+
+/** True when git considers the path binary on either side of the commit. */
+async function isBinaryAtCommit(
+  repoPath: string,
+  hash: string,
+  filePath: string,
+): Promise<boolean> {
+  try {
+    const { stdout } = await git(repoPath, [
+      'diff-tree',
+      '--no-commit-id',
+      '-r',
+      '--root',
+      '-m',
+      '--first-parent',
+      '--numstat',
+      hash,
+      '--',
+      filePath,
+    ]);
+    // git reports binary files as `-\t-\t<path>`.
+    return stdout.split('\n').some((line) => line.startsWith('-\t-\t'));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Both sides of one file in a commit, for the diff viewer.
+ *
+ * `<hash>^` is deliberately not used to name the old side: it does not resolve
+ * on a root commit. The first parent is read from the commit itself, and its
+ * absence is what marks the file as newly added.
+ */
+export async function getProjectCommitFileContent(params: {
+  repoPath: string;
+  commitHash: string;
+  filePath: string;
+}): Promise<ProjectCommitFileContent> {
+  const { repoPath, filePath } = params;
+  const empty = { oldContent: '', newContent: '', isBinary: false };
+  if (!(await isGitRepository(repoPath))) return empty;
+
+  const hash = await resolveCommitHash(repoPath, params.commitHash);
+  if (!hash) return empty;
+
+  if (await isBinaryAtCommit(repoPath, hash, filePath)) {
+    return { oldContent: '', newContent: '', isBinary: true };
+  }
+
+  const { stdout: parentOut } = await git(repoPath, [
+    'rev-list',
+    '--parents',
+    '--max-count=1',
+    hash,
+    '--',
+  ]);
+  const firstParent = parentOut.trim().split(' ')[1] ?? null;
+
+  const [oldContent, newContent] = await Promise.all([
+    firstParent ? readBlobAt(repoPath, firstParent, filePath) : null,
+    readBlobAt(repoPath, hash, filePath),
+  ]);
+
+  const tooLarge =
+    (oldContent?.length ?? 0) > MAX_DIFF_FILE_BYTES ||
+    (newContent?.length ?? 0) > MAX_DIFF_FILE_BYTES;
+  if (tooLarge) return { oldContent: '', newContent: '', isBinary: true };
+
+  return {
+    oldContent: oldContent ?? '',
+    newContent: newContent ?? '',
+    isBinary: false,
+  };
 }
 
 /**
