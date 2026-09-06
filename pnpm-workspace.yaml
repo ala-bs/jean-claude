@@ -8,5 +8,10 @@ allowBuilds:
   esbuild: true
   node-pty: true
 enablePrePostScripts: true
+# Pin the Node used by pnpm for installs and scripts, regardless of the shell's
+# ambient node. Keeps `engines.node` satisfied and stops pnpm from wiping
+# node_modules whenever the Node major changes between installs.
+# Keep in sync with .nvmrc / .node-version / .tool-versions.
+nodeVersion: 22.23.1
 overrides:
   node-abi: 4.33.0
