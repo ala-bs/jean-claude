@@ -94,6 +94,7 @@ function parseRow(row: {
   name: string;
   stages: string;
   commandIds: string;
+  isFavorite: number;
   sortOrder: number;
   createdAt: string;
 }): ProjectCommandGroup {
@@ -122,6 +123,7 @@ function parseRow(row: {
 
   return {
     ...row,
+    isFavorite: !!row.isFavorite,
     stages,
     // `commandIds` is denormalized; recompute so a stale column can never
     // disagree with the stages that actually run.
@@ -152,6 +154,29 @@ export const ProjectCommandGroupRepository = {
     return rows.map(parseRow);
   },
 
+  /** Every group across all projects, used by the favorites picker. */
+  findAll: async (): Promise<ProjectCommandGroup[]> => {
+    const rows = await db
+      .selectFrom('project_command_groups')
+      .selectAll()
+      .orderBy('sortOrder', 'asc')
+      .orderBy('createdAt', 'asc')
+      .execute();
+    return rows.map(parseRow);
+  },
+
+  /** Favorites across all projects, used by the running commands overlay. */
+  findFavorites: async (): Promise<ProjectCommandGroup[]> => {
+    const rows = await db
+      .selectFrom('project_command_groups')
+      .selectAll()
+      .where('isFavorite', '=', 1)
+      .orderBy('sortOrder', 'asc')
+      .orderBy('createdAt', 'asc')
+      .execute();
+    return rows.map(parseRow);
+  },
+
   create: async (
     data: NewProjectCommandGroup,
   ): Promise<ProjectCommandGroup> => {
@@ -165,6 +190,7 @@ export const ProjectCommandGroupRepository = {
         name: data.name,
         stages: JSON.stringify(normalizeStages(data.stages)),
         commandIds: JSON.stringify(flattenCommandGroupStages(data.stages)),
+        isFavorite: data.isFavorite ? 1 : 0,
         sortOrder: sql<number>`(
           SELECT MAX(
             COALESCE((SELECT MAX(sortOrder) FROM project_commands WHERE projectId = ${data.projectId}), -1),
@@ -185,6 +211,9 @@ export const ProjectCommandGroupRepository = {
   ): Promise<ProjectCommandGroup> => {
     const updateData: Record<string, unknown> = {};
     if (data.name !== undefined) updateData.name = data.name;
+    if (data.isFavorite !== undefined) {
+      updateData.isFavorite = data.isFavorite ? 1 : 0;
+    }
     if (data.stages !== undefined) {
       const stages = normalizeStages(data.stages);
       updateData.stages = JSON.stringify(stages);

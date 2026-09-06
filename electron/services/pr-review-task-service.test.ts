@@ -154,6 +154,7 @@ function makeGroup(
     projectId: 'project-1',
     name: 'Full stack',
     commandIds: ['web', 'api', 'web'],
+    isFavorite: false,
     sortOrder: 0,
     createdAt: '2026-07-05T00:00:00.000Z',
     ...overrides,

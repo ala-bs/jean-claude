@@ -1714,6 +1714,8 @@ export interface Api {
   };
   projectCommandGroups: {
     findByProjectId: (projectId: string) => Promise<ProjectCommandGroup[]>;
+    findAll: () => Promise<ProjectCommandGroup[]>;
+    findFavorites: () => Promise<ProjectCommandGroup[]>;
     create: (data: NewProjectCommandGroup) => Promise<ProjectCommandGroup>;
     update: (
       id: string,
@@ -1740,6 +1742,11 @@ export interface Api {
     startFavorite: (params: {
       projectId: string;
       runCommandId: string;
+    }) => Promise<RunStatus | PortsInUseErrorData>;
+    /** Runs a favorite group's stages in the project root folder. */
+    startFavoriteGroup: (params: {
+      projectId: string;
+      groupId: string;
     }) => Promise<RunStatus | PortsInUseErrorData>;
     startGroup: (params: {
       taskId: string;
@@ -2962,6 +2969,8 @@ export const api: Api = hasWindowApi
       },
       projectCommandGroups: {
         findByProjectId: async () => [],
+        findAll: async () => [],
+        findFavorites: async () => [],
         create: async () => {
           throw new Error('API not available');
         },
@@ -2984,6 +2993,10 @@ export const api: Api = hasWindowApi
           commands: [],
         }),
         startFavorite: async () => ({
+          isRunning: false,
+          commands: [],
+        }),
+        startFavoriteGroup: async () => ({
           isRunning: false,
           commands: [],
         }),

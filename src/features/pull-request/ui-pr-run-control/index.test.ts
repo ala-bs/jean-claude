@@ -135,6 +135,7 @@ function buildGroup(
     projectId: 'project-1',
     name: 'Group',
     commandIds: ['command-1'],
+    isFavorite: false,
     sortOrder: 0,
     createdAt: '2026-01-01T00:00:00.000Z',
     ...overrides,

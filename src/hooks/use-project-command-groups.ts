@@ -16,6 +16,23 @@ export function useProjectCommandGroups(projectId: string) {
   });
 }
 
+/** Favorite groups across all projects, runnable from the project root. */
+export function useFavoriteProjectCommandGroups() {
+  return useQuery({
+    queryKey: ['projectCommandGroups', 'favorites'],
+    queryFn: () => api.projectCommandGroups.findFavorites(),
+  });
+}
+
+/** Every command group, used by the favorites picker. */
+export function useAllProjectCommandGroups({ enabled }: { enabled: boolean }) {
+  return useQuery({
+    queryKey: ['projectCommandGroups', 'all'],
+    queryFn: () => api.projectCommandGroups.findAll(),
+    enabled,
+  });
+}
+
 export function useCreateProjectCommandGroup() {
   const queryClient = useQueryClient();
   return useMutation({

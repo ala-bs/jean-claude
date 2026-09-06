@@ -5530,6 +5530,12 @@ export function registerIpcHandlers() {
     (_, projectId: string) =>
       ProjectCommandGroupRepository.findByProjectId(projectId),
   );
+  ipcMain.handle('project:commandGroups:findAll', () =>
+    ProjectCommandGroupRepository.findAll(),
+  );
+  ipcMain.handle('project:commandGroups:findFavorites', () =>
+    ProjectCommandGroupRepository.findFavorites(),
+  );
   ipcMain.handle(
     'project:commandGroups:create',
     (_, data: NewProjectCommandGroup) =>
@@ -5602,6 +5608,30 @@ export function registerIpcHandlers() {
         projectId: params.projectId,
         workingDir: project.path,
         runCommandId: params.runCommandId,
+      });
+    },
+  );
+  // Same project-root semantics as startFavorite, but for a whole group: the
+  // stage plan is read from the database, never trusted from the renderer.
+  ipcMain.handle(
+    'project:commands:run:startFavoriteGroup',
+    async (_, params: { projectId: string; groupId: string }) => {
+      const project = await ProjectRepository.findById(params.projectId);
+      if (!project) throw new Error(`Project ${params.projectId} not found`);
+      const group = await ProjectCommandGroupRepository.findById(
+        params.groupId,
+      );
+      if (!group || group.projectId !== params.projectId) {
+        throw new Error(
+          `Command group ${params.groupId} not found for project ${params.projectId}`,
+        );
+      }
+      return runCommandService.startGroup({
+        taskId: getProjectRootRunId(params.projectId),
+        projectId: params.projectId,
+        workingDir: project.path,
+        runCommandIds: group.commandIds,
+        stages: group.stages,
       });
     },
   );

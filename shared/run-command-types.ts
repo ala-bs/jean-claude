@@ -133,17 +133,19 @@ export interface ProjectCommandGroup {
    * walk the stage tree.
    */
   commandIds: string[];
+  /** Pinned to the running commands overlay's Favorites section. */
+  isFavorite: boolean;
   sortOrder: number;
   createdAt: string;
 }
 
 export type NewProjectCommandGroup = Omit<
   ProjectCommandGroup,
-  'id' | 'createdAt' | 'sortOrder' | 'commandIds'
->;
+  'id' | 'createdAt' | 'sortOrder' | 'commandIds' | 'isFavorite'
+> & { isFavorite?: boolean };
 
 export type UpdateProjectCommandGroup = Partial<
-  Pick<ProjectCommandGroup, 'name' | 'stages'>
+  Pick<ProjectCommandGroup, 'name' | 'stages' | 'isFavorite'>
 >;
 
 export const MAX_COMMAND_GROUP_STAGE_DELAY_MS = 600_000;

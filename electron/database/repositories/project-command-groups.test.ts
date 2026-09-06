@@ -2,8 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
   const executeTakeFirst = vi.fn();
-  const where = vi.fn(() => ({ executeTakeFirst }));
-  const selectAll = vi.fn(() => ({ where }));
+  const execute = vi.fn();
+  // `orderBy` chains onto itself so list queries can order by several columns.
+  const orderByResult: { execute: typeof execute; orderBy: () => unknown } = {
+    execute,
+    orderBy: vi.fn(() => orderByResult),
+  };
+  const orderBy = orderByResult.orderBy;
+  const where = vi.fn(() => ({ executeTakeFirst, orderBy }));
+  const selectAll = vi.fn(() => ({ where, orderBy }));
 
   const executeTakeFirstOrThrow = vi.fn();
   const returningAll = vi.fn(() => ({ executeTakeFirstOrThrow }));
@@ -18,6 +25,7 @@ const mocks = vi.hoisted(() => {
 
   return {
     dbMock: { selectFrom, insertInto, updateTable },
+    execute,
     executeTakeFirst,
     executeTakeFirstOrThrow,
     insertInto,
@@ -30,6 +38,7 @@ const mocks = vi.hoisted(() => {
 });
 
 const {
+  execute,
   executeTakeFirst,
   executeTakeFirstOrThrow,
   selectFrom,
@@ -91,6 +100,7 @@ describe('ProjectCommandGroupRepository.findById', () => {
         },
       ],
       commandIds: ['command-1', 'command-2'],
+      isFavorite: false,
       sortOrder: 2,
       createdAt: '2026-07-13T00:00:00.000Z',
     });
@@ -241,5 +251,45 @@ describe('ProjectCommandGroupRepository write-side commandIds derivation', () =>
     await ProjectCommandGroupRepository.update('group-1', { name: 'Renamed' });
 
     expect((set.mock.calls as unknown[][])[0][0]).toEqual({ name: 'Renamed' });
+  });
+});
+
+describe('ProjectCommandGroupRepository favorites', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('selects only favorites and exposes isFavorite as a boolean', async () => {
+    execute.mockResolvedValue([
+      {
+        id: 'group-1',
+        projectId: 'project-1',
+        name: 'Dev stack',
+        stages: JSON.stringify([
+          {
+            id: 'stage-1',
+            delayMs: 0,
+            entries: [{ commandId: 'command-1', waitForExit: false }],
+          },
+        ]),
+        commandIds: '["command-1"]',
+        isFavorite: 1,
+        sortOrder: 0,
+        createdAt: '2026-07-13T00:00:00.000Z',
+      },
+    ]);
+
+    const groups = await ProjectCommandGroupRepository.findFavorites();
+
+    expect(where).toHaveBeenCalledWith('isFavorite', '=', 1);
+    expect(groups[0].isFavorite).toBe(true);
+  });
+
+  it('stores isFavorite as 0/1 on update', async () => {
+    await ProjectCommandGroupRepository.update('group-1', {
+      isFavorite: true,
+    });
+
+    expect((set.mock.calls as unknown[][])[0][0]).toEqual({ isFavorite: 1 });
   });
 });

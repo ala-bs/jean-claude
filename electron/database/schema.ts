@@ -310,6 +310,8 @@ export interface ProjectCommandGroupTable {
   stages: Generated<string>;
   /** JSON string array — flattened membership derived from `stages` on write. */
   commandIds: string;
+  /** Pinned to the running commands overlay's Favorites section. */
+  isFavorite: Generated<number>;
   sortOrder: Generated<number>;
   createdAt: Generated<string>;
 }

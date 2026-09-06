@@ -87,6 +87,7 @@ import * as m085 from './migrations/085_project_command_hidden';
 import * as m086 from './migrations/086_project_queue_pr_auto_complete';
 import * as m087 from './migrations/087_project_command_group_stages';
 import * as m088 from './migrations/088_message_query_indexes';
+import * as m089 from './migrations/089_project_command_group_favorites';
 
 const migrations: Record<string, Migration> = {
   '001_initial': m001,
@@ -176,6 +177,7 @@ const migrations: Record<string, Migration> = {
   '086_project_queue_pr_auto_complete': m086,
   '087_project_command_group_stages': m087,
   '088_message_query_indexes': m088,
+  '089_project_command_group_favorites': m089,
 };
 
 export const migrationProvider: MigrationProvider = {
