@@ -145,6 +145,8 @@ const queuedPromptParts = new Map<string, PromptPart[]>();
 const queuedPromptCaptures = new Map<string, AgentMemoryPromptCapture>();
 const MAX_PENDING_QUEUED_PROMPT_SUBMISSIONS = 256;
 const MAX_QUEUED_PROMPT_TOMBSTONES = 2_048;
+/** Upper bound on normalized entries returned to the renderer for one step. */
+const MAX_STEP_MESSAGES_PER_FETCH = 10_000;
 const queuedPromptSubmissionTombstones = new Map<string, string>();
 
 type CanonicalQuestionMemoryDetail = AgentMemoryQuestionResponseDetail & {
@@ -4190,7 +4192,20 @@ class AgentService {
   }
 
   async getMessages(stepId: string): Promise<NormalizedEntry[]> {
-    return AgentMessageRepository.findByStepId(stepId);
+    // Safety valve, not real pagination: the renderer renders the whole step,
+    // so this only bounds a runaway step from serialising hundreds of MB
+    // across IPC. Entries average ~6 KB; the largest real step observed holds
+    // ~2.2k, so this ceiling should never fire in practice.
+    const { entries, truncated } =
+      await AgentMessageRepository.findByStepIdWithTruncation(stepId, {
+        limit: MAX_STEP_MESSAGES_PER_FETCH,
+      });
+    if (truncated) {
+      console.warn(
+        `[agent-service] step ${stepId} hit the ${MAX_STEP_MESSAGES_PER_FETCH}-entry fetch ceiling; the oldest entries were not sent to the renderer, so early tool calls may render without their results`,
+      );
+    }
+    return entries;
   }
 
   async getMessageCount(stepId: string): Promise<number> {
