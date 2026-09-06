@@ -320,27 +320,34 @@ function StageSection({
           className="w-52"
         />
         {!isLast && (
-          <label className="text-ink-3 flex items-center gap-1.5 text-xs">
+          <label className="text-ink-3 flex items-center gap-1.5 text-xs whitespace-nowrap">
             <Timer className="h-3.5 w-3.5" />
-            Wait
-            <Input
-              size="sm"
-              type="number"
-              min={0}
-              max={MAX_DELAY_SECONDS}
-              step={0.5}
-              value={delayInput}
-              onChange={(e) =>
-                setDelayDraft({ basedOn: stage.delayMs, text: e.target.value })
-              }
-              onBlur={commitDelay}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.currentTarget.blur();
-              }}
-              placeholder="0"
-              className="w-16 text-right font-mono"
-            />
-            s before next stage
+            <span>Wait</span>
+            {/* Input always renders w-full, so the width comes from this wrapper. */}
+            <span className="w-16">
+              <Input
+                size="sm"
+                type="number"
+                min={0}
+                max={MAX_DELAY_SECONDS}
+                step={0.5}
+                value={delayInput}
+                onChange={(e) =>
+                  setDelayDraft({
+                    basedOn: stage.delayMs,
+                    text: e.target.value,
+                  })
+                }
+                onBlur={commitDelay}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+                placeholder="0"
+                aria-label="Delay in seconds before next stage"
+                className="text-right font-mono"
+              />
+            </span>
+            <span>s before next stage</span>
           </label>
         )}
       </div>
