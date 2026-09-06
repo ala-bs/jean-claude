@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { RunCommandGroupAbortEvent } from '@shared/run-command-types';
+
 const mocks = vi.hoisted(() => ({
   findCommandById: vi.fn(),
   spawn: vi.fn(),
@@ -724,5 +726,507 @@ describe('resolveEffectivePorts', () => {
         portEnvVarName: 'PORT',
       }),
     ).toEqual([8081]);
+  });
+});
+
+describe('runCommandService staged group runs', () => {
+  type FakePty = {
+    pid: number;
+    onData: (listener: (data: string) => void) => void;
+    onExit: (
+      listener: (event: { exitCode: number; signal?: number }) => void,
+    ) => void;
+    write: () => void;
+    kill: () => void;
+    resize: () => void;
+    exit: (exitCode: number) => void;
+  };
+
+  let spawned: Array<{ command: string; pty: FakePty }>;
+  let nextPid: number;
+  let patchedInternals: Record<string, unknown>;
+  // startGroup resolves once the first stage is up; the rest of the sequence
+  // continues in the background, so tests need a handle on it.
+  let sequences: Array<Promise<unknown>>;
+  const sequenceSettled = async () => {
+    await Promise.allSettled(sequences);
+  };
+  /** Commands that were actually torn down while live. */
+  let stoppedCommandIds: string[];
+
+  function makeCommand(id: string) {
+    return {
+      id,
+      projectId: 'project-1',
+      name: id,
+      command: `run ${id}`,
+      ports: [],
+      portConflictStrategy: 'prompt' as const,
+      portOverrideProvider: 'env' as const,
+      portOverrideEnvVar: null,
+      portOverrideArgs: null,
+      envVars: [],
+      confirmBeforeRun: false,
+      confirmMessage: null,
+      isFavorite: false,
+      isHidden: false,
+      sortOrder: 0,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    };
+  }
+
+  function stage(
+    id: string,
+    entries: Array<[string, boolean]>,
+    delayMs = 0,
+  ) {
+    return {
+      id,
+      delayMs,
+      entries: entries.map(([commandId, waitForExit]) => ({
+        commandId,
+        waitForExit,
+      })),
+    };
+  }
+
+  function ptyFor(commandId: string): FakePty {
+    const match = spawned.find((entry) =>
+      entry.command.includes(`run ${commandId}`),
+    );
+    if (!match) throw new Error(`No spawned process for ${commandId}`);
+    return match.pty;
+  }
+
+  const startParams = {
+    taskId: 'task-1',
+    projectId: 'project-1',
+    workingDir: '/tmp/worktree',
+  };
+
+  beforeEach(() => {
+    spawned = [];
+    sequences = [];
+    stoppedCommandIds = [];
+    nextPid = 1000;
+    testService.runningProcesses.clear();
+    mocks.findCommandById.mockImplementation(async (id: string) =>
+      makeCommand(id),
+    );
+
+    mocks.spawn.mockImplementation((_shell: string, args: string[]) => {
+      let exitListener: (event: { exitCode: number; signal?: number }) => void =
+        () => {};
+      const pty: FakePty = {
+        pid: nextPid++,
+        onData: () => {},
+        onExit: (listener) => {
+          exitListener = listener;
+        },
+        write: () => {},
+        kill: () => {},
+        resize: () => {},
+        exit: (exitCode: number) => exitListener({ exitCode, signal: 0 }),
+      };
+      spawned.push({ command: args[args.length - 1], pty });
+      return pty;
+    });
+
+    // Bypass the network/database work around spawning so the tests exercise
+    // only the staging logic. Saved and restored so the shared singleton is not
+    // permanently mutated for later suites.
+    const internals = runCommandService as unknown as Record<string, unknown>;
+    patchedInternals = {
+      getPortsInUse: internals.getPortsInUse,
+      getPortOverrides: internals.getPortOverrides,
+      getRunCommandContext: internals.getRunCommandContext,
+      getCommandEnv: internals.getCommandEnv,
+      stopCommandWithoutLock: internals.stopCommandWithoutLock,
+      trackPendingSequence: internals.trackPendingSequence,
+    };
+    const realTrack = internals.trackPendingSequence as (
+      sequence: Promise<unknown>,
+    ) => void;
+    internals.trackPendingSequence = (sequence: Promise<unknown>) => {
+      sequences.push(sequence);
+      realTrack.call(runCommandService, sequence);
+    };
+
+    // Record only teardowns of a live process, which is the signal that a
+    // later stage really restarted an earlier stage's command.
+    const realStopWithoutLock = internals.stopCommandWithoutLock as (
+      args: unknown,
+    ) => Promise<boolean>;
+    internals.stopCommandWithoutLock = async (args: unknown) => {
+      const { runCommandId } = args as { runCommandId: string };
+      const tracked = testService.runningProcesses
+        .get('task-1')
+        ?.get(runCommandId);
+      if (tracked?.status === 'running') stoppedCommandIds.push(runCommandId);
+      return realStopWithoutLock.call(runCommandService, args);
+    };
+    internals.getPortsInUse = async () => [];
+    internals.getPortOverrides = async () => new Map();
+    internals.getRunCommandContext = async () => ({});
+    internals.getCommandEnv = async () => ({});
+  });
+
+  afterEach(() => {
+    const internals = runCommandService as unknown as Record<string, unknown>;
+    for (const [key, value] of Object.entries(patchedInternals)) {
+      internals[key] = value;
+    }
+    vi.restoreAllMocks();
+    testService.runningProcesses.clear();
+  });
+
+  it('runs stages in order, blocking on wait-for-exit commands', async () => {
+    const run = runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['migrate', 'server'],
+      stages: [stage('s1', [['migrate', true]]), stage('s2', [['server', false]])],
+    });
+
+    // Stage 2 must not start until the blocking command in stage 1 exits.
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+    expect(spawned[0].command).toContain('run migrate');
+
+    ptyFor('migrate').exit(0);
+
+    await run;
+    await sequenceSettled();
+    expect(spawned.map((entry) => entry.command)).toEqual([
+      expect.stringContaining('run migrate'),
+      expect.stringContaining('run server'),
+    ]);
+  });
+
+  it('starts commands in the same stage together', async () => {
+    const run = runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['slow', 'sibling'],
+      // `slow` blocks the stage, but `sibling` must already have been spawned
+      // alongside it rather than waiting its turn.
+      stages: [stage('s1', [['slow', true], ['sibling', false]])],
+    });
+
+    await vi.waitFor(() => expect(spawned).toHaveLength(2));
+    ptyFor('slow').exit(0);
+    await run;
+  });
+
+  it('does not wait for commands without waitForExit', async () => {
+    const run = runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['server', 'web'],
+      stages: [stage('s1', [['server', false]]), stage('s2', [['web', false]])],
+    });
+
+    // Neither process ever exits, yet the run completes.
+    await run;
+    await sequenceSettled();
+    expect(spawned).toHaveLength(2);
+  });
+
+  it('aborts later stages when a blocking command fails', async () => {
+    const run = runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['lint', 'deploy'],
+      stages: [stage('s1', [['lint', true]]), stage('s2', [['deploy', false]])],
+    });
+
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+    ptyFor('lint').exit(1);
+
+    await run;
+    await sequenceSettled();
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0].command).toContain('run lint');
+  });
+
+  it('leaves already-started commands running after an aborted stage', async () => {
+    const run = runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['server', 'check', 'deploy'],
+      stages: [
+        stage('s1', [['server', false]]),
+        stage('s2', [['check', true]]),
+        stage('s3', [['deploy', false]]),
+      ],
+    });
+
+    await vi.waitFor(() => expect(spawned).toHaveLength(2));
+    ptyFor('check').exit(2);
+
+    await run;
+    await sequenceSettled();
+    expect(spawned).toHaveLength(2);
+    expect(
+      testService.runningProcesses.get('task-1')?.get('server')?.status,
+    ).toBe('running');
+  });
+
+  it('treats a missing stage plan as one all-at-once stage', async () => {
+    await runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['web', 'api'],
+    });
+
+    expect(spawned).toHaveLength(2);
+  });
+
+  it('skips hidden members instead of failing the group', async () => {
+    mocks.findCommandById.mockImplementation(async (id: string) => ({
+      ...makeCommand(id),
+      isHidden: id === 'hidden',
+    }));
+
+    await runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['web', 'hidden'],
+      stages: [stage('s1', [['web', false], ['hidden', false]])],
+    });
+
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0].command).toContain('run web');
+  });
+
+  it('waits the configured delay between stages', async () => {
+    vi.useFakeTimers();
+    try {
+      const run = runCommandService.startGroup({
+        ...startParams,
+        runCommandIds: ['first', 'second'],
+        stages: [
+          stage('s1', [['first', false]], 5000),
+          stage('s2', [['second', false]]),
+        ],
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(spawned).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(spawned).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await run;
+      await sequenceSettled();
+      expect(spawned).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not delay after the final stage', async () => {
+    vi.useFakeTimers();
+    try {
+      const run = runCommandService.startGroup({
+        ...startParams,
+        runCommandIds: ['only'],
+        stages: [stage('s1', [['only', false]], 600000)],
+      });
+
+      // Resolves without the timer ever firing.
+      await run;
+      await sequenceSettled();
+      expect(spawned).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restarts a command that appears again in a later stage', async () => {
+    const run = runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['build'],
+      // Stage 1 leaves it running, so stage 2 must stop and respawn it.
+      stages: [stage('s1', [['build', false]]), stage('s2', [['build', true]])],
+    });
+
+    await vi.waitFor(() => expect(spawned).toHaveLength(2));
+    spawned[1].pty.exit(0);
+
+    await run;
+    await sequenceSettled();
+    expect(spawned).toHaveLength(2);
+    // The first instance must have been stopped, not merely overwritten.
+    expect(stoppedCommandIds).toContain('build');
+  });
+
+  it('aborts instead of orphaning a command it could not restart', async () => {
+    // A process that survives every kill leaves stopCommandWithoutLock false.
+    // Spawning over it would strand an untracked, unkillable process holding
+    // its ports, so the sequence must stop instead.
+    const internals = runCommandService as unknown as Record<string, unknown>;
+    const realStop = internals.stopCommandWithoutLock as (
+      args: unknown,
+    ) => Promise<boolean>;
+    // Refuse only for a process that is actually alive: the group prologue
+    // also stops members, and must still succeed there.
+    internals.stopCommandWithoutLock = async (args: unknown) => {
+      const { runCommandId } = args as { runCommandId: string };
+      const tracked = testService.runningProcesses
+        .get('task-1')
+        ?.get(runCommandId);
+      if (tracked?.status === 'running') return false;
+      return realStop.call(runCommandService, args);
+    };
+
+    const run = runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['build', 'after'],
+      stages: [
+        stage('s1', [['build', false]]),
+        stage('s2', [['build', true]]),
+        stage('s3', [['after', false]]),
+      ],
+    });
+
+    await run;
+    await sequenceSettled();
+    // No duplicate 'build', and the sequence stopped rather than continuing.
+    expect(spawned).toHaveLength(1);
+  });
+
+  it('honors a stop that lands while the group is still starting up', async () => {
+    // Cancellation must be registered before the locks are taken, otherwise a
+    // stop arriving during the prologue finds nothing to cancel and then
+    // queues behind the whole sequence.
+    const internals = runCommandService as unknown as Record<string, unknown>;
+    const releasePrologue = createDeferred<void>();
+    internals.getRunCommandContext = async () => {
+      await releasePrologue.promise;
+      return {};
+    };
+
+    const run = runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['web'],
+      stages: [stage('s1', [['web', false]])],
+    });
+
+    await Promise.resolve();
+    void runCommandService.stopCommand({
+      taskId: 'task-1',
+      runCommandId: 'web',
+    });
+    releasePrologue.resolve();
+
+    await run;
+    await sequenceSettled();
+    expect(spawned).toHaveLength(0);
+  });
+
+  it('reports an aborted sequence so the renderer can surface it', async () => {
+    const aborts: RunCommandGroupAbortEvent[] = [];
+    const unsubscribe = runCommandService.onGroupAbort((event) =>
+      aborts.push(event),
+    );
+
+    const run = runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['lint', 'build', 'deploy'],
+      stages: [
+        stage('s1', [['lint', true]]),
+        stage('s2', [['build', false]]),
+        stage('s3', [['deploy', false]]),
+      ],
+    });
+
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+    ptyFor('lint').exit(1);
+
+    await run;
+    await sequenceSettled();
+    unsubscribe();
+
+    expect(aborts).toEqual([
+      {
+        taskId: 'task-1',
+        skippedStageCount: 2,
+        reason: { type: 'commandFailed', commandName: 'lint', exitCode: 1 },
+      },
+    ]);
+  });
+
+  it('does not report an abort when the user stopped the run', async () => {
+    // A stopped process usually exits non-zero; that must not be mistaken for
+    // a stage failure and toasted at the user who asked for the stop.
+    const aborts: RunCommandGroupAbortEvent[] = [];
+    const unsubscribe = runCommandService.onGroupAbort((event) =>
+      aborts.push(event),
+    );
+
+    const run = runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['slow', 'next'],
+      stages: [stage('s1', [['slow', true]]), stage('s2', [['next', false]])],
+    });
+
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+    const stop = runCommandService.stopCommand({
+      taskId: 'task-1',
+      runCommandId: 'slow',
+    });
+    ptyFor('slow').exit(143);
+
+    await run;
+    await sequenceSettled();
+    await stop;
+    unsubscribe();
+
+    expect(aborts).toEqual([]);
+  });
+
+  it('acknowledges the start once the first stage is up, not when the sequence ends', async () => {
+    // Callers await this while holding locks of their own (the PR lifecycle
+    // lock, the renderer's "starting" state), and a sequence is unbounded:
+    // a waited command that never exits would pin them forever.
+    let settled = false;
+    const run = runCommandService
+      .startGroup({
+        ...startParams,
+        runCommandIds: ['server', 'never'],
+        stages: [
+          stage('s1', [['server', false]]),
+          stage('s2', [['never', true]]),
+        ],
+      })
+      .then((result) => {
+        settled = true;
+        return result;
+      });
+
+    await run;
+    expect(settled).toBe(true);
+    // Stage 2 is still running and will never finish on its own.
+    expect(spawned).toHaveLength(2);
+
+    await runCommandService.stopCommandsForTask('task-1');
+    await sequenceSettled();
+  });
+
+  it('stops a staged run when a stop request cancels it', async () => {
+    const run = runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['slow', 'never'],
+      stages: [stage('s1', [['slow', true]]), stage('s2', [['never', false]])],
+    });
+
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+
+    // A stop must interrupt the sequence rather than queue behind the locks
+    // it holds for the whole run.
+    const stop = runCommandService.stopCommand({
+      taskId: 'task-1',
+      runCommandId: 'slow',
+    });
+
+    await run;
+    await sequenceSettled();
+    expect(spawned).toHaveLength(1);
+    ptyFor('slow').exit(0);
+    await stop;
   });
 });

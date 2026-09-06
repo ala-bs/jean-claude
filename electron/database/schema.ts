@@ -306,7 +306,10 @@ export interface ProjectCommandGroupTable {
   id: Generated<string>;
   projectId: string;
   name: string;
-  commandIds: string; // JSON array stored as text
+  /** JSON ProjectCommandGroupStage[] — source of truth for order + membership. */
+  stages: Generated<string>;
+  /** JSON string array — flattened membership derived from `stages` on write. */
+  commandIds: string;
   sortOrder: Generated<number>;
   createdAt: Generated<string>;
 }

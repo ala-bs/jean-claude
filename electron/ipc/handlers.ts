@@ -116,6 +116,7 @@ import {
   type NewProjectCommandGroup,
   parseProjectRootRunId,
   type ProjectSuggestions,
+  RUN_COMMAND_GROUP_ABORT_CHANNEL,
   type RunCommandConfigItem,
   type StartAdHocRunCommandParams,
   type UpdateProjectCommand,
@@ -5616,6 +5617,12 @@ export function registerIpcHandlers() {
       params: {
         taskId: string;
         runCommandIds: string[];
+        /**
+         * When set, the execution plan is re-read from the database rather than
+         * trusted from the renderer. Absent for ad-hoc multi-command runs,
+         * which fall back to a single all-at-once stage.
+         */
+        groupId?: string;
       },
     ) => {
       const resolved = await resolveRunCommandStart(params, {
@@ -5623,9 +5630,29 @@ export function registerIpcHandlers() {
         findProjectById: ProjectRepository.findById,
         findCommandById: ProjectCommandRepository.findById,
       });
+
+      const group = params.groupId
+        ? await ProjectCommandGroupRepository.findById(params.groupId)
+        : undefined;
+      // A groupId that resolves to nothing means the renderer's command list is
+      // suspect too, so fail rather than silently running them all at once.
+      if (params.groupId && (!group || group.projectId !== resolved.projectId)) {
+        throw new Error(
+          `Command group ${params.groupId} not found for project ${resolved.projectId}`,
+        );
+      }
+
       return runCommandWithPrReviewLifecycle(
         resolved,
-        (resolvedParams) => runCommandService.startGroup(resolvedParams),
+        (resolvedParams) =>
+          runCommandService.startGroup({
+            ...resolvedParams,
+            // Membership comes from the same row as the stages. Taking the ids
+            // from the renderer instead lets a stale query cache silently drop
+            // stage entries the user just added.
+            ...(group ? { runCommandIds: group.commandIds } : {}),
+            stages: group?.stages,
+          }),
         { findTaskById: TaskRepository.findById },
       );
     },
@@ -6017,6 +6044,14 @@ export function registerIpcHandlers() {
     } else {
       previousRunCommandStatuses.set(taskId, nextByCommand);
     }
+  });
+
+  runCommandService.onGroupAbort((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send(RUN_COMMAND_GROUP_ABORT_CHANNEL, event);
+      }
+    });
   });
 
   runCommandService.onLog((taskId, runCommandId, stream, text, generation) => {

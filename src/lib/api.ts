@@ -185,6 +185,7 @@ import type {
   ProjectCommandGroup,
   ProjectSuggestions,
   RunCommandConfigItem,
+  RunCommandGroupAbortEvent,
   RunStatus,
   StartAdHocRunCommandParams,
   StartPrCommandParams,
@@ -1743,6 +1744,8 @@ export interface Api {
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];
+      /** Runs the group's configured stages instead of one parallel batch. */
+      groupId?: string;
     }) => Promise<RunStatus | PortsInUseErrorData>;
     stopCommand: (params: {
       taskId: string;
@@ -1794,6 +1797,10 @@ export interface Api {
         runCommandId: string,
         generation: number,
       ) => void,
+    ) => () => void;
+    /** Fires when a staged group run stops early (not on a user-initiated stop). */
+    onGroupAborted: (
+      callback: (event: RunCommandGroupAbortEvent) => void,
     ) => () => void;
   };
   globalPrompt: {
@@ -3006,6 +3013,7 @@ export const api: Api = hasWindowApi
         onStatusChange: () => () => {},
         onLog: () => () => {},
         onLogsReset: () => () => {},
+        onGroupAborted: () => () => {},
       },
       globalPrompt: {
         onShow: () => () => {},

@@ -130,7 +130,7 @@ function buildCommand(overrides: Partial<ProjectCommand> = {}): ProjectCommand {
 function buildGroup(
   overrides: Partial<ProjectCommandGroup> = {},
 ): ProjectCommandGroup {
-  return {
+  const group = {
     id: 'group-1',
     projectId: 'project-1',
     name: 'Group',
@@ -138,6 +138,26 @@ function buildGroup(
     sortOrder: 0,
     createdAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
+  };
+
+  // Stages are the source of truth; default them to one
+  // all-at-once stage matching the fixture's membership.
+  return {
+    ...group,
+    stages:
+      overrides.stages ??
+      (group.commandIds.length > 0
+        ? [
+            {
+              id: 'stage-1',
+              delayMs: 0,
+              entries: group.commandIds.map((commandId) => ({
+                commandId,
+                waitForExit: false,
+              })),
+            },
+          ]
+        : []),
   };
 }
 

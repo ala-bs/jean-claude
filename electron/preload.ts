@@ -68,6 +68,8 @@ import type {
   WorkActivityWeekParams,
 } from '@shared/work-activity-types';
 import {
+  RUN_COMMAND_GROUP_ABORT_CHANNEL,
+  type RunCommandGroupAbortEvent,
   START_PR_COMMAND_CHANNEL,
   type StartPrCommandParams,
 } from '@shared/run-command-types';
@@ -1389,10 +1391,12 @@ contextBridge.exposeInMainWorld('api', {
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];
+      groupId?: string;
     }) =>
       ipcRenderer.invoke('project:commands:run:startGroup', {
         taskId: params.taskId,
         runCommandIds: params.runCommandIds,
+        groupId: params.groupId,
       }),
     stopCommand: (params: { taskId: string; runCommandId: string }) =>
       ipcRenderer.invoke('project:commands:run:stopCommand', params),
@@ -1444,6 +1448,13 @@ contextBridge.exposeInMainWorld('api', {
           'project:commands:run:statusChange',
           handler,
         );
+    },
+    onGroupAborted: (callback: (event: RunCommandGroupAbortEvent) => void) => {
+      const handler = (_: unknown, event: RunCommandGroupAbortEvent) =>
+        callback(event);
+      ipcRenderer.on(RUN_COMMAND_GROUP_ABORT_CHANNEL, handler);
+      return () =>
+        ipcRenderer.removeListener(RUN_COMMAND_GROUP_ABORT_CHANNEL, handler);
     },
     onLog: (
       callback: (

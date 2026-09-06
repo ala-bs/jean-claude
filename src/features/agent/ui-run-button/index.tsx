@@ -67,6 +67,8 @@ export function RunButton({
     commandIds: string[];
     label: string;
     message: string | null;
+    /** Set when confirming a configured group, so its stages still apply. */
+    groupId?: string;
   } | null>(null);
 
   const hasRunCommandLogEntries = useTaskMessagesStore((state) => {
@@ -175,9 +177,9 @@ export function RunButton({
       .catch(reportFailure('start command'));
   };
 
-  const executeGroup = (runCommandIds: string[]) => {
+  const executeGroup = (runCommandIds: string[], groupId?: string) => {
     if (runCommandIds.length === 0) return;
-    void startGroup(runCommandIds)
+    void startGroup(runCommandIds, groupId)
       .then((result) => {
         if (result.started) onRunCommand(runCommandIds);
       })
@@ -257,12 +259,13 @@ export function RunButton({
     if (confirmation) {
       setPendingConfirm({
         commandIds: action.commandIds,
+        groupId,
         ...confirmation,
       });
       return;
     }
 
-    executeGroup(action.commandIds);
+    executeGroup(action.commandIds, groupId);
   };
 
   const handleConfirmRun = () => {
@@ -273,7 +276,15 @@ export function RunButton({
     const commandIds = pendingConfirm.commandIds.filter((id) =>
       commands.some((command) => command.id === id),
     );
+    const { groupId } = pendingConfirm;
     setPendingConfirm(null);
+
+    // A configured group always goes through the group path, even with a
+    // single member, so its stage plan is honored.
+    if (groupId) {
+      executeGroup(commandIds, groupId);
+      return;
+    }
 
     if (commandIds.length === 1) {
       executeCommand(commandIds[0]);

@@ -12,15 +12,19 @@ import { glob } from 'glob';
 
 import {
   type CommandRunStatus,
+  getRunCommandDisplayName,
   type PackageScriptsResult,
   parseProjectRootRunId,
   type PortInUse,
   type PortsInUseErrorData,
   type ProjectCommand,
+  type ProjectCommandGroupStage,
   type ProjectSuggestionCommand,
   type ProjectSuggestions,
+  resolveCommandGroupRunStages,
   RUN_COMMAND_ENV_SOURCES,
   type RunCommandEnvVar,
+  type RunCommandGroupAbortEvent,
   type RunCommandLogStream,
   type RunStatus,
   type StartAdHocRunCommandParams,
@@ -349,6 +353,7 @@ export function signalProcessGroupOrProcess(
 }
 
 type StatusChangeCallback = (taskId: string, status: RunStatus) => void;
+type GroupAbortCallback = (event: RunCommandGroupAbortEvent) => void;
 type LogCallback = (
   taskId: string,
   runCommandId: string,
@@ -392,15 +397,77 @@ interface RunCommandContext {
   prUrl: string;
 }
 
+/**
+ * A multi-stage group run holds its members' operation locks for the entire
+ * sequence, which can be minutes long. A stop request would therefore queue
+ * behind those locks and look frozen. Stop paths raise this signal *before*
+ * acquiring any lock; the sequencer races every await against it and bails out,
+ * releasing the locks so the queued stop proceeds.
+ */
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function delay(ms: number): { promise: Promise<true>; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout>;
+  const promise = new Promise<true>((resolve) => {
+    timer = setTimeout(() => resolve(true), ms);
+  });
+  return { promise, cancel: () => clearTimeout(timer) };
+}
+
+function uniqueBy<T>(items: T[], getKey: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = getKey(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Resolves the work's value, or `null` if cancellation won the race. */
+async function raceCancellation<T>({
+  work,
+  cancelled$,
+}: {
+  work: Promise<T>;
+  cancelled$: Promise<void>;
+}): Promise<T | null> {
+  const cancelled = Symbol('cancelled');
+  const result = await Promise.race([
+    work,
+    cancelled$.then(() => cancelled),
+  ]);
+  return result === cancelled ? null : (result as T);
+}
+
+interface GroupRunCancellation {
+  taskId: string;
+  /** Members whose operation locks this run holds. */
+  commandIds: Set<string>;
+  cancelled: boolean;
+  cancel: () => void;
+  cancelled$: Promise<void>;
+}
+
 export class RunCommandService {
   private runningProcesses = new Map<string, Map<string, TrackedProcess>>();
   private logGenerations = new Map<string, number>();
   private commandOperationLocks = new Map<string, Promise<void>>();
+  private activeGroupRuns = new Set<GroupRunCancellation>();
   private pendingStarts = new Set<Promise<unknown>>();
   private stopAllActive = false;
   private stopAllPromise: Promise<void> | null = null;
   private statusChangeCallbacks: StatusChangeCallback[] = [];
   private logCallbacks: LogCallback[] = [];
+  private groupAbortCallbacks: GroupAbortCallback[] = [];
 
   private getCommandKey({
     taskId,
@@ -480,6 +547,61 @@ export class RunCommandService {
     }
   }
 
+  private beginGroupRun({
+    taskId,
+    runCommandIds,
+  }: {
+    taskId: string;
+    runCommandIds: string[];
+  }): GroupRunCancellation {
+    let cancel = () => {};
+    const cancelled$ = new Promise<void>((resolve) => {
+      cancel = resolve;
+    });
+    const run: GroupRunCancellation = {
+      taskId,
+      commandIds: new Set(runCommandIds),
+      cancelled: false,
+      cancelled$,
+      cancel: () => {
+        run.cancelled = true;
+        cancel();
+      },
+    };
+    this.activeGroupRuns.add(run);
+    return run;
+  }
+
+  /**
+   * Interrupts in-flight staged group runs. Called before locks are taken, so
+   * it must never await anything.
+   *
+   * Omit `taskId` to cancel every task (shutdown). Pass `runCommandIds` to only
+   * cancel runs that actually hold those commands' locks — an unrelated
+   * command starting in the same task must not abort a healthy sequence.
+   */
+  private cancelGroupRuns({
+    taskId,
+    runCommandIds,
+  }: {
+    taskId?: string;
+    runCommandIds?: string[];
+  } = {}): void {
+    for (const run of this.activeGroupRuns) {
+      if (taskId !== undefined && run.taskId !== taskId) continue;
+      if (
+        runCommandIds !== undefined &&
+        !runCommandIds.some((id) => run.commandIds.has(id))
+      ) {
+        continue;
+      }
+      if (!run.cancelled) {
+        dbg.runCommand('Cancelling staged group run for task %s', run.taskId);
+      }
+      run.cancel();
+    }
+  }
+
   private trackStart<T>(operation: () => Promise<T>): Promise<T> {
     if (this.stopAllActive) {
       return Promise.reject(
@@ -532,9 +654,21 @@ export class RunCommandService {
     };
   }
 
+  onGroupAbort(callback: GroupAbortCallback): () => void {
+    this.groupAbortCallbacks.push(callback);
+    return () => {
+      const index = this.groupAbortCallbacks.indexOf(callback);
+      if (index > -1) this.groupAbortCallbacks.splice(index, 1);
+    };
+  }
+
   private notifyStatusChange(taskId: string): void {
     const status = this.getRunStatus(taskId);
     this.statusChangeCallbacks.forEach((cb) => cb(taskId, status));
+  }
+
+  private notifyGroupAbort(event: RunCommandGroupAbortEvent): void {
+    this.groupAbortCallbacks.forEach((cb) => cb(event));
   }
 
   private notifyLog(
@@ -830,7 +964,7 @@ export class RunCommandService {
     context: RunCommandContext;
     envOverrides?: Record<string, string>;
     commandOverride?: string;
-  }): Promise<void> {
+  }): Promise<TrackedProcess> {
     const commandValue = commandOverride ?? command.command;
     dbg.runCommand('Spawning command via PTY: %s', commandValue);
     // A port conflict rewrites the command (or env) with a freshly allocated
@@ -940,6 +1074,8 @@ export class RunCommandService {
       exitResolve!({ exitCode, signal });
       this.notifyStatusChange(taskId);
     });
+
+    return trackedProcess;
   }
 
   getRunStatus(taskId: string): RunStatus {
@@ -1078,6 +1214,10 @@ export class RunCommandService {
     },
     options: StartOptions = {},
   ): Promise<RunStatus | PortsInUseErrorData> {
+    // Deliberately does NOT cancel an in-flight staged group run: an
+    // overlapping individual start queues behind the group rather than
+    // aborting it. A sequence blocked forever on a `waitForExit` command that
+    // never exits is escaped via Stop, which does cancel.
     return this.trackStart(() =>
       this.startCommandAdmitted(
         { taskId, projectId, workingDir, runCommandId },
@@ -1198,22 +1338,49 @@ export class RunCommandService {
       projectId,
       workingDir,
       runCommandIds,
+      stages,
     }: {
       taskId: string;
       projectId: string;
       workingDir: string;
       runCommandIds: string[];
+      /**
+       * Ordered execution plan. Omitted means one implicit stage running every
+       * member at once, which is the legacy behavior.
+       */
+      stages?: ProjectCommandGroupStage[];
     },
     options: StartOptions = {},
   ): Promise<RunStatus | PortsInUseErrorData> {
     const commandIds = [...new Set(runCommandIds)];
+    // Re-running a group while an earlier sequence still holds these commands'
+    // locks would deadlock, so retire the overlapping run first.
+    this.cancelGroupRuns({ taskId, runCommandIds: commandIds });
 
+    // Resolves once the group has STARTED (first stage spawned), not when the
+    // whole sequence ends. Callers hold locks of their own while awaiting this
+    // (the PR lifecycle lock, the renderer's "starting" state), and a sequence
+    // is unbounded in duration.
     return this.trackStart(() =>
       this.startGroupAdmitted(
-        { taskId, projectId, workingDir, runCommandIds: commandIds },
+        { taskId, projectId, workingDir, runCommandIds: commandIds, stages },
         options,
+        (sequence) => this.trackPendingSequence(sequence),
       ),
     );
+  }
+
+  /**
+   * Keeps the remaining stages in `pendingStarts` after the start acknowledgement
+   * has resolved, so shutdown still drains them (it cancels them first).
+   */
+  private trackPendingSequence(sequence: Promise<unknown>): void {
+    this.pendingStarts.add(sequence);
+    void sequence
+      .finally(() => {
+        this.pendingStarts.delete(sequence);
+      })
+      .catch(() => {});
   }
 
   private async startGroupAdmitted(
@@ -1222,15 +1389,31 @@ export class RunCommandService {
       projectId,
       workingDir,
       runCommandIds,
+      stages,
     }: {
       taskId: string;
       projectId: string;
       workingDir: string;
       runCommandIds: string[];
+      stages?: ProjectCommandGroupStage[];
     },
     options: StartOptions = {},
+    onSequence?: (sequence: Promise<unknown>) => void,
   ): Promise<RunStatus | PortsInUseErrorData> {
-    return this.withCommandLocks({
+    // Registered before the locks are acquired: the prologue (stopping members,
+    // afterStop hooks, port probes) runs inside the lock and can take seconds,
+    // and a stop arriving in that window must not find an empty run set.
+    const groupRun = this.beginGroupRun({ taskId, runCommandIds });
+
+    const started = createDeferred<RunStatus | PortsInUseErrorData>();
+    let settled = false;
+    const settle = (result: RunStatus | PortsInUseErrorData) => {
+      if (settled) return;
+      settled = true;
+      started.resolve(result);
+    };
+
+    const sequence = this.withCommandLocks({
         taskId,
         runCommandIds,
         operation: async () => {
@@ -1264,10 +1447,50 @@ export class RunCommandService {
             projectId,
             workingDir,
             validCommands,
+            groupRun,
+            onStarted: settle,
+            stages: resolveCommandGroupRunStages({
+              stages: stages ?? [
+                {
+                  id: 'implicit',
+                  delayMs: 0,
+                  entries: validCommands.map((command) => ({
+                    commandId: command.id,
+                    waitForExit: false,
+                  })),
+                },
+              ],
+              commands: validCommands,
+            }),
             options,
           });
         },
+      })
+      .then(
+        (final) => {
+          // Groups that never reached a stage (all hidden, ports in use) settle
+          // with whatever the sequence returned.
+          settle(final);
+          return final;
+        },
+        (error: unknown) => {
+          if (!settled) {
+            settled = true;
+            started.reject(error);
+          }
+          throw error;
+        },
+      )
+      .finally(() => {
+        this.activeGroupRuns.delete(groupRun);
       });
+
+    onSequence?.(sequence);
+    // The caller only awaits the start acknowledgement; keep the tail from
+    // surfacing as an unhandled rejection.
+    void sequence.catch(() => {});
+
+    return started.promise;
   }
 
   private async startGroupWithoutLock({
@@ -1275,12 +1498,18 @@ export class RunCommandService {
     projectId,
     workingDir,
     validCommands,
+    stages,
+    groupRun,
+    onStarted,
     options,
   }: {
     taskId: string;
     projectId: string;
     workingDir: string;
     validCommands: ProjectCommand[];
+    stages: ProjectCommandGroupStage[];
+    groupRun: GroupRunCancellation;
+    onStarted: (result: RunStatus | PortsInUseErrorData) => void;
     options: StartOptions;
   }): Promise<RunStatus | PortsInUseErrorData> {
     const stopResults = await Promise.all(
@@ -1289,7 +1518,9 @@ export class RunCommandService {
       ),
     );
     if (stopResults.some((didStop) => !didStop)) {
-      return this.getRunStatus(taskId);
+      const status = this.getRunStatus(taskId);
+      onStarted(status);
+      return status;
     }
     await options.afterStop?.();
 
@@ -1300,11 +1531,13 @@ export class RunCommandService {
     );
     if (blockingPortsInUse.length > 0) {
       dbg.runCommand('Group ports in use, cannot start: %o', blockingPortsInUse);
-      return {
+      const portsError: PortsInUseErrorData = {
         type: 'PortsInUseError',
         message: `Ports in use: ${blockingPortsInUse.map((p) => p.port).join(', ')}`,
         portsInUse: blockingPortsInUse,
       };
+      onStarted(portsError);
+      return portsError;
     }
 
     const portOverrides = await this.getPortOverrides({
@@ -1318,12 +1551,61 @@ export class RunCommandService {
       workingDir,
     });
 
+    const commandsById = new Map(
+      validCommands.map((command) => [command.id, command]),
+    );
+
+    if (groupRun.cancelled) {
+      dbg.runCommand('Group run cancelled during startup, not spawning');
+      const status = this.getRunStatus(taskId);
+      onStarted(status);
+      return status;
+    }
+
     try {
-      await Promise.all(
-        validCommands.map((command) =>
-          {
+      for (const [stageIndex, stage] of stages.entries()) {
+        if (groupRun.cancelled) {
+          dbg.runCommand(
+            'Group run cancelled before stage %d/%d',
+            stageIndex + 1,
+            stages.length,
+          );
+          break;
+        }
+
+        // Only the first occurrence of a command id in a stage can run: the
+        // service tracks one process per command id.
+        const entries = uniqueBy(stage.entries, (entry) => entry.commandId);
+
+        const spawned = await Promise.all(
+          entries.map(async (entry) => {
+            const command = commandsById.get(entry.commandId);
+            if (!command) return null;
+
+            // A command repeated in a later stage restarts: tear down the
+            // instance a previous stage left behind before respawning.
+            if (
+              this.getTaskProcesses(taskId).get(command.id)?.status ===
+              'running'
+            ) {
+              const didStop = await this.stopCommandWithoutLock({
+                taskId,
+                runCommandId: command.id,
+              });
+              // Spawning over a process that refused to die would overwrite its
+              // tracking entry and leave it running, unkillable and still
+              // holding its ports.
+              if (!didStop) {
+                dbg.runCommand(
+                  'Could not restart %s for a later stage; it is still running',
+                  command.id,
+                );
+                return { entry, tracked: null };
+              }
+            }
+
             const portOverride = portOverrides.get(command.id);
-            return this.spawnTrackedCommand({
+            const tracked = await this.spawnTrackedCommand({
               taskId,
               workingDir,
               command,
@@ -1331,10 +1613,96 @@ export class RunCommandService {
               envOverrides: portOverride?.envOverrides,
               commandOverride: portOverride?.command,
             });
-          },
-        ),
-      );
+            return { entry, tracked };
+          }),
+        );
+
+        // A member that could not be restarted aborts the sequence: later
+        // stages would otherwise race a process we failed to control.
+        const unrestartable = spawned.find(
+          (item) => item !== null && item.tracked === null,
+        );
+        if (unrestartable) {
+          this.notifyGroupAbort({
+            taskId,
+            skippedStageCount: stages.length - stageIndex - 1,
+            reason: {
+              type: 'restartFailed',
+              commandName: getRunCommandDisplayName(
+                commandsById.get(unrestartable.entry.commandId) ?? {
+                  command: unrestartable.entry.commandId,
+                },
+              ),
+            },
+          });
+          break;
+        }
+
+        // Surface the stage's processes before blocking on them.
+        this.notifyStatusChange(taskId);
+        // The group is now "started"; later stages continue in the background.
+        onStarted(this.getRunStatus(taskId));
+
+        const blocking = spawned.filter(
+          (item): item is { entry: (typeof stage.entries)[number]; tracked: TrackedProcess } =>
+            item !== null && item.tracked !== null && item.entry.waitForExit,
+        );
+        if (blocking.length > 0) {
+          dbg.runCommand(
+            'Stage %d/%d waiting on %d command(s) to exit',
+            stageIndex + 1,
+            stages.length,
+            blocking.length,
+          );
+          const exits = await raceCancellation({
+            work: Promise.all(blocking.map((item) => item.tracked.exitPromise)),
+            cancelled$: groupRun.cancelled$,
+          });
+          if (!exits) break;
+
+          const failedIndex = exits.findIndex((exit) => exit.exitCode !== 0);
+          if (failedIndex !== -1) {
+            // Abort the rest of the sequence but leave already-started
+            // commands running, so a failed check does not kill a dev server.
+            const failed = blocking[failedIndex];
+            dbg.runCommand(
+              'Group run aborted: %s exited with code %d',
+              failed.tracked.commandId,
+              exits[failedIndex].exitCode,
+            );
+            this.notifyGroupAbort({
+              taskId,
+              skippedStageCount: stages.length - stageIndex - 1,
+              reason: {
+                type: 'commandFailed',
+                commandName: getRunCommandDisplayName({
+                  name: failed.tracked.name,
+                  command: failed.tracked.command,
+                }),
+                exitCode: exits[failedIndex].exitCode,
+              },
+            });
+            break;
+          }
+        }
+
+        const isLastStage = stageIndex === stages.length - 1;
+        if (stage.delayMs > 0 && !isLastStage) {
+          const pause = delay(stage.delayMs);
+          const waited = await raceCancellation({
+            work: pause.promise,
+            cancelled$: groupRun.cancelled$,
+          });
+          // Losing the race leaves the timer pending for up to 10 minutes,
+          // which would keep a handle alive across app quit.
+          pause.cancel();
+          if (!waited) break;
+        }
+      }
     } finally {
+      // Deregistration is owned by startGroupAdmitted, which still holds the
+      // locks at this point; removing it here would make the run
+      // uncancellable during that window.
       this.notifyStatusChange(taskId);
     }
     return this.getRunStatus(taskId);
@@ -1429,6 +1797,9 @@ export class RunCommandService {
     taskId: string;
     runCommandId: string;
   }): Promise<boolean> {
+    // Raise the cancel flag before queueing on the lock, otherwise a staged
+    // group run would hold it for the rest of its sequence.
+    this.cancelGroupRuns({ taskId, runCommandIds: [runCommandId] });
     return this.stopCommandWithLock({ taskId, runCommandId });
   }
 
@@ -1626,6 +1997,9 @@ export class RunCommandService {
     if (this.stopAllPromise) return this.stopAllPromise;
 
     this.stopAllActive = true;
+    // performStopAllCommands awaits pendingStarts; without this a staged group
+    // run would delay app shutdown for the length of its sequence.
+    this.cancelGroupRuns();
     const operation = this.performStopAllCommands();
     const sharedOperation = operation.finally(() => {
       if (this.stopAllPromise === sharedOperation) {
@@ -1693,6 +2067,7 @@ export class RunCommandService {
   }
 
   async stopCommandsForTask(taskId: string): Promise<boolean> {
+    this.cancelGroupRuns({ taskId });
     const taskProcesses = this.runningProcesses.get(taskId);
     if (!taskProcesses) {
       return true;

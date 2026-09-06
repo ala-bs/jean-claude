@@ -20,6 +20,8 @@ interface PendingStart {
   kind: 'command' | 'group' | 'ad-hoc';
   operationToken: symbol;
   adHocParams?: AdHocParams;
+  /** Set for configured groups so a retry replays the same stage plan. */
+  groupId?: string;
 }
 
 interface PortConflictRecord {
@@ -118,6 +120,7 @@ export function useRunCommands({
       taskId: string;
     },
     adHocParams?: AdHocParams,
+    groupId?: string,
   ): Promise<{ started: boolean }> => {
     const uniqueCommandIds = [...new Set(commandIds)];
     const currentResetRunCommandLogs = resetRunCommandLogsRef.current;
@@ -178,7 +181,9 @@ export function useRunCommands({
             workingDir: workingDirRef.current,
             ...adHocParams,
           })
-        : uniqueCommandIds.length === 1
+        : // A configured group always takes the group path, even with a single
+          // distinct member: its stages may run that command more than once.
+          groupId === undefined && uniqueCommandIds.length === 1
           ? await api.runCommands.startCommand({
               taskId: currentTaskId,
               runCommandId: uniqueCommandIds[0],
@@ -186,6 +191,7 @@ export function useRunCommands({
           : await api.runCommands.startGroup({
               taskId: currentTaskId,
               runCommandIds: uniqueCommandIds,
+              groupId,
             });
 
       if (isPortsInUseError(result)) {
@@ -197,6 +203,7 @@ export function useRunCommands({
               kind,
               operationToken,
               adHocParams,
+              groupId,
             },
             projectId,
             taskGeneration: currentTaskGeneration,
@@ -251,8 +258,8 @@ export function useRunCommands({
   const startAdHocCommand = async (params: AdHocParams) =>
     runStart([params.runCommandId], 'ad-hoc', undefined, params);
 
-  const startGroup = async (runCommandIds: string[]) =>
-    runStart(runCommandIds, 'group');
+  const startGroup = async (runCommandIds: string[], groupId?: string) =>
+    runStart(runCommandIds, 'group', undefined, undefined, groupId);
 
   const stopCommand = async (runCommandId: string) => {
     const currentTaskId = taskIdRef.current;
@@ -350,6 +357,7 @@ export function useRunCommands({
       conflict.operation.kind,
       conflict,
       conflict.operation.adHocParams,
+      conflict.operation.groupId,
     );
     return {
       commandIds: conflict.operation.commandIds,
