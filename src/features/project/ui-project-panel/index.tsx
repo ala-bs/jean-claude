@@ -1,5 +1,8 @@
-import { ExternalLink, FolderGit2, GitBranch, ListTodo, Settings } from 'lucide-react';
-import { useMemo, useRef, useState } from 'react';
+import { ArrowLeft, ExternalLink, FolderGit2, GitBranch, ListTodo, Settings } from 'lucide-react';
+import { getEditorLabel, useEditorSetting } from '@/hooks/use-settings';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { api } from '@/lib/api';
+import { useNavigate } from '@tanstack/react-router';
 
 import {
   isFiltered,
@@ -44,6 +47,9 @@ function ProjectHeader({
   remoteUrl,
   onOpenBacklog,
   onOpenSettings,
+  onOpenInEditor,
+  editorLabel,
+  onBack,
   children,
 }: {
   name: string;
@@ -51,6 +57,9 @@ function ProjectHeader({
   remoteUrl: string | null;
   onOpenBacklog: () => void;
   onOpenSettings: () => void;
+  onOpenInEditor: () => void;
+  editorLabel: string;
+  onBack?: () => void;
   children?: React.ReactNode;
 }) {
   const href = remoteUrl ? remoteHref(remoteUrl) : null;
@@ -59,6 +68,16 @@ function ProjectHeader({
     <header className="border-line-soft relative shrink-0 overflow-hidden border-b px-5 pt-4 pb-3.5">
       {children}
       <div className="relative z-10 flex items-start gap-3.5">
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            title="Back to task (Esc)"
+            className="text-ink-2 hover:bg-glass-light hover:text-ink-0 mt-0.5 inline-flex h-[34px] w-[26px] shrink-0 items-center justify-center rounded-md transition-colors"
+          >
+            <ArrowLeft size={15} />
+          </button>
+        )}
         <div className="bg-acc-soft border-acc-line text-acc-ink mt-0.5 flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[9px] border">
           <GitBranch size={16} />
         </div>
@@ -100,6 +119,15 @@ function ProjectHeader({
         <div className="flex shrink-0 items-center gap-1.5">
           <button
             type="button"
+            onClick={onOpenInEditor}
+            title={`Open repository in ${editorLabel} (⌘⇧E)`}
+            className="border-glass-border text-ink-1 hover:border-glass-border-strong hover:bg-glass-light hover:text-ink-0 inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors"
+          >
+            <ExternalLink size={12} />
+            <span>Open in {editorLabel}</span>
+          </button>
+          <button
+            type="button"
             onClick={onOpenBacklog}
             className="border-glass-border text-ink-1 hover:border-glass-border-strong hover:bg-glass-light hover:text-ink-0 inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors"
           >
@@ -120,7 +148,21 @@ function ProjectHeader({
   );
 }
 
-export function ProjectPanel({ projectId }: { projectId: string }) {
+export function ProjectPanel({
+  projectId,
+  backToTaskId,
+}: {
+  projectId: string;
+  /** Set when opened from a task, so we can offer a way back to it. */
+  backToTaskId?: string;
+}) {
+  const navigate = useNavigate();
+  const { data: editorSetting } = useEditorSetting();
+  const editorLabel = editorSetting ? getEditorLabel(editorSetting) : 'Editor';
+  const goBackToTask = useCallback(() => {
+    if (!backToTaskId) return;
+    void navigate({ to: '/all/$taskId', params: { taskId: backToTaskId } });
+  }, [backToTaskId, navigate]);
   const { data: project, isLoading: isLoadingProject } = useProject(projectId);
   const openSettingsForProject = useOverlaysStore(
     (state) => state.openSettingsForProject,
@@ -182,6 +224,23 @@ export function ProjectPanel({ projectId }: { projectId: string }) {
         handler: () => setSelectedHash(null),
         hideInCommandPalette: true,
       },
+      // Only when we came from a task and no commit diff is open, so Escape
+      // still closes the diff first.
+      !!project?.path && {
+        label: 'Open Project in Editor',
+        section: 'Project',
+        shortcut: 'cmd+shift+e',
+        handler: () => {
+          void api.shell.openInEditor(project.path);
+        },
+      },
+      backToTaskId !== undefined &&
+        selectedHash === null && {
+          label: 'Back to Task',
+          section: 'Project',
+          shortcut: 'escape',
+          handler: goBackToTask,
+        },
     ],
   );
 
@@ -222,6 +281,11 @@ export function ProjectPanel({ projectId }: { projectId: string }) {
         remoteUrl={status?.remoteUrl ?? null}
         onOpenBacklog={openBacklogForProject}
         onOpenSettings={() => openSettingsForProject(projectId)}
+        onOpenInEditor={() => {
+          void api.shell.openInEditor(project.path);
+        }}
+        editorLabel={editorLabel}
+        onBack={backToTaskId ? goBackToTask : undefined}
       >
         <ProjectLogoBackground project={project} showColorFallback />
       </ProjectHeader>

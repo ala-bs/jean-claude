@@ -100,7 +100,8 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `escape` | — | Close or Go Back | `src/features/new-task/ui-new-task-overlay/index.tsx:1744` |
 | `escape` | — | Close Backlog | `src/features/project/ui-backlog-overlay/index.tsx:457` |
 | `escape` | — | Close Project Overlay | `src/features/project/ui-project-overlay/index.tsx:160` |
-| `escape` | — | Close Commit Diff | `src/features/project/ui-project-panel/index.tsx:181` |
+| `escape` | — | Close Commit Diff | `src/features/project/ui-project-panel/index.tsx:223` |
+| `escape` | — | Back to Task | `src/features/project/ui-project-panel/index.tsx:241` |
 | `escape` | — | Close Resources Overlay | `src/features/resources/ui-resources-overlay/index.tsx:460` |
 | `escape` | — | Close Running Commands Overlay | `src/features/run-commands/ui-running-commands-overlay/index.tsx:747` |
 | `escape` | — | Close Usage Overlay | `src/features/usage/ui-usage-overlay/index.tsx:801` |
@@ -125,7 +126,7 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `v` | — | Mark file reviewed | `src/features/agent/ui-worktree-review-view/index.tsx:610` |
 | `cmd+,` | — | Settings | `src/routes/__root.tsx:127` |
 | `cmd+;` | — | Calendar | `src/routes/__root.tsx:253` |
-| `cmd+/` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2313` |
+| `cmd+/` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2314` |
 | `cmd+\\` | header-menu-trigger | Toggle Menu | `src/layout/ui-header/index.tsx:509` |
 | `cmd+1` | feed-list-navigation | Go to Feed Item 1 | `src/features/feed/ui-feed-list/index.tsx:1402` |
 | `cmd+2` | feed-list-navigation | Go to Feed Item 2 | `src/features/feed/ui-feed-list/index.tsx:1408` |
@@ -141,12 +142,12 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+backspace` | — | Confirm Delete Command | `src/features/project/ui-run-commands-config/delete-command-dialog.tsx:30` |
 | `cmd+backspace` | — | Stop Selected Command | `src/features/run-commands/ui-running-commands-overlay/index.tsx:760` |
 | `cmd+backspace` | — | Confirm Delete | `src/features/task/ui-task-panel/delete-task-dialog.tsx:50` |
-| `cmd+d` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2280` |
+| `cmd+d` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2281` |
 | `cmd+down` | — | Select Last Command | `src/features/command-palette/ui-command-palette-overlay/index.tsx:129` |
 | `cmd+down` | feed-list-navigation | Go to Next Feed Item | `src/features/feed/ui-feed-list/index.tsx:1462` |
 | `cmd+down` | — | Navigate to Next Project Grid Item | `src/features/new-task/ui-new-task-overlay/index.tsx:1800` |
 | `cmd+e` | — | Toggle File Explorer | `src/features/new-task/ui-new-task-overlay/index.tsx:1765` |
-| `cmd+e` | task-panel | Open Review Files | `src/features/task/ui-task-panel/index.tsx:2259` |
+| `cmd+e` | task-panel | Open Review Files | `src/features/task/ui-task-panel/index.tsx:2260` |
 | `cmd+enter` | question-options | Submit Question Answers | `src/features/agent/ui-question-options/index.tsx:875` |
 | `cmd+enter` | — | Commit | `src/features/agent/ui-worktree-actions/commit-modal.tsx:89` |
 | `cmd+enter` | — | Merge | `src/features/agent/ui-worktree-actions/merge-confirm-dialog.tsx:189` |
@@ -157,18 +158,18 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+enter` | — | Confirm Change Worktree Path | `src/features/task/ui-task-panel/change-worktree-path-dialog.tsx:49` |
 | `cmd+enter` | — | Confirm Complete | `src/features/task/ui-task-panel/complete-task-dialog.tsx:48` |
 | `cmd+enter` | — | Confirm Delete | `src/features/task/ui-task-panel/delete-task-dialog.tsx:50` |
-| `cmd+enter` | work-items-editor | Save Work Items | `src/features/task/ui-task-panel/index.tsx:1460` |
+| `cmd+enter` | work-items-editor | Save Work Items | `src/features/task/ui-task-panel/index.tsx:1461` |
 | `cmd+enter` | pr-creation-form | Submit PR | `src/features/task/ui-task-pr-view/pr-creation-form.tsx:899` |
-| `cmd+f` | — | Search Commits | `src/features/project/ui-project-panel/index.tsx:171` |
+| `cmd+f` | — | Search Commits | `src/features/project/ui-project-panel/index.tsx:213` |
 | `cmd+i` | — | — | `src/features/new-task/ui-new-task-overlay/index.tsx:2019` |
 | `cmd+i` | — | — | `src/features/task/ui-task-panel/add-step-dialog.tsx:1022` |
 | `cmd+j` | — | — | `src/features/settings/ui-skills-settings/create-with-agent-dialog.tsx:170` |
 | `cmd+j` | — | Activity Center | `src/routes/__root.tsx:209` |
 | `cmd+k` | — | Clear Selected Command Logs | `src/features/run-commands/ui-running-commands-overlay/index.tsx:766` |
-| `cmd+l` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2268` |
+| `cmd+l` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2269` |
 | `cmd+left` | — | Navigate to Previous Project Tab | `src/features/new-task/ui-new-task-overlay/index.tsx:1786` |
 | `cmd+m` | — | Toggle Input Mode | `src/features/new-task/ui-new-task-overlay/index.tsx:1815` |
-| `cmd+m` | task-panel | Task Menu | `src/features/task/ui-task-panel/index.tsx:2243` |
+| `cmd+m` | task-panel | Task Menu | `src/features/task/ui-task-panel/index.tsx:2244` |
 | `cmd+n` | — | Close New Task Overlay | `src/features/new-task/ui-new-task-overlay/index.tsx:1737` |
 | `cmd+n` | — | New Task | `src/routes/__root.tsx:166` |
 | `cmd+o` | — | Open Project Overlay | `src/routes/__root.tsx:187` |
@@ -177,11 +178,11 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+p` | — | Open Command Palette | `src/routes/__root.tsx:102` |
 | `cmd+right` | — | Navigate to Next Project Tab | `src/features/new-task/ui-new-task-overlay/index.tsx:1779` |
 | `cmd+t` | — | — | `src/features/task/ui-task-panel/add-step-dialog.tsx:855` |
-| `cmd+u` | task-panel | Run Command | `src/features/task/ui-task-panel/index.tsx:2251` |
+| `cmd+u` | task-panel | Run Command | `src/features/task/ui-task-panel/index.tsx:2252` |
 | `cmd+up` | — | Select First Command | `src/features/command-palette/ui-command-palette-overlay/index.tsx:121` |
 | `cmd+up` | feed-list-navigation | Go to Previous Feed Item | `src/features/feed/ui-feed-list/index.tsx:1456` |
 | `cmd+up` | — | Navigate to Previous Project Grid Item | `src/features/new-task/ui-new-task-overlay/index.tsx:1793` |
-| `cmd+w` | task-panel | Open Worktree in Editor | `src/features/task/ui-task-panel/index.tsx:2374` |
+| `cmd+w` | task-panel | Open Worktree in Editor | `src/features/task/ui-task-panel/index.tsx:2375` |
 | `shift+[` | pr-detail-tab-navigation | Previous PR Detail Tab | `src/features/pull-request/ui-pr-detail/index.tsx:200` |
 | `shift+]` | pr-detail-tab-navigation | Next PR Detail Tab | `src/features/pull-request/ui-pr-detail/index.tsx:194` |
 | `shift+enter` | — | Edit Selected Item | `src/features/project/ui-backlog-overlay/index.tsx:488` |
@@ -192,12 +193,13 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+shift+a` | — | Open Azure Board | `src/routes/__root.tsx:356` |
 | `cmd+shift+b` | skills-settings | Browse Skills Registry | `src/features/settings/ui-skills-settings/index.tsx:59` |
 | `cmd+shift+d` | feed-list-navigation | Dismiss Selected Feed Item | `src/features/feed/ui-feed-list/index.tsx:1468` |
-| `cmd+shift+d` | task-panel | Cycle Diff Mode | `src/features/task/ui-task-panel/index.tsx:2321` |
-| `cmd+shift+e` | task-panel | Open Project in Editor | `src/features/task/ui-task-panel/index.tsx:2366` |
+| `cmd+shift+d` | task-panel | Cycle Diff Mode | `src/features/task/ui-task-panel/index.tsx:2322` |
+| `cmd+shift+e` | — | Open Project in Editor | `src/features/project/ui-project-panel/index.tsx:232` |
+| `cmd+shift+e` | task-panel | Open Project in Editor | `src/features/task/ui-task-panel/index.tsx:2367` |
 | `cmd+shift+escape` | — | Discard Draft and Close | `src/features/new-task/ui-new-task-overlay/index.tsx:1749` |
 | `cmd+shift+f` | review-files-search | Focus File Search | `src/features/agent/ui-worktree-review-view/review-files-tree.tsx:223` |
 | `cmd+shift+f` | — | — | `src/features/project/ui-backlog-overlay/index.tsx:541` |
-| `cmd+shift+g` | task-panel | Toggle Pull Request | `src/features/task/ui-task-panel/index.tsx:2305` |
+| `cmd+shift+g` | task-panel | Toggle Pull Request | `src/features/task/ui-task-panel/index.tsx:2306` |
 | `cmd+shift+k` | worktree-actions | Commit Changes | `src/features/agent/ui-worktree-actions/index.tsx:319` |
 | `cmd+shift+l` | feed-list-navigation | Toggle Low Priority on Selected Feed Item | `src/features/feed/ui-feed-list/index.tsx:1476` |
 | `cmd+shift+m` | worktree-actions | Merge Worktree | `src/features/agent/ui-worktree-actions/index.tsx:331` |
@@ -205,7 +207,7 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+shift+o` | pr-detail-tab-navigation | Open PR in Azure DevOps | `src/features/pull-request/ui-pr-detail/index.tsx:224` |
 | `cmd+shift+p` | worktree-actions | Create Pull Request | `src/features/agent/ui-worktree-actions/index.tsx:341` |
 | `cmd+shift+p` | feed-list-navigation | Toggle Pin on Selected Feed Item | `src/features/feed/ui-feed-list/index.tsx:1484` |
-| `cmd+shift+r` | task-panel | Cycle Review Mode | `src/features/task/ui-task-panel/index.tsx:2336` |
+| `cmd+shift+r` | task-panel | Cycle Review Mode | `src/features/task/ui-task-panel/index.tsx:2337` |
 | `cmd+shift+s` | — | Generate Summary | `src/features/agent/ui-worktree-review-view/index.tsx:333` |
 | `cmd+shift+s` | — | Toggle Auto-start | `src/features/task/ui-task-panel/add-step-dialog.tsx:826` |
 | `cmd+shift+t` | — | Open Running Commands | `src/routes/__root.tsx:374` |

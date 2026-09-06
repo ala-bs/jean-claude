@@ -11,6 +11,7 @@ import {
   ListTodo,
   Loader2,
   MoreHorizontal,
+  PanelsTopLeft,
   Play,
   RefreshCw,
   Search,
@@ -2915,6 +2916,19 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Open Worktree in Editor
                   </DropdownItem>
                 )}
+                <DropdownItem
+                  icon={<PanelsTopLeft />}
+                  onClick={() => {
+                    overflowMenuRef.current?.toggle();
+                    void navigate({
+                      to: '/all/projects/$projectId',
+                      params: { projectId: task.projectId },
+                      search: { fromTaskId: task.id },
+                    });
+                  }}
+                >
+                  Open Project Panel
+                </DropdownItem>
                 {task.branchName && (
                   <DropdownItem
                     icon={<GitFork />}
