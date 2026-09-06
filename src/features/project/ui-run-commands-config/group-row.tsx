@@ -523,6 +523,9 @@ export function GroupRow({
           <GitBranch className="text-acc-ink h-3.5 w-3.5" />
         </div>
         <div className="min-w-0 flex-1">
+          {/* Reads as plain text at rest so the header stays calm, but keeps a
+              real hover/focus affordance — without one the field looks like a
+              static label and nobody discovers the group is renameable. */}
           <Input
             size="md"
             value={localName}
@@ -532,7 +535,9 @@ export function GroupRow({
               if (e.key === 'Enter') e.currentTarget.blur();
             }}
             placeholder="Group name"
-            className="border-0 bg-transparent px-0 font-semibold"
+            title="Rename group"
+            aria-label="Group name"
+            className="hover:border-glass-border hover:bg-glass-light focus:border-acc-line focus:bg-glass-light cursor-text border-transparent bg-transparent px-2 font-semibold"
           />
         </div>
         <span className="border-status-azure/30 bg-status-azure-soft text-status-azure flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold tracking-wide uppercase">
