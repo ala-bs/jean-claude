@@ -526,6 +526,24 @@ function matchBashPattern(pattern: string, value: string): boolean {
   return new RegExp(`^${regexStr}(?![\\s\\S])`, 's').test(value);
 }
 
+/**
+ * True when `pattern` contains a `*` or `?` wildcard that is not the final
+ * character, as Claude Code would see it. Claude only supports a trailing
+ * wildcard (e.g. `git add:*`); an embedded one silently widens the rule to
+ * whatever sits at that position.
+ *
+ * Escapes are deliberately stripped first rather than honoured. `\*` is a
+ * Jean-Claude convention (see `escapeExactBashPattern`) meaning "literal
+ * asterisk", but Claude's `Bash(...)` matcher has no escape syntax — it sees a
+ * bare `*` and widens the rule anyway. Judging the unescaped form keeps this
+ * aligned with what Claude actually does.
+ */
+function hasNonTrailingWildcard(pattern: string): boolean {
+  const unescaped = pattern.replace(/\\(.)/g, '$1');
+  const firstWildcard = unescaped.search(/[*?]/);
+  return firstWildcard !== -1 && firstWildcard !== unescaped.length - 1;
+}
+
 function escapeExactBashPattern(value: string): string {
   return value.replace(/[\\*?]/g, '\\$&');
 }
@@ -1333,6 +1351,25 @@ export function compileForClaude(rules: ResolvedPermissionRule[]): {
     // Pseudo-tool: evaluated by our runtime, meaningless to the backend.
     if (rule.tool === SCRIPT_EDIT_TOOL) continue;
     if (rule.subpathRoot) continue; // Subpath rules handled by runtime evaluator
+    // Claude treats `*` in `Bash(...)` as "match any text here". A wildcard
+    // that is not the final character therefore also matches options injected
+    // at that position and approves them without a prompt, which Claude warns
+    // about on startup.
+    //
+    // Only `allow` rules are dropped. Skipping an allow entry can only ever
+    // narrow access: in `ask`/`plan` the request falls through to our own
+    // evaluator via `canUseTool`, and in `auto` it was auto-approved anyway.
+    // Deny entries must still be emitted — under `auto` the SDK maps to
+    // `bypassPermissions`, which never invokes `canUseTool` and honours only
+    // the settings-file deny list, so dropping a deny would remove the last
+    // gate on exactly the dangerous patterns users write wildcards for.
+    if (
+      rule.tool === 'bash' &&
+      rule.action === 'allow' &&
+      hasNonTrailingWildcard(rule.pattern)
+    ) {
+      continue;
+    }
     const claudeName = toolNameMap[rule.tool] ?? rule.tool;
 
     if (rule.tool === 'bash' && rule.pattern !== '*') {
