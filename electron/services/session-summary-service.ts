@@ -217,9 +217,24 @@ export async function summarizeNormalizedMessages({
     if (summary) return summary;
   }
 
+  // A raw string means the backend did not honor the schema. Only accept it if
+  // it actually is the schema payload serialized as JSON — otherwise it is
+  // model narration (e.g. "I have already called the StructuredOutput tool")
+  // that must not be injected as the step summary.
   if (typeof result === 'string') {
-    const summary = result.trim();
-    if (summary) return summary;
+    try {
+      const parsed: unknown = JSON.parse(result.trim());
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        typeof (parsed as { summary?: unknown }).summary === 'string'
+      ) {
+        const summary = (parsed as { summary: string }).summary.trim();
+        if (summary) return summary;
+      }
+    } catch {
+      // fall through to the error below
+    }
   }
 
   throw new Error('Failed to generate summary from normalized messages');
