@@ -823,7 +823,10 @@ export function ProjectSettings({
   const initializedProjectIdRef = useRef<string | null>(null);
 
   const { data: backendsSetting } = useBackendsSetting();
-  const { data: aiGenerationSetting } = useAiGenerationSetting();
+  const {
+    data: aiGenerationSetting,
+    isPending: isAiGenerationSettingPending,
+  } = useAiGenerationSetting();
   const { data: backendModelPresets = [] } = useBackendModelPresetsSetting();
   const enabledBackends = useEnabledBackends();
   const canGenerateLogoWithOpenAi =
@@ -1459,7 +1462,10 @@ export function ProjectSettings({
                 )}
               </div>
             </div>
-            {!canGenerateLogoWithOpenAi && (
+            {/* Wait for the AI-generation setting before deciding: rendering
+                this hint on `undefined` data made it flash in on first paint
+                and then vanish, shifting everything below it by ~24px. */}
+            {!isAiGenerationSettingPending && !canGenerateLogoWithOpenAi && (
               <p className="text-ink-3 mt-2 text-xs">
                 Enable GPT-image project logos with a saved OpenAI API key in AI
                 Generation settings to generate logos.
