@@ -38,6 +38,10 @@ import { useRunCommands } from '@/hooks/use-run-commands';
 
 import {
   buildCommandLogTabs,
+  buildCommandPortsById,
+  commandPortsMatchQuery,
+  describeCommandPorts,
+  formatCommandPorts,
   getCommandLogsEmptyText,
 } from './command-log-tabs';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from '../constants';
@@ -276,6 +280,11 @@ export function CommandLogsPane({
     [status],
   );
 
+  const portsByCommandId = useMemo(
+    () => buildCommandPortsById(status?.commands),
+    [status],
+  );
+
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
 
   const tabs = useMemo(
@@ -301,9 +310,18 @@ export function CommandLogsPane({
         return true;
       }
 
+      if (
+        commandPortsMatchQuery({
+          ports: portsByCommandId.get(tab.id),
+          query: normalizedSearchQuery,
+        })
+      ) {
+        return true;
+      }
+
       return logIncludesQuery(runCommandLogs[tab.id], normalizedSearchQuery);
     });
-  }, [normalizedSearchQuery, runCommandLogs, tabs]);
+  }, [normalizedSearchQuery, portsByCommandId, runCommandLogs, tabs]);
 
   const selectableTabs = normalizedSearchQuery ? filteredTabs : tabs;
   const activeCommandId =
@@ -320,6 +338,9 @@ export function CommandLogsPane({
   );
   const isActiveConfigured = commands.some(
     (command) => command.id === activeCommandId,
+  );
+  const activePortsLabel = describeCommandPorts(
+    activeCommandId ? portsByCommandId.get(activeCommandId) : undefined,
   );
   const activeCommandName = useMemo(() => {
     const tab = tabs.find((entry) => entry.id === activeCommandId);
@@ -548,6 +569,12 @@ export function CommandLogsPane({
               const isRunning = runningCommandIds.has(tab.id);
               const isActive = activeCommandId === tab.id;
               const displayName = getRunCommandDisplayName(tab);
+              const portsDescription = describeCommandPorts(
+                portsByCommandId.get(tab.id),
+              );
+              const portsLabel = formatCommandPorts(
+                portsByCommandId.get(tab.id),
+              );
 
               return (
                 <Button
@@ -562,8 +589,8 @@ export function CommandLogsPane({
                     'max-w-56 shrink-0',
                     isActive && 'ring-acc ring-1 ring-inset',
                   )}
-                  title={`${displayName}${isRunning ? ' (running)' : ''}`}
-                  aria-label={`${displayName}${isRunning ? ', running' : ''}`}
+                  title={`${displayName}${portsDescription ? ` — ${portsDescription}` : ''}${isRunning ? ' (running)' : ''}`}
+                  aria-label={`${displayName}${portsDescription ? `, ${portsDescription}` : ''}${isRunning ? ', running' : ''}`}
                 >
                   <span
                     className={clsx(
@@ -573,6 +600,11 @@ export function CommandLogsPane({
                     aria-hidden
                   />
                   <span className="truncate">{displayName}</span>
+                  {portsLabel ? (
+                    <span className="text-ink-3 shrink-0 font-mono text-[10px]">
+                      :{portsLabel}
+                    </span>
+                  ) : null}
                 </Button>
               );
             })}
@@ -589,6 +621,14 @@ export function CommandLogsPane({
             <span className="text-ink-0 truncate font-mono text-xs">
               {activeCommandName}
             </span>
+            {activePortsLabel ? (
+              <span
+                className="text-ink-2 border-line-soft shrink-0 rounded border px-1 py-px font-mono text-[10px]"
+                title={`Configured ${activePortsLabel} for this command`}
+              >
+                {activePortsLabel}
+              </span>
+            ) : null}
             <span
               className={clsx(
                 'ml-auto flex shrink-0 items-center gap-1 text-[10px] font-semibold tracking-wide uppercase',

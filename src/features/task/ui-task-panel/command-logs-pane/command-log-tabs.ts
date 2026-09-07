@@ -1,5 +1,8 @@
+import type {
+  CommandRunStatus,
+  ProjectCommand,
+} from '@shared/run-command-types';
 import { getRunCommandLogLineCount } from '@/stores/task-messages';
-import type { ProjectCommand } from '@shared/run-command-types';
 import type { RunCommandLogs } from '@/stores/task-messages';
 
 export function buildCommandLogTabs({
@@ -47,6 +50,56 @@ export function buildCommandLogTabs({
     );
 
   return [...configuredTabs, ...historicalTabs];
+}
+
+/**
+ * Effective (runtime) ports per command id, from the main process run status.
+ *
+ * These are resolved by `run-command-service` and account for
+ * `use-available-port` reassignment, so they beat `ProjectCommand.ports`
+ * (the declared config) as "the port the user can actually open".
+ *
+ * Only *running* commands are included: a tracked process that exits on its own
+ * keeps its ports on the status entry, which would otherwise advertise a port
+ * nothing is listening on.
+ */
+export function buildCommandPortsById(
+  commands: Pick<CommandRunStatus, 'id' | 'ports' | 'status'>[] | undefined,
+): Map<string, number[]> {
+  const map = new Map<string, number[]>();
+  for (const entry of commands ?? []) {
+    if (entry.status !== 'running') continue;
+    const ports = (entry.ports ?? []).filter(
+      (port) => Number.isInteger(port) && port > 0 && port <= 65_535,
+    );
+    if (ports.length > 0) map.set(entry.id, ports);
+  }
+  return map;
+}
+
+export function formatCommandPorts(ports: number[] | undefined): string | null {
+  if (!ports || ports.length === 0) return null;
+  return ports.join(', ');
+}
+
+/** "port 3000" / "ports 3000, 9229" */
+export function describeCommandPorts(
+  ports: number[] | undefined,
+): string | null {
+  const label = formatCommandPorts(ports);
+  if (!label || !ports) return null;
+  return `${ports.length > 1 ? 'ports' : 'port'} ${label}`;
+}
+
+export function commandPortsMatchQuery({
+  ports,
+  query,
+}: {
+  ports: number[] | undefined;
+  query: string;
+}): boolean {
+  if (!ports || !query) return false;
+  return ports.some((port) => String(port).includes(query));
 }
 
 export function getCommandLogsEmptyText({

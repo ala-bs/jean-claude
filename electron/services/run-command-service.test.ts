@@ -727,6 +727,46 @@ describe('resolveEffectivePorts', () => {
       }),
     ).toEqual([8081]);
   });
+
+  it('uses the allocated port when custom args hide it from the command text', () => {
+    expect(
+      resolveEffectivePorts({
+        declaredPorts: [3000],
+        // `portOverrideArgs: '-p {PORT}'` produces no `--port <n>` to parse.
+        commandOverride: 'pnpm dev -p 3007',
+        allocatedPort: 3007,
+      }),
+    ).toEqual([3007]);
+  });
+
+  it('wins over the env override and the rewritten command text', () => {
+    // All three are derived from the same allocation, but the allocated port is
+    // the source of truth: it survives args formats the regex cannot parse.
+    expect(
+      resolveEffectivePorts({
+        declaredPorts: [3000],
+        allocatedPort: 3007,
+        envOverrides: { PORT: '4000' },
+        portEnvVarName: 'PORT',
+      }),
+    ).toEqual([3007]);
+    expect(
+      resolveEffectivePorts({
+        declaredPorts: [3000],
+        allocatedPort: 3007,
+        commandOverride: 'pnpm dev --port 4000',
+      }),
+    ).toEqual([3007]);
+  });
+
+  it.each([99_999, 0, -1, 3007.5])(
+    'ignores the invalid allocated port %s',
+    (allocatedPort) => {
+      expect(
+        resolveEffectivePorts({ declaredPorts: [3000], allocatedPort }),
+      ).toEqual([3000]);
+    },
+  );
 });
 
 describe('runCommandService staged group runs', () => {

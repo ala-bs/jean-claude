@@ -103,13 +103,29 @@ export function resolveEffectivePorts({
   commandOverride,
   envOverrides,
   portEnvVarName,
+  allocatedPort,
 }: {
   declaredPorts: number[];
   commandOverride?: string;
   envOverrides?: Record<string, string>;
   /** The env var this command uses to receive an overridden port, if any. */
   portEnvVarName?: string | null;
+  /**
+   * The port the conflict resolver actually allocated. Authoritative: custom
+   * `portOverrideArgs` (e.g. `-p {PORT}`) or an inline `{PORT}` placeholder do
+   * not produce a `--port <n>` the regex below can recover.
+   */
+  allocatedPort?: number;
 }): number[] {
+  if (
+    allocatedPort !== undefined &&
+    Number.isInteger(allocatedPort) &&
+    allocatedPort > 0 &&
+    allocatedPort <= 65_535
+  ) {
+    return [allocatedPort];
+  }
+
   const envValue = portEnvVarName ? envOverrides?.[portEnvVarName] : undefined;
   const fromEnv = envValue === undefined ? null : Number(envValue);
   if (
@@ -823,14 +839,21 @@ export class RunCommandService {
     commands: ProjectCommand[];
     portsInUse: PortInUse[];
   }): Promise<
-    Map<string, { envOverrides?: Record<string, string>; command?: string }>
+    Map<
+      string,
+      {
+        envOverrides?: Record<string, string>;
+        command?: string;
+        port: number;
+      }
+    >
   > {
     const commandIdsWithConflicts = new Set(
       portsInUse.map((portInfo) => portInfo.commandId),
     );
     const overrides = new Map<
       string,
-      { envOverrides?: Record<string, string>; command?: string }
+      { envOverrides?: Record<string, string>; command?: string; port: number }
     >();
     const excludedPorts = new Set(commands.flatMap((command) => command.ports));
 
@@ -850,6 +873,7 @@ export class RunCommandService {
         command: usesArgs
           ? this.getCommandWithPortArgs({ command, port: portValue })
           : undefined,
+        port,
       });
     }
 
@@ -957,6 +981,7 @@ export class RunCommandService {
     context,
     envOverrides = {},
     commandOverride,
+    allocatedPort,
   }: {
     taskId: string;
     workingDir: string;
@@ -964,6 +989,7 @@ export class RunCommandService {
     context: RunCommandContext;
     envOverrides?: Record<string, string>;
     commandOverride?: string;
+    allocatedPort?: number;
   }): Promise<TrackedProcess> {
     const commandValue = commandOverride ?? command.command;
     dbg.runCommand('Spawning command via PTY: %s', commandValue);
@@ -975,6 +1001,7 @@ export class RunCommandService {
       commandOverride,
       envOverrides,
       portEnvVarName: this.getPortOverrideEnvVar(command),
+      allocatedPort,
     });
     const commandEnv = await this.getCommandEnv({ command, context });
 
@@ -1326,6 +1353,7 @@ export class RunCommandService {
       context,
       envOverrides: portOverride?.envOverrides,
       commandOverride: portOverride?.command,
+      allocatedPort: portOverride?.port,
     });
 
     this.notifyStatusChange(taskId);
@@ -1612,6 +1640,7 @@ export class RunCommandService {
               context,
               envOverrides: portOverride?.envOverrides,
               commandOverride: portOverride?.command,
+              allocatedPort: portOverride?.port,
             });
             return { entry, tracked };
           }),
@@ -1781,6 +1810,7 @@ export class RunCommandService {
             context,
             envOverrides: portOverride?.envOverrides,
             commandOverride: portOverride?.command,
+            allocatedPort: portOverride?.port,
           });
 
           this.notifyStatusChange(taskId);
