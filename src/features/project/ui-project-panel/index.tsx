@@ -1,4 +1,12 @@
-import { ArrowLeft, ExternalLink, FolderGit2, GitBranch, ListTodo, Settings } from 'lucide-react';
+import {
+  ArrowLeft,
+  ExternalLink,
+  FolderGit2,
+  GitBranch,
+  ListTodo,
+  RotateCw,
+  Settings,
+} from 'lucide-react';
 import { getEditorLabel, useEditorSetting } from '@/hooks/use-settings';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
@@ -9,9 +17,11 @@ import {
   useProjectCommitCount,
   useProjectGitAutoFetch,
   useProjectGitGraphPages,
+  useProjectGitRefresh,
   useProjectGitStatus,
 } from '@/hooks/use-project-git';
 import { useProject, useProjectBranches } from '@/hooks/use-projects';
+import { cleanIpcError } from '@/lib/ipc-error';
 import { CommitHistory } from './commit-history';
 import { CommitPanel } from './commit-panel';
 import type { ProjectGitLogFilter } from '@shared/types';
@@ -22,6 +32,7 @@ import { useCommands } from '@/common/hooks/use-commands';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useSetBacklogSelectedProjectId } from '@/stores/backlog-overlay-draft';
+import { useToastStore } from '@/stores/toasts';
 
 /**
  * Turns a git remote into an `owner/repo` label.
@@ -50,6 +61,8 @@ function ProjectHeader({
   onOpenInEditor,
   editorLabel,
   onBack,
+  onRefresh,
+  isRefreshing,
   children,
 }: {
   name: string;
@@ -60,6 +73,9 @@ function ProjectHeader({
   onOpenInEditor: () => void;
   editorLabel: string;
   onBack?: () => void;
+  /** Omitted for non-git projects, where there is no git state to re-read. */
+  onRefresh?: () => void;
+  isRefreshing: boolean;
   children?: React.ReactNode;
 }) {
   const href = remoteUrl ? remoteHref(remoteUrl) : null;
@@ -117,6 +133,22 @@ function ProjectHeader({
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
+          {onRefresh && (
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={isRefreshing}
+              aria-busy={isRefreshing}
+              title="Re-read git state from disk (no network)"
+              aria-label="Refresh git data"
+              className="text-ink-2 hover:bg-glass-light hover:text-ink-0 inline-flex h-[26px] w-[26px] items-center justify-center rounded-md transition-colors disabled:opacity-60"
+            >
+              <RotateCw
+                size={13}
+                className={isRefreshing ? 'animate-spin' : undefined}
+              />
+            </button>
+          )}
           <button
             type="button"
             onClick={onOpenInEditor}
@@ -169,6 +201,19 @@ export function ProjectPanel({
   );
   const open = useOverlaysStore((state) => state.open);
   const setBacklogProjectId = useSetBacklogSelectedProjectId();
+
+  const addToast = useToastStore((state) => state.addToast);
+  const { refresh, isRefreshing } = useProjectGitRefresh(projectId);
+  // Mirrors SyncBar's `run()` helper: a silent failure here would stop the
+  // spinner and change nothing on screen, which reads as "the button is broken".
+  const runRefresh = useCallback(() => {
+    void refresh().catch((error: unknown) => {
+      addToast({
+        message: `Refresh failed: ${cleanIpcError(error)}`,
+        type: 'error',
+      });
+    });
+  }, [addToast, refresh]);
 
   const { data: status } = useProjectGitStatus(projectId);
   const { data: branches } = useProjectBranches(projectId);
@@ -223,6 +268,11 @@ export function ProjectPanel({
         shortcut: 'escape',
         handler: () => setSelectedHash(null),
         hideInCommandPalette: true,
+      },
+      status?.isGitRepository !== false && {
+        label: 'Refresh Git Data',
+        section: 'Project',
+        handler: runRefresh,
       },
       // Only when we came from a task and no commit diff is open, so Escape
       // still closes the diff first.
@@ -286,6 +336,8 @@ export function ProjectPanel({
         }}
         editorLabel={editorLabel}
         onBack={backToTaskId ? goBackToTask : undefined}
+        onRefresh={isGitRepository ? runRefresh : undefined}
+        isRefreshing={isRefreshing}
       >
         <ProjectLogoBackground project={project} showColorFallback />
       </ProjectHeader>

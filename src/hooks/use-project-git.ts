@@ -13,9 +13,9 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 
+import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import type { QueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
 
 /** How often the panel re-runs `git fetch` while it stays mounted. */
 export const PROJECT_GIT_AUTO_FETCH_INTERVAL_MS = 60_000;
@@ -80,20 +80,37 @@ export function projectCommitDetailKey(
  * The branch list is included because fetch/pull can create or delete branches:
  * leaving it out let the switcher serve a stale 30s-cached list that omitted
  * branches the user had just fetched.
+ *
+ * Returns a promise that settles once the *active* queries have refetched, so
+ * callers can drive a spinner off real work. Callers that only want
+ * fire-and-forget invalidation can ignore it.
  */
-function invalidateProjectGit(queryClient: QueryClient, projectId: string) {
-  queryClient.invalidateQueries({ queryKey: projectGitStatusKey(projectId) });
-  // Deliberately the key *prefix*, without the filter segment: the graph and
-  // count are cached per filter, so passing a full key would refresh only the
-  // unfiltered view and leave whatever the user is actually looking at stale.
-  queryClient.invalidateQueries({ queryKey: ['project-git-graph', projectId] });
-  queryClient.invalidateQueries({
-    queryKey: ['project-commit-count', projectId],
-  });
-  queryClient.invalidateQueries({ queryKey: ['project-branches', projectId] });
-  queryClient.invalidateQueries({
-    queryKey: ['project-current-branch', projectId],
-  });
+export function invalidateProjectGit(
+  queryClient: QueryClient,
+  projectId: string,
+): Promise<void> {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: projectGitStatusKey(projectId) }),
+    // Deliberately the key *prefix*, without the filter segment: the graph and
+    // count are cached per filter, so passing a full key would refresh only the
+    // unfiltered view and leave whatever the user is actually looking at stale.
+    queryClient.invalidateQueries({
+      queryKey: ['project-git-graph', projectId],
+    }),
+    queryClient.invalidateQueries({
+      queryKey: ['project-commit-count', projectId],
+    }),
+    queryClient.invalidateQueries({ queryKey: ['project-branches', projectId] }),
+    queryClient.invalidateQueries({
+      queryKey: ['project-current-branch', projectId],
+    }),
+    // A checkout or pull rewrites the working tree, so the chip popover's file
+    // list is stale too. Defaults to refetchType 'active', so this costs
+    // nothing while the popover is closed and its query does not exist.
+    queryClient.invalidateQueries({
+      queryKey: ['project-working-tree-files', projectId],
+    }),
+  ]).then(() => undefined);
 }
 
 export function useProjectGitStatus(projectId: string | null) {
@@ -259,6 +276,44 @@ export function useProjectGitGraphPages(
     staleTime: 15_000,
     refetchOnWindowFocus: true,
   });
+}
+
+/**
+ * Re-reads the project pane's git queries (status, graph, branches, working
+ * tree) without touching the remote.
+ *
+ * This is the "my repo changed under the app" escape hatch: commits made in a
+ * terminal, a branch checked out elsewhere. It is deliberately local-only so it
+ * stays instant and cannot fail on credentials the way `useProjectGitFetch`
+ * can.
+ *
+ * Scope is git only — the project record and the tasks rail are served by the
+ * separate cache-resource layer and are not touched here, which is why this is
+ * named `…GitRefresh` rather than something pane-wide.
+ *
+ * `refresh` rejects if any refetch fails, so callers can toast; `isRefreshing`
+ * is cleared either way.
+ */
+export function useProjectGitRefresh(projectId: string) {
+  const queryClient = useQueryClient();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const refresh = async () => {
+    setIsRefreshing(true);
+    try {
+      // invalidateQueries swallows fetch errors by default, so failures would
+      // otherwise be invisible: stop the spinner and change nothing on screen.
+      await invalidateProjectGit(queryClient, projectId);
+      await queryClient.refetchQueries(
+        { queryKey: projectGitStatusKey(projectId) },
+        { throwOnError: true },
+      );
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  return { refresh, isRefreshing };
 }
 
 /**
