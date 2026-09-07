@@ -624,6 +624,7 @@ export const iosIdbAdapter = {
       elapsedMs(startedAt),
     );
 
+    let coreSimulatorFallbackReason: string | null = null;
     if (process.env.JC_MOBILE_PREVIEW_IOS_RAW_STREAM !== '1') {
       if (process.env.JC_MOBILE_PREVIEW_IOS_CORE_SIMULATOR !== '0') {
         try {
@@ -632,7 +633,10 @@ export const iosIdbAdapter = {
           );
         } catch (error) {
           params.signal?.throwIfAborted();
-          // Fall back to simctl screenshots below.
+          // Fall back to simctl screenshots below, but surface why.
+          coreSimulatorFallbackReason = `Using simctl screenshots (lower frame rate): the CoreSimulator framebuffer stream could not start. ${
+            error instanceof Error ? error.message : String(error)
+          }`;
           debug(
             'iOS preview CoreSimulator framebuffer start FAILED, falling back to simctl screenshots deviceId=%s elapsedMs=%d error=%s stack=%s',
             params.deviceId,
@@ -662,7 +666,13 @@ export const iosIdbAdapter = {
         screenshotSize.height,
         elapsedMs(startedAt),
       );
-      return ownIosStream(createScreenshotStream(params, screenshotSize));
+      return ownIosStream(
+        createScreenshotStream(
+          params,
+          screenshotSize,
+          coreSimulatorFallbackReason,
+        ),
+      );
     }
 
     await assertIdbAvailable(params.signal);

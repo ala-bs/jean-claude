@@ -4,6 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
+import { useCallback } from 'react';
 import { useValue } from '@legendapp/state/react';
 
 
@@ -1176,6 +1177,25 @@ export function usePullRequestPolicyEvaluations(
   });
 }
 
+/**
+ * Invalidate the PR detail query. Useful when something outside a PR mutation
+ * (e.g. a CI build actually starting) makes the PR's policy-derived state stale.
+ */
+export function useInvalidatePullRequestDetails(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
+  const queryClient = useQueryClient();
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
+
+  return useCallback(() => {
+    queryClient.invalidateQueries({
+      queryKey: ['pull-request', ...getPrQueryKey(projectId, prId, repoInfo)],
+    });
+  }, [queryClient, projectId, prId, repoInfo]);
+}
+
 export function useRequeuePolicyEvaluation(
   projectId: string,
   prId: number,
@@ -1197,6 +1217,12 @@ export function useRequeuePolicyEvaluation(
           'pull-request-policy-evaluations',
           ...getPrQueryKey(projectId, prId, repoInfo),
         ],
+      });
+      // CI just started, so the PR's merge/policy status is stale too.
+      // Only the PR detail query carries policy-derived state; the list
+      // queries return summaries that a requeue cannot change.
+      queryClient.invalidateQueries({
+        queryKey: ['pull-request', ...getPrQueryKey(projectId, prId, repoInfo)],
       });
     },
   });

@@ -14,6 +14,7 @@ import {
   MERGE_STRATEGY_LABELS,
   type PullRequestRepoInfo,
   useCurrentAzureUser,
+  useInvalidatePullRequestDetails,
   usePullRequestPolicyEvaluations,
   useRequeuePolicyEvaluation,
   useSetAutoComplete,
@@ -50,6 +51,11 @@ export function PrAutoComplete({
     repoInfo,
   );
   const previousEvaluationsRef = useRef(evaluations);
+  const invalidatePrDetails = useInvalidatePullRequestDetails(
+    projectId,
+    pr.id,
+    repoInfo,
+  );
 
   const allowedStrategies = useMemo(
     () => getAllowedMergeStrategies(evaluations),
@@ -68,22 +74,26 @@ export function PrAutoComplete({
 
   useEffect(() => {
     if (previousEvaluationsRef.current === evaluations) return;
+    // A tracked policy leaving the "queued, no build yet" state means CI
+    // actually started, so the PR's policy-derived state is now stale.
+    const started = [...queuedIds].filter((id) => {
+      const evaluation = evaluations.find((e) => e.evaluationId === id);
+      return (
+        !evaluation ||
+        evaluation.status !== 'queued' ||
+        !!evaluation.context?.buildId
+      );
+    });
     setQueuedIds((prev) => {
       const next = new Set(prev);
-      for (const id of prev) {
-        const evaluation = evaluations.find((e) => e.evaluationId === id);
-        if (
-          !evaluation ||
-          evaluation.status !== 'queued' ||
-          evaluation.context?.buildId
-        ) {
-          next.delete(id);
-        }
-      }
+      for (const id of started) next.delete(id);
       return next.size === prev.size ? prev : next;
     });
+    if (started.length > 0) invalidatePrDetails();
     previousEvaluationsRef.current = evaluations;
-  }, [evaluations]);
+    // `queuedIds` is a dep, but the ref guard above makes this a no-op unless
+    // the evaluations themselves changed.
+  }, [evaluations, invalidatePrDetails, queuedIds]);
 
   const pendingCi = useMemo(
     () =>

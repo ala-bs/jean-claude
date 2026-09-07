@@ -34,6 +34,7 @@ import { useDropdownPosition } from '@/common/hooks/use-dropdown-position';
 
 
 
+import { DeleteCommandDialog } from './delete-command-dialog';
 import { PortChipInput } from './port-chip-input';
 import { useDebouncedUpdate } from './use-debounced-update';
 
@@ -98,6 +99,7 @@ export function CommandRow({
   const [hasLocalEnvDraftRows, setHasLocalEnvDraftRows] = useState(false);
   const [hasPendingEnvEdits, setHasPendingEnvEdits] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [portOverrideEditError, setPortOverrideEditError] = useState<
     string | null
@@ -136,7 +138,15 @@ export function CommandRow({
     scheduleUpdate({ [key]: value } as UpdateProjectCommand);
   };
 
-  const handleDelete = () => {
+  // Cancel queued edits up front so a debounced save can't land on a command
+  // the user is about to delete.
+  const handleRequestDelete = () => {
+    cancelUpdate();
+    setIsDeleteConfirmOpen(true);
+  };
+
+  const handleConfirmDelete = () => {
+    setIsDeleteConfirmOpen(false);
     cancelUpdate();
     onDelete();
   };
@@ -583,11 +593,19 @@ export function CommandRow({
         <IconButton
           variant="ghost"
           size="md"
-          onClick={handleDelete}
+          onClick={handleRequestDelete}
           icon={<Trash2 />}
           tooltip="Delete command"
         />
       </div>
+      <DeleteCommandDialog
+        isOpen={isDeleteConfirmOpen}
+        onClose={() => setIsDeleteConfirmOpen(false)}
+        onConfirm={handleConfirmDelete}
+        commandLabel={
+          localName.trim() || localCommand.trim() || 'this command'
+        }
+      />
       {isOpen && (
         <div className="bg-bg-0/30 border-glass-border flex flex-wrap items-start gap-4 border-t px-9 py-3">
           <div className="min-w-56 flex-1">

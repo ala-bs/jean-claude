@@ -12,6 +12,7 @@ const baseInput = {
     id: 'device-1',
     platform: 'ios' as const,
     state: 'booted' as const,
+    kind: 'simulator' as const,
   },
   isExpoApp: true,
   taskId: 'task-1',
@@ -42,6 +43,31 @@ describe('mobile preview auto-launch policy', () => {
       status: 'waiting',
       message: 'Select a device to attach this runtime',
     });
+  });
+
+  it('stays idle on a physical iPhone instead of surfacing the deeplink guard', () => {
+    expect(
+      getMobilePreviewAutoLaunchDecision({
+        ...baseInput,
+        selectedDevice: {
+          ...baseInput.selectedDevice,
+          kind: 'physical' as const,
+        },
+      }),
+    ).toEqual({ status: 'idle', keepCompletedLaunch: true });
+  });
+
+  it('still auto-launches on physical Android hardware', () => {
+    expect(
+      getMobilePreviewAutoLaunchDecision({
+        ...baseInput,
+        selectedDevice: {
+          ...baseInput.selectedDevice,
+          platform: 'android' as const,
+          kind: 'physical' as const,
+        },
+      }).status,
+    ).toBe('launching');
   });
 
   it('keeps vanilla React Native stream available without auto reassignment', () => {

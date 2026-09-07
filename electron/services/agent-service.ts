@@ -487,6 +487,52 @@ function buildReviewPrompt({
   ].join('\n');
 }
 
+/**
+ * Agent Memory context for a follow-up prompt, resolved against the OLD session
+ * state before the prompt is delivered (by restart or by live injection).
+ */
+type FollowUpCaptureContext = {
+  admittedCapture: ReturnType<typeof admitAgentMemoryPromptCapture> & {
+    submissionId: string;
+  };
+  previousResultFallback: string | null;
+  previousResultSnapshot?: Promise<string | null>;
+};
+
+/**
+ * Model and thinking effort a run should use, given the session's swap
+ * overrides and the step's stored preferences.
+ *
+ * Shared by `runBackend` (which applies them at `query()` time) and
+ * `tryContinueRunWithPrompt` (which compares them against what the live run was
+ * actually started with). These MUST stay in lockstep: if the comparison
+ * recomputed this differently, a false mismatch would silently refuse every
+ * injection and fall back to killing the background jobs.
+ */
+function resolveRunModelSettings(
+  session: Pick<
+    ActiveSession,
+    'backendType' | 'requestedBackendType' | 'swapModel' | 'swapThinkingEffort'
+  >,
+  step: {
+    modelPreference?: string | null;
+    thinkingEffort?: ThinkingEffort | null;
+  },
+): {
+  modelPreference: string | undefined;
+  thinkingEffort: ThinkingEffort | undefined;
+} {
+  const backendChanged = session.backendType !== session.requestedBackendType;
+  return {
+    modelPreference:
+      session.swapModel ??
+      (backendChanged ? undefined : (step.modelPreference ?? undefined)),
+    thinkingEffort:
+      session.swapThinkingEffort ??
+      (backendChanged ? undefined : (step.thinkingEffort ?? undefined)),
+  };
+}
+
 // --- Active session tracking ---
 
 interface ActiveSession {
@@ -499,6 +545,8 @@ interface ActiveSession {
   backendType: AgentBackendType;
   usageFeature: AiUsageFeature;
   currentModel: string | null;
+  /** Thinking effort the live run was started with (see `runBackend`). */
+  currentThinkingEffort: ThinkingEffort | null;
   requestedBackendType: AgentBackendType;
   swapModel?: string;
   swapThinkingEffort?: ThinkingEffort;
@@ -939,7 +987,10 @@ class AgentService {
         });
       }
       this.sessions.delete(stepId);
-      this.autoAcceptSteps.delete(stepId);
+      // NOTE: `autoAcceptSteps` is deliberately NOT cleared here. A session is
+      // torn down at the end of every turn, so clearing it would silently flip
+      // auto-accept off after each turn. It stays on until the user toggles it
+      // off (`setAutoAccept(stepId, false)`) or the app restarts.
       this.permissionRefreshGeneration.delete(stepId);
       this.permissionRefreshQueue.delete(stepId);
     }
@@ -1368,6 +1419,7 @@ class AgentService {
       backendType,
       usageFeature: getUsageFeatureForStep(step.type),
       currentModel: swapModel ?? step.modelPreference,
+      currentThinkingEffort: swapThinkingEffort ?? step.thinkingEffort ?? null,
       requestedBackendType: requestedBackend,
       swapModel,
       swapThinkingEffort,
@@ -1442,6 +1494,237 @@ class AgentService {
         stepId,
         error,
       );
+    }
+  }
+
+  /**
+   * Fire-and-forget the Agent Memory capture for a follow-up prompt. Shared by
+   * the restart path and the continue-live-run path.
+   */
+  private captureFollowUpAgentMemory(
+    session: ActiveSession,
+    stepId: string,
+    captureContext: FollowUpCaptureContext,
+  ): void {
+    if (!session.agentMemoryCaptureEligible) return;
+    const { admittedCapture, previousResultFallback, previousResultSnapshot } =
+      captureContext;
+    const captureProjectId = session.projectId;
+    const capturedSession = session;
+    const { taskId } = session;
+    void (previousResultSnapshot ?? Promise.resolve(null)).then(
+      (previousAgentResult) =>
+        captureAgentMemoryPromptSubmissionSafe({
+          source: 'follow-up-prompt',
+          sourceId: `follow-up-prompt:${admittedCapture.submissionId}`,
+          projectId: captureProjectId,
+          taskId,
+          stepId,
+          userText: admittedCapture.userText,
+          previousAgentResult:
+            previousAgentResult ??
+            previousResultFallback ??
+            capturedSession.previousResultFallback ??
+            null,
+          reviews: admittedCapture.reviews,
+        }),
+    );
+  }
+
+  /**
+   * Continue the live run with `parts`, doing the status bookkeeping that
+   * `performSendMessage` would otherwise do for a fresh session.
+   *
+   * Returns null when the run could not take the prompt, in which case the
+   * caller falls back to stop-then-restart.
+   */
+  private async continueRunWithPrompt(
+    stepId: string,
+    parts: PromptPart[],
+    captureContext?: FollowUpCaptureContext,
+  ): Promise<{ started: Promise<void>; completion: Promise<void> } | null> {
+    const session = this.sessions.get(stepId);
+    if (!session) return null;
+
+    const delivered = await this.tryContinueRunWithPrompt(
+      stepId,
+      session,
+      parts,
+    );
+    if (!delivered) return null;
+
+    // The prompt is already inside the CLI's stdin — it CANNOT be un-sent.
+    // If the session went stale across the await (a concurrent stop), falling
+    // through to the restart path would re-send the same prompt and run it
+    // twice. Report it as delivered instead and let the stop finish; the
+    // interrupt the user asked for is the correct visible outcome.
+    if (this.sessions.get(stepId) !== session || session.stopRequested) {
+      dbg.agentSession(
+        'Follow-up prompt for step %s was delivered but its session went away (concurrent stop) — not restarting to avoid running it twice',
+        stepId,
+      );
+      return { started: Promise.resolve(), completion: Promise.resolve() };
+    }
+
+    const { taskId } = session;
+
+    // The previous turn was finalized while background work kept the run alive.
+    // A new user turn is starting on that same run, so undo the finalization —
+    // otherwise `reactivateAfterFinalizedTurn` would race us on the next event.
+    //
+    // `lastTerminalStatus` is deliberately NOT cleared: it is the fallback
+    // `closeReactivatedStep` uses to close the step if the run ends without
+    // producing another result. Clearing it would leave the step stuck
+    // `running` forever in exactly that case.
+    await StepService.update(stepId, { status: 'running' });
+    // Mirrors `reactivateAfterFinalizedTurn`: a background subagent can raise a
+    // jc-mcp question AFTER the turn finalized, and that channel bypasses
+    // `processEvent` entirely — so the agent may be blocked on an open question
+    // card right now. Forcing 'running' would overwrite the task's 'waiting'
+    // state and hide that the user still owes an answer.
+    if (session.pendingRequests.length === 0) {
+      await StepService.syncTaskStatus(taskId);
+    }
+    // Flip the flag only once the writes above have landed, so a fast result
+    // for the injected turn can't be finalized and then overwritten by us.
+    session.turnFinalized = false;
+    this.emitEvent(taskId, stepId, {
+      type: 'status',
+      status: session.pendingRequests.length > 0 ? 'waiting' : 'running',
+    });
+
+    if (captureContext) {
+      this.captureFollowUpAgentMemory(session, stepId, captureContext);
+    }
+
+    dbg.agentSession(
+      'Continued live run for step %s with a follow-up prompt (no interrupt)',
+      stepId,
+    );
+
+    // The prompt now streams through the run that is already being tracked, so
+    // its completion is that run's completion. Note this resolves when the CLI
+    // process exits (after background work drains), not at this turn's
+    // `result` — later than the restart path, never earlier.
+    const completion =
+      this.backendRunCompletions.get(stepId)?.promise ?? Promise.resolve();
+    return {
+      started: Promise.resolve(),
+      completion: completion.catch(() => undefined),
+    };
+  }
+
+  /**
+   * Try to continue the live run with `parts` instead of stopping it.
+   *
+   * A run that spawned background tasks keeps its CLI process (and therefore
+   * those tasks) alive past the turn's `result`. During that window the step
+   * reads as `completed`, so the composer offers Send rather than Queue — and
+   * the old stop-then-restart path would abort the process and silently orphan
+   * every background job. Feeding the prompt into the run's still-open input
+   * stream keeps them running and lets the new turn stream into a fresh prompt
+   * group on the same session.
+   *
+   * Deliberately narrow: only when the previous turn is finalized (nothing is
+   * mid-turn) AND background work is still live AND the run's own settings
+   * still match the step's. Anything else keeps the long-standing restart
+   * semantics, because the backend only applies those settings at run start.
+   *
+   * Returns true only once the prompt is in the run's input stream — at which
+   * point it can no longer be un-sent.
+   */
+  private async tryContinueRunWithPrompt(
+    stepId: string,
+    session: ActiveSession,
+    parts: PromptPart[],
+    // Callers inside the result handler already know the turn is over even
+    // though `turnFinalized` has not been set yet.
+    { turnIsOver = session.turnFinalized }: { turnIsOver?: boolean } = {},
+  ): Promise<boolean> {
+    if (session.stopRequested || session.hasTerminalError) return false;
+    if (!turnIsOver) return false;
+    if (session.backgroundTasks.length === 0) return false;
+
+    const runHandle = session.runHandle;
+    if (!runHandle) return false;
+
+    const capability = session.provider.capabilities.agent.followUpPrompt;
+    if (!capability?.supported) return false;
+
+    const step = await TaskStepRepository.findById(stepId);
+    if (!step) return false;
+
+    // Model and thinking effort are baked into the run at `query()` time, so an
+    // injected prompt would silently keep the old ones. If the user changed
+    // either since this run started, restart so the change takes effect.
+    // Resolved through the SAME helper `runBackend` uses, so this can only
+    // report a real change and never a spurious one.
+    const wanted = resolveRunModelSettings(session, step);
+    const wantedModel = wanted.modelPreference ?? null;
+    const wantedEffort = wanted.thinkingEffort ?? null;
+    if (
+      wantedModel !== session.currentModel ||
+      wantedEffort !== session.currentThinkingEffort
+    ) {
+      dbg.agentSession(
+        'Model/effort changed for step %s since its run started (%s/%s -> %s/%s) — restarting instead of continuing',
+        stepId,
+        session.currentModel,
+        session.currentThinkingEffort,
+        wantedModel,
+        wantedEffort,
+      );
+      return false;
+    }
+
+    // `runBackend` applies this to every prompt it sends; the injected prompt
+    // must get the same treatment or per-prompt prefaces silently vanish
+    // exactly when background jobs are live.
+    const project = await ProjectRepository.findById(session.projectId);
+    // Anything unusual → restart, rather than deliver a prompt that silently
+    // differs from what `runBackend` would have sent.
+    if (!project) return false;
+    const effectiveParts =
+      step.type === 'feature-map'
+        ? parts
+        : await applyConfiguredPromptPreface({
+            parts,
+            projectPath: project.path,
+            isInitialPrompt: false,
+            backend: session.backendType,
+            model: session.currentModel ?? 'default',
+          });
+
+    // Re-check after the awaits above: a stop may have landed while we were
+    // reading the step/project, and delivering into a dying run loses the
+    // prompt with no fallback.
+    if (
+      this.sessions.get(stepId) !== session ||
+      session.stopRequested ||
+      session.abortController.signal.aborted
+    ) {
+      return false;
+    }
+
+    try {
+      const accepted = await capability.implementation.send({
+        handle: runHandle,
+        parts: effectiveParts,
+      });
+      if (!accepted) {
+        dbg.agentSession(
+          'Live run for step %s refused the follow-up prompt (input stream closed) — falling back to restart',
+          stepId,
+        );
+      }
+      return accepted;
+    } catch (error) {
+      dbg.agentSession(
+        'Failed to inject follow-up prompt into live run for step %s, falling back to restart: %O',
+        stepId,
+        error,
+      );
+      return false;
     }
   }
 
@@ -1633,12 +1916,10 @@ class AgentService {
       autoAccept: this.autoAcceptSteps.has(stepId),
     });
 
-    const backendChanged = session.backendType !== session.requestedBackendType;
-    const modelPreference =
-      session.swapModel ?? (backendChanged ? undefined : step?.modelPreference);
-    const thinkingEffort =
-      session.swapThinkingEffort ??
-      (backendChanged ? undefined : step?.thinkingEffort);
+    const { modelPreference, thinkingEffort } = resolveRunModelSettings(
+      session,
+      step,
+    );
     const normalizedThinkingEffort = normalizeThinkingEffortForModel({
       backend: session.backendType,
       model: modelPreference ?? 'default',
@@ -1646,6 +1927,11 @@ class AgentService {
       allowCopilotEffortWithoutCapabilities: true,
     });
     session.currentModel = modelPreference ?? null;
+    // Recorded so a follow-up can tell whether the user changed model/effort
+    // since this run started. The backend applies these at `query()` time, so a
+    // prompt injected into the live run would silently keep the old settings —
+    // `tryContinueRunWithPrompt` refuses and restarts instead when they differ.
+    session.currentThinkingEffort = thinkingEffort ?? null;
 
     let jcMcpRegistrationId: string | null = null;
     let runHandle: AgentRunHandle | null = null;
@@ -2062,6 +2348,11 @@ class AgentService {
           reviews: queued.capture.reviews,
         });
       }
+      // NOTE: no injection attempt here. This runs AFTER the run handle has
+      // fully drained and been cleaned up, so the backend has already closed
+      // the prompt stream and dropped the session — injection could only ever
+      // return false. Worse, `status` was consumed above, so a hypothetical
+      // success would leave the step running against a dead run.
       await this.runBackend(stepId, queued.parts, session);
       return;
     }
@@ -2225,7 +2516,15 @@ class AgentService {
           type: 'permission',
           permissionRequest: request,
         });
-        if (this.autoAcceptSteps.has(stepId)) {
+        // A request that would flip the interaction mode on approval (plan
+        // mode's ExitPlanMode) must always be shown. Auto-accept now outlives
+        // the run that enabled it, so without this the user could turn on
+        // auto-accept during an `auto` turn and have a later plan silently
+        // approved and executed without ever seeing it.
+        const changesModeOnAllow = Boolean(
+          request.sessionAllowButton?.setModeOnAllow,
+        );
+        if (this.autoAcceptSteps.has(stepId) && !changesModeOnAllow) {
           dbg.agentPermission(
             'Auto-accepting request %s for step %s (session auto-accept)',
             request.requestId,
@@ -2340,6 +2639,25 @@ class AgentService {
               previousAgentResult: result.text ?? null,
               reviews: capture.reviews,
             });
+          }
+          // Same reason as `beginSendMessage`: while background work is live
+          // the run is still up, and `runBackend` would start a SECOND
+          // concurrent run on this step — overwriting `runHandle` and
+          // orphaning the one that owns the background tasks.
+          if (
+            await this.tryContinueRunWithPrompt(stepId, session, queuedParts, {
+              turnIsOver: true,
+            })
+          ) {
+            // This turn is never finalized (we return before the finalize
+            // block), so `lastTerminalStatus` would stay null — and that is the
+            // ONLY fallback `closeReactivatedStep` has for closing the step if
+            // the injected prompt is never answered. Without this the step is
+            // stuck `running` forever with no live session.
+            // Assigned, not `??=`: a stale 'errored' from an earlier turn would
+            // otherwise survive and close this successful step as failed.
+            session.lastTerminalStatus = 'completed';
+            return;
           }
           return await this.runBackend(stepId, queuedParts, session);
         }
@@ -3261,6 +3579,19 @@ class AgentService {
       : undefined;
     try {
       if (this.isRunningOrStarting(stepId)) {
+        // Preferred path when background work is still live: hand the prompt to
+        // the running session instead of tearing it down (which kills the
+        // background jobs). Falls through to the restart below if the run can't
+        // take it.
+        const continued = await this.continueRunWithPrompt(
+          stepId,
+          parts,
+          captureContext,
+        );
+        if (continued) {
+          completeRegistration();
+          return continued;
+        }
         await this.stop(stepId);
       }
 
@@ -3331,13 +3662,7 @@ class AgentService {
     parts: PromptPart[],
     markStarted: () => void,
     completeRegistration: () => void,
-    captureContext?: {
-      admittedCapture: ReturnType<typeof admitAgentMemoryPromptCapture> & {
-        submissionId: string;
-      };
-      previousResultFallback: string | null;
-      previousResultSnapshot?: Promise<string | null>;
-    },
+    captureContext?: FollowUpCaptureContext,
   ): Promise<void> {
     let session: ActiveSession | null = null;
     try {
@@ -3351,31 +3676,8 @@ class AgentService {
       this.emitEvent(taskId, stepId, { type: 'status', status: 'running' });
       completeRegistration();
 
-      if (captureContext && session.agentMemoryCaptureEligible) {
-        const {
-          admittedCapture,
-          previousResultFallback,
-          previousResultSnapshot,
-        } = captureContext;
-        const captureProjectId = session.projectId;
-        const capturedSession = session;
-        void (previousResultSnapshot ?? Promise.resolve(null)).then(
-          (previousAgentResult) =>
-            captureAgentMemoryPromptSubmissionSafe({
-              source: 'follow-up-prompt',
-              sourceId: `follow-up-prompt:${admittedCapture.submissionId}`,
-              projectId: captureProjectId,
-              taskId,
-              stepId,
-              userText: admittedCapture.userText,
-              previousAgentResult:
-                previousAgentResult ??
-                previousResultFallback ??
-                capturedSession.previousResultFallback ??
-                null,
-              reviews: admittedCapture.reviews,
-            }),
-        );
+      if (captureContext) {
+        this.captureFollowUpAgentMemory(session, stepId, captureContext);
       }
 
       dbg.agentSession('Sending follow-up message for step %s', stepId);

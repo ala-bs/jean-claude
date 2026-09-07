@@ -132,6 +132,7 @@ const CAPABILITY_KEYS = {
     'runtimeModeSwitch',
     'sessionAllowedTools',
     'permissionRuleUpdates',
+    'followUpPrompt',
     'resourceTracking',
   ],
   generation: ['text', 'structured'],
@@ -234,6 +235,15 @@ describe('agent backend providers', () => {
       expect(
         provider.capabilities.agent.permissionRuleUpdates?.supported,
       ).toBe(type !== 'codex');
+    }
+  });
+
+  it('only supports live follow-up prompts on backends with a streaming input', () => {
+    for (const type of BACKEND_TYPES) {
+      const provider = getAgentBackendProvider(type);
+      expect(provider.capabilities.agent.followUpPrompt?.supported).toBe(
+        type === 'claude-code',
+      );
     }
   });
 

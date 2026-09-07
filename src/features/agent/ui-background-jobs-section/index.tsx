@@ -1,18 +1,17 @@
 import { useTaskMessagesStore } from '@/stores/task-messages';
 
 /**
- * Live indicator for background jobs the agent is still waiting on
+ * Live section for background jobs the agent is still waiting on
  * (background subagents, `run_in_background` shells, Monitor).
  *
  * The Claude CLI ends a turn with a `result` while background work keeps
  * streaming, so without this the step reads as "done" while the agent is
  * really parked waiting on its own jobs.
+ *
+ * Rendered inside the prompt group's agent section, same shape as the
+ * subagents / tools sections.
  */
-export function BackgroundJobsIndicator({
-  stepId,
-}: {
-  stepId: string | null;
-}) {
+export function BackgroundJobsSection({ stepId }: { stepId: string | null }) {
   const tasks = useTaskMessagesStore((state) =>
     stepId ? state.backgroundTasksByStepId[stepId] : undefined,
   );
@@ -20,10 +19,16 @@ export function BackgroundJobsIndicator({
   if (!tasks || tasks.length === 0) return null;
 
   return (
-    <div className="border-glass-border bg-bg-1/70 rounded-lg border px-3 py-2 font-mono text-xs">
-      <div className="text-ink-4 mb-1.5 flex items-center gap-1.5 text-[10px] tracking-wider uppercase">
+    <div className="text-ink-1 font-mono text-xs">
+      <div className="text-ink-4 mb-1.5 flex items-center gap-1.5 font-mono text-[10px] tracking-wider uppercase">
+        <span className="text-acc-ink">◆</span>
         <span>background jobs</span>
-        <span className="text-acc-ink inline-flex items-center gap-1 rounded-full px-1.5 py-px text-[9.5px] font-semibold tracking-normal">
+        <span
+          className="text-acc-ink inline-flex items-center gap-1 rounded-full px-1.5 py-px text-[9.5px] font-semibold tracking-normal"
+          style={{
+            background: 'color-mix(in oklch, var(--color-acc) 18%, transparent)',
+          }}
+        >
           <span
             className="rg-pulse-glow bg-acc h-1 w-1 rounded-full"
             style={{ animation: 'rg-pulse-glow 1.4s ease-in-out infinite' }}
@@ -44,7 +49,7 @@ export function BackgroundJobsIndicator({
           </div>
         ))}
       </div>
-      <div className="text-ink-4 mt-1.5 text-[10px]">
+      <div className="text-ink-4 mt-1 text-[10px]">
         Waiting for these to finish before the step ends.
       </div>
     </div>

@@ -135,6 +135,9 @@ import { DevServerTab } from './ui-dev-server-tab';
 import { DevToolsTab } from './ui-devtools-tab';
 import { LogsTab } from './ui-logs-tab';
 import { ManageDevicesDialog } from './ui-manage-devices-dialog';
+import { MetroPortBadge } from './ui-metro-port-badge';
+import { useMobilePreviewWorkspaceStore } from '@/stores/mobile-preview-workspace';
+
 import type { MobilePreviewPaneTab } from './utils-tabs';
 import type { MobilePreviewProjectConfig } from '@shared/types';
 import { SetupTab } from './ui-setup-tab';
@@ -170,7 +173,6 @@ import {
   isNoticeDismissed,
   markNoticeDismissed,
 } from '@/features/mobile-preview/mobile-preview-dismissed-notices-store';
-import { useMobilePreviewAutoStart } from '@/features/mobile-preview/use-mobile-preview-auto-start';
 import { useMobilePreviewExpoLaunch } from '@/features/mobile-preview/use-mobile-preview-expo-launch';
 
 const FPS_OPTIONS = [
@@ -229,6 +231,11 @@ export function MobilePreviewPane({
   const [deviceId, setDeviceId] = useState('');
   const [previewRotationDeg, setPreviewRotationDeg] = useState(0);
   const [inputNotice, setInputNotice] = useState<string | null>(null);
+  // Keyed by session id so dismissing the notice for one degraded stream does
+  // not hide it for the next session, which may degrade for a new reason.
+  const [dismissedDegradedSessionId, setDismissedDegradedSessionId] = useState<
+    string | null
+  >(null);
   // Successful actions stay silent: they clear any stale error instead of
   // adding an informational banner.
   const showActionNotice = useCallback((_message?: string) => {
@@ -249,11 +256,39 @@ export function MobilePreviewPane({
     useState<string | null>(null);
   const [isStandaloneInspectorOpen, setIsStandaloneInspectorOpen] =
     useState(false);
-  const [activeTab, setActiveTab] = useState<MobilePreviewPaneTab>('setup');
+  // One embedded DevTools view per task *and* device, so switching devices
+  // doesn't reuse (or tear down) another device's debugger session. Declared
+  // here because the persisted pane UI state is keyed by it.
+  const devToolsViewId = `rn-devtools:${taskId}:${platform}:${deviceId || 'none'}`;
+  // Tab and target live in the store, not local state: the embedded DevTools
+  // view survives this pane unmounting, so the selection pointing at it has to
+  // survive too.
+  const activeTab = useMobilePreviewWorkspaceStore(
+    (state) => state.paneTabByViewId[devToolsViewId] ?? 'setup',
+  );
+  const setPaneTab = useMobilePreviewWorkspaceStore(
+    (state) => state.setPaneTab,
+  );
+  const setActiveTab = useCallback(
+    (tab: MobilePreviewPaneTab) => setPaneTab(devToolsViewId, tab),
+    [devToolsViewId, setPaneTab],
+  );
   const [devToolsLaunchError, setDevToolsLaunchError] = useState<string | null>(
     null,
   );
-  const [selectedDevToolsTargetId, setSelectedDevToolsTargetId] = useState('');
+  const selectedDevToolsTargetId = useMobilePreviewWorkspaceStore(
+    (state) => state.devToolsTargetIdByViewId[devToolsViewId] ?? '',
+  );
+  const setDevToolsTargetId = useMobilePreviewWorkspaceStore(
+    (state) => state.setDevToolsTargetId,
+  );
+  const clearPaneUiState = useMobilePreviewWorkspaceStore(
+    (state) => state.clearPaneUiState,
+  );
+  const setSelectedDevToolsTargetId = useCallback(
+    (targetId: string) => setDevToolsTargetId(devToolsViewId, targetId),
+    [devToolsViewId, setDevToolsTargetId],
+  );
   const devToolsViewRef = useRef<HTMLDivElement | null>(null);
   const devToolsOpenedRef = useRef(false);
   const [isDevToolsViewOpen, setIsDevToolsViewOpen] = useState(false);
@@ -510,7 +545,11 @@ export function MobilePreviewPane({
     if (targets.some((target) => target.id === selectedDevToolsTargetId)) return;
     const nextTargetId = targets.at(-1)?.id ?? '';
     queueMicrotask(() => setSelectedDevToolsTargetId(nextTargetId));
-  }, [reactNativeDevTools.data?.targets, selectedDevToolsTargetId]);
+  }, [
+    reactNativeDevTools.data?.targets,
+    selectedDevToolsTargetId,
+    setSelectedDevToolsTargetId,
+  ]);
   useEffect(() => {
     queueMicrotask(() => setActiveConsoleCommandId(null));
   }, [consoleCommandScope]);
@@ -1066,6 +1105,12 @@ export function MobilePreviewPane({
     formatError(stopError) ??
     formatError(rotateError);
   const fatalSessionError = session?.status === 'error' ? displayError : null;
+  // Deliberately not folded into `displayError`: the stream is healthy, so
+  // this must not take over the pane as an error state.
+  const degradedReason =
+    session && session.id !== dismissedDegradedSessionId
+      ? (session.degradedReason ?? null)
+      : null;
   const streamStrategyLabel = getStreamStrategyLabel(session?.streamStrategy);
 
   const runtimeLaunchState = useMobilePreviewExpoLaunch({
@@ -1217,38 +1262,8 @@ export function MobilePreviewPane({
   });
 
 
-  const autoPreviewStartAttemptKey = selectedPreviewDeviceKey
-    ? [
-        taskId,
-        appPath,
-        effectiveDevServerPort,
-        devServerStatus?.pid ?? 'unknown-process',
-        selectedPreviewDeviceKey,
-      ].join('\0')
-    : null;
-  const {
-    error: autoPreviewStartError,
-    retry: retryAutoPreviewStart,
-    clearError: clearAutoPreviewStartError,
-    dismissError: dismissAutoPreviewStartError,
-  } = useMobilePreviewAutoStart({
-    enabled:
-      autoLaunchRunningRuntime &&
-      !needsAppSelection &&
-      !hasActiveSession &&
-      !isHydratingRetainedSessions &&
-      !!deviceId &&
-      selectedDeviceCanStart,
-    attemptKey: autoPreviewStartAttemptKey,
-    start: () =>
-      start({
-        projectPath: effectiveProjectPath,
-        platform,
-        deviceId,
-        fps,
-        quality,
-      }),
-  });
+  // Streaming never starts on its own: opening/focusing the pane or clicking a
+  // device only selects it. The user starts the stream explicitly via Start.
 
   const handleStartStop = useCallback(async () => {
     try {
@@ -1258,7 +1273,16 @@ export function MobilePreviewPane({
         return;
       }
 
-      if (!deviceId || !selectedDeviceCanStart || needsAppSelection) return;
+      // Physical iPhones have no screen-stream API (simctl/idb are
+      // simulator-only), so starting a stream there can only ever fail. Treat
+      // it as a no-op instead of surfacing an unactionable error.
+      if (
+        !deviceId ||
+        !selectedDeviceCanStart ||
+        needsAppSelection ||
+        physicalIosStreamingUnsupported
+      )
+        return;
       await start({
         projectPath: effectiveProjectPath,
         platform,
@@ -1266,7 +1290,6 @@ export function MobilePreviewPane({
         fps,
         quality,
       });
-      clearAutoPreviewStartError();
     } catch {
       // Hook exposes start/stop errors for rendering.
     }
@@ -1278,11 +1301,11 @@ export function MobilePreviewPane({
     effectiveProjectPath,
     quality,
     selectedDeviceCanStart,
+    physicalIosStreamingUnsupported,
     needsAppSelection,
     start,
     stop,
     setupOperationCoordinator,
-    clearAutoPreviewStartError,
   ]);
 
   const handleSelectDevice = useCallback(
@@ -2058,9 +2081,6 @@ export function MobilePreviewPane({
     null;
   const devToolsFrontendUrl =
     devToolsTarget?.devtoolsFrontendUrl ?? devToolsResult?.frontendUrl ?? null;
-  // One embedded DevTools view per task *and* device, so switching devices
-  // doesn't reuse (or tear down) another device's debugger session.
-  const devToolsViewId = `rn-devtools:${taskId}:${platform}:${deviceId || 'none'}`;
   const handleDevToolsTargetMenuOpenChange = useCallback(
     (open: boolean) => {
       devToolsTargetMenuOpenRef.current = open;
@@ -2103,16 +2123,23 @@ export function MobilePreviewPane({
   }, [devToolsViewId]);
 
   // Lifecycle: create the embedded view as soon as a frontend URL exists
-  // (even while another tab is active) and keep it alive across tab switches
-  // so console/network history is preserved. Only destroyed on unmount, task
-  // change, or when the target disappears.
+  // (even while another tab is active) and keep it alive across tab switches,
+  // pane closes and route changes so console/network history is preserved.
+  // The view is only destroyed when it is switched away from (see the
+  // devToolsViewId effect below) or when the main process tears it down
+  // because the preview stopped or the task was completed/deleted.
   useEffect(() => {
     if (!devToolsFrontendUrl) {
+      // The target can vanish on an app reload. Hide rather than dispose so a
+      // reattach keeps the existing console/network history.
       devToolsOpenedRef.current = false;
       queueMicrotask(() => setIsDevToolsViewOpen(false));
-      void api.mobilePreview.closeEmbeddedReactNativeDevTools({
-        viewId: devToolsViewId,
-      });
+      void api.mobilePreview
+        .setEmbeddedReactNativeDevToolsVisibility({
+          viewId: devToolsViewId,
+          visible: false,
+        })
+        .catch(() => {});
       return;
     }
 
@@ -2157,11 +2184,33 @@ export function MobilePreviewPane({
       devToolsOpenRequestRef.current += 1;
       devToolsOpenedRef.current = false;
       queueMicrotask(() => setIsDevToolsViewOpen(false));
-      void api.mobilePreview.closeEmbeddedReactNativeDevTools({
-        viewId: devToolsViewId,
-      });
+      // Hide, never dispose: this cleanup also runs when the pane unmounts
+      // (pane closed, route change, runtime remount) and disposing here is what
+      // used to throw away the whole network/console log.
+      void api.mobilePreview
+        .setEmbeddedReactNativeDevToolsVisibility({
+          viewId: devToolsViewId,
+          visible: false,
+        })
+        .catch(() => {});
     };
   }, [devToolsFrontendUrl, devToolsViewId, updateEmbeddedDevToolsBounds]);
+
+  // Switching task/platform/device points at a different debugger session, so
+  // the view we are leaving behind is genuinely dead and must be released.
+  const previousDevToolsViewIdRef = useRef(devToolsViewId);
+  useEffect(() => {
+    const previousViewId = previousDevToolsViewIdRef.current;
+    if (previousViewId === devToolsViewId) return;
+
+    previousDevToolsViewIdRef.current = devToolsViewId;
+    void api.mobilePreview
+      .closeEmbeddedReactNativeDevTools({ viewId: previousViewId })
+      .catch(() => {});
+    // The view is gone, so the persisted tab/target pointing at it is dead
+    // weight; drop it instead of accumulating an entry per device forever.
+    clearPaneUiState(previousViewId);
+  }, [clearPaneUiState, devToolsViewId]);
 
   // Visibility + bounds: show the (already running) view only on the DevTools
   // tab; hide it otherwise instead of tearing it down.
@@ -2219,7 +2268,14 @@ export function MobilePreviewPane({
       devToolsViewRef={devToolsViewRef}
       isFetching={reactNativeDevTools.isFetching}
       isLoading={reactNativeDevTools.isLoading}
-      onRefresh={() => void reactNativeDevTools.refetch()}
+      onRefresh={() => {
+        void reactNativeDevTools.refetch();
+        // The frontend URL is stable now, so re-resolving alone will not
+        // reload a view left bound to a dead websocket by a Metro restart.
+        void api.mobilePreview
+          .reloadEmbeddedReactNativeDevTools({ viewId: devToolsViewId })
+          .catch(() => {});
+      }}
       setSelectedDevToolsTargetId={setSelectedDevToolsTargetId}
       handleDevToolsTargetMenuOpenChange={handleDevToolsTargetMenuOpenChange}
     />
@@ -2490,8 +2546,20 @@ export function MobilePreviewPane({
           )}
         />
       ) : null}
-      {inputNotice || autoPreviewStartError || showRuntimeLaunchNotice ? (
+      {inputNotice ||
+      showRuntimeLaunchNotice ||
+      degradedReason ? (
         <PreviewNoticeStack insetLeft={!isStandalone}>
+          {degradedReason ? (
+            <PreviewNotice
+              tone="warn"
+              onDismiss={() =>
+                setDismissedDegradedSessionId(session?.id ?? null)
+              }
+            >
+              {degradedReason}
+            </PreviewNotice>
+          ) : null}
           {inputNotice ? (
             <PreviewNotice
               tone="error"
@@ -2499,20 +2567,6 @@ export function MobilePreviewPane({
               onDismiss={() => setInputNotice(null)}
             >
               {inputNotice}
-            </PreviewNotice>
-          ) : null}
-          {autoPreviewStartError ? (
-            <PreviewNotice
-              tone="error"
-              role="alert"
-              action={
-                <Button variant="ghost" size="xs" onClick={retryAutoPreviewStart}>
-                  Retry preview
-                </Button>
-              }
-              onDismiss={dismissAutoPreviewStartError}
-            >
-              {autoPreviewStartError}
             </PreviewNotice>
           ) : null}
           {showRuntimeLaunchNotice ? (
@@ -2937,6 +2991,12 @@ export function MobilePreviewPane({
                 ))}
             </div>
             <div className="min-w-0 flex-1" />
+            <MetroPortBadge
+              port={effectiveDevServerPort}
+              isRunning={isDevServerRunning}
+              isStarting={devServerStarting}
+              onClick={() => setActiveTab('dev-server')}
+            />
             {isStandalone ? (
               <IconButton
                 className={standaloneLayout.inspectorClose}

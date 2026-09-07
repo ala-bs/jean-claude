@@ -47,7 +47,7 @@ export function useMobilePreviewExpoLaunch({
   isLoadingDevices: boolean;
   selectedDevice: Pick<
     MobilePreviewDevice,
-    'id' | 'platform' | 'state'
+    'id' | 'platform' | 'state' | 'kind'
   > | null;
   isExpoApp: boolean;
   taskId: string;
@@ -64,7 +64,10 @@ export function useMobilePreviewExpoLaunch({
     status: 'idle',
   });
   // Last owner key this instance launched, so an idle transition (runtime
-  // stopped) can drop it from the shared store.
+  // stopped) can drop it from the shared store. `keepCompletedLaunch` idles —
+  // e.g. selecting a physical iPhone — must not drop it: the memo belongs to
+  // the simulator launched before the switch, and clearing it would re-deeplink
+  // (and visibly reload) that simulator on switch-back.
   const lastCompletedOwnerKeyRef = useRef<string | null>(null);
   // Kept in refs: these change while a launch is in flight (install-status
   // polling) and must not cancel + restart it.
@@ -77,6 +80,7 @@ export function useMobilePreviewExpoLaunch({
   const selectedDeviceId = selectedDevice?.id ?? null;
   const selectedDevicePlatform = selectedDevice?.platform ?? null;
   const selectedDeviceState = selectedDevice?.state ?? null;
+  const selectedDeviceKind = selectedDevice?.kind ?? null;
 
   const isAppInstallBlocking = isAppInstalled === false;
 
@@ -91,6 +95,7 @@ export function useMobilePreviewExpoLaunch({
               id: selectedDeviceId,
               platform: selectedDevicePlatform,
               state: selectedDeviceState,
+              kind: selectedDeviceKind ?? undefined,
             }
           : null,
       isExpoApp,
@@ -103,7 +108,7 @@ export function useMobilePreviewExpoLaunch({
       isSelectedDeviceReady,
       isAppInstalled: isAppInstalledRef.current,
     });
-    if (decision.status === 'idle') {
+    if (decision.status === 'idle' && !decision.keepCompletedLaunch) {
       if (lastCompletedOwnerKeyRef.current) {
         clearCompletedExpoLaunch(lastCompletedOwnerKeyRef.current);
         lastCompletedOwnerKeyRef.current = null;
@@ -153,6 +158,7 @@ export function useMobilePreviewExpoLaunch({
     projectId,
     retryGeneration,
     selectedDeviceId,
+    selectedDeviceKind,
     selectedDevicePlatform,
     selectedDeviceState,
     taskId,

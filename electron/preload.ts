@@ -58,6 +58,7 @@ import type {
   ReactNativeDevToolsEmbeddedBoundsParams,
   ReactNativeDevToolsEmbeddedCloseParams,
   ReactNativeDevToolsEmbeddedOpenParams,
+  ReactNativeDevToolsEmbeddedReloadParams,
   ReactNativeDevToolsEmbeddedVisibilityParams,
   ReactNativeDevToolsOpenParams,
   ReactNativeDevToolsResolveParams,
@@ -1170,6 +1171,13 @@ contextBridge.exposeInMainWorld('api', {
     ) =>
       ipcRenderer.invoke(
         'mobilePreview:setEmbeddedReactNativeDevToolsVisibility',
+        params,
+      ),
+    reloadEmbeddedReactNativeDevTools: (
+      params: ReactNativeDevToolsEmbeddedReloadParams,
+    ) =>
+      ipcRenderer.invoke(
+        'mobilePreview:reloadEmbeddedReactNativeDevTools',
         params,
       ),
     closeEmbeddedReactNativeDevTools: (

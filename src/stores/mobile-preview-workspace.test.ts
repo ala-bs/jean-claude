@@ -121,8 +121,12 @@ describe('mobile preview workspace store', () => {
 
     expect(JSON.parse(localStorage.getItem('mobile-preview-workspace') ?? '')).toEqual(
       {
-        state: { selectedRuntimeKey: runtimeKey },
-        version: 1,
+        state: {
+          selectedRuntimeKey: runtimeKey,
+          paneTabByViewId: {},
+          devToolsTargetIdByViewId: {},
+        },
+        version: 2,
       },
     );
 

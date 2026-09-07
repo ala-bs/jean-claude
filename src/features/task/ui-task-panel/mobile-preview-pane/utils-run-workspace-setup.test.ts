@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MobilePreviewSession } from '@shared/mobile-simulator-types';
 
 import {
+  FIRST_PREVIEW_FRAME_SETUP_WAIT_MS,
   type PreviewIosBuildCoordinator,
   type PreviewPort,
   type PreviewSetupCoordinator,
@@ -389,7 +390,7 @@ describe('runWorkspaceSetup', () => {
     expect(coordinator.waitForFrame).toHaveBeenCalledWith(
       expect.anything(),
       'session-1',
-      15_000,
+      FIRST_PREVIEW_FRAME_SETUP_WAIT_MS,
     );
     expect(launched).toEqual(['build-id']);
   });

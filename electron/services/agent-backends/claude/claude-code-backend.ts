@@ -131,6 +131,54 @@ interface PendingResolver {
   resolve: (result: PermissionResult) => void;
 }
 
+/**
+ * Build the wire-shape user message the CLI expects on its streaming stdin.
+ * Shared by the initial prompt of a run and by mid-run follow-up injection.
+ */
+function buildSdkUserMessage(
+  parts: PromptPart[],
+  sessionId: string | null,
+): SDKUserMessage {
+  const promptText = getPromptText(parts);
+  const images = getPromptImages(parts);
+
+  const content: Array<
+    | { type: 'text'; text: string }
+    | {
+        type: 'image';
+        source: { type: 'base64'; media_type: string; data: string };
+      }
+  > = [];
+
+  // Always emit the text block, even when empty: this mirrors what the SDK
+  // itself writes for a bare-string prompt, and an empty `content` array is a
+  // different wire shape that the CLI may reject.
+  if (promptText || images.length === 0) {
+    content.push({ type: 'text', text: promptText });
+  }
+
+  for (const img of images) {
+    content.push({
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: img.mimeType,
+        data: img.data,
+      },
+    });
+  }
+
+  return {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: content as SDKUserMessage['message']['content'],
+    },
+    parent_tool_use_id: null,
+    session_id: sessionId ?? '',
+  };
+}
+
 interface ClaudeSession {
   sessionId: string | null;
   abortController: AbortController;
@@ -157,6 +205,11 @@ interface ClaudeSession {
   // stdin. Held open for the whole turn so the `canUseTool` control channel
   // survives background-task `result` messages.
   closePromptStream: (() => void) | null;
+  // Appends another user message to the streaming input of the live run, so a
+  // follow-up prompt continues this run instead of requiring a stop/restart
+  // (which would kill any background tasks the run still owns). Returns false
+  // once the input stream has closed.
+  pushPromptMessage: ((message: SDKUserMessage) => boolean) | null;
   // Task ids of background work (subagents, background bash, Monitor) still
   // live, from the latest `background_tasks_changed` snapshot. While non-empty,
   // no `result` can end the run — the agent will be resumed to handle their
@@ -315,6 +368,7 @@ export class ClaudeCodeBackend implements AgentBackend {
       deferredResultEvents: null,
       backgroundTaskIds: new Set<string>(),
       closePromptStream: null,
+      pushPromptMessage: null,
     };
     this.sessions.set(sessionKey, session);
 
@@ -326,6 +380,48 @@ export class ClaudeCodeBackend implements AgentBackend {
       sessionId: sessionKey,
       events: session.eventChannel,
     };
+  }
+
+  /**
+   * Continue a live run with another user prompt instead of stopping it.
+   *
+   * Only works while the run's streaming input is still open. That window is
+   * exactly the one that matters here: a run holding background tasks keeps
+   * stdin open past its `result`, and stopping it to send a follow-up would
+   * take those background tasks down with the CLI process.
+   */
+  async sendUserMessage(
+    sessionId: string,
+    parts: PromptPart[],
+  ): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    const push = session?.pushPromptMessage;
+    if (!session || !push) return false;
+    const accepted = push(buildSdkUserMessage(parts, session.sessionId));
+    if (!accepted) return false;
+
+    // Emit the same synthetic entry `runSdkGenerator` pushes for a run's
+    // initial prompt. Without it the user's follow-up never reaches the
+    // timeline, so no new prompt group opens — the prompt would be invisible in
+    // the stream and absent from history on reload, and the live background
+    // jobs (which render against the LAST prompt group) would stay pinned under
+    // the previous one. Pushing it here makes an injected prompt behave exactly
+    // like the start of a run.
+    //
+    // Emitted only after the push is accepted, so a refused injection can't
+    // leave an orphan prompt in the timeline.
+    session.eventChannel.push({
+      type: 'entry',
+      rawMessageId: null,
+      entry: {
+        id: nanoid(),
+        date: new Date().toISOString(),
+        isSynthetic: true,
+        type: 'user-prompt',
+        value: buildPromptMarkdown(parts),
+      },
+    });
+    return true;
   }
 
   async stop(sessionId: string): Promise<void> {
@@ -562,9 +658,6 @@ export class ClaudeCodeBackend implements AgentBackend {
       queryOptions.resume = session.sessionId;
     }
 
-    const promptText = getPromptText(parts);
-    const images = getPromptImages(parts);
-
     // The prompt is ALWAYS sent as a streaming AsyncIterable, never as a bare
     // string. A string prompt puts the SDK in `isSingleUserTurn` mode, where it
     // closes the CLI's stdin as soon as the *first* `result` message arrives.
@@ -574,54 +667,60 @@ export class ClaudeCodeBackend implements AgentBackend {
     // with "Tool permission request failed: AbortError: Stream closed".
     // Keeping the input stream open until the real end-of-turn result keeps the
     // control channel alive for the whole run.
-    const content: Array<
-      | { type: 'text'; text: string }
-      | {
-          type: 'image';
-          source: { type: 'base64'; media_type: string; data: string };
-        }
-    > = [];
+    const userMessage = buildSdkUserMessage(parts, session.sessionId);
 
-    // Always emit the text block, even when empty: this mirrors what the SDK
-    // itself writes for a bare-string prompt, and an empty `content` array is a
-    // different wire shape that the CLI may reject.
-    if (promptText || images.length === 0) {
-      content.push({ type: 'text', text: promptText });
-    }
+    // NOTE: `Query.streamInput()` is NOT an alternative to the mailbox below.
+    // The SDK is already inside `streamInput` consuming this very generator
+    // (its start path calls it for any AsyncIterable prompt), and its
+    // implementation calls `transport.endInput()` — closing the CLI's stdin —
+    // as soon as the iterable it was given ends. Calling it again would race
+    // two writers into one stdin and kill the `canUseTool` channel.
+    //
+    // The generator stays alive until `closePromptStream` fires (real `result`
+    // + grace, error, or abort), which keeps stdin — and therefore the
+    // permission control channel — open. While open it also acts as a mailbox:
+    // `pushPromptMessage` appends follow-up prompts that the SDK picks up as
+    // new user turns on the SAME run, so a follow-up sent while background
+    // tasks are live no longer requires killing (and orphaning) them.
+    const pendingPrompts: SDKUserMessage[] = [];
+    let promptStreamOpen = true;
+    let notifyPrompt: (() => void) | null = null;
+    // Set once the generator has actually handed an injected prompt to the SDK
+    // (i.e. it was written to stdin), so messages still in flight from a
+    // previous turn can't be mistaken for a response to it.
+    let injectedPromptWritten = false;
 
-    for (const img of images) {
-      content.push({
-        type: 'image',
-        source: {
-          type: 'base64',
-          media_type: img.mimeType,
-          data: img.data,
-        },
-      });
-    }
-
-    const userMessage: SDKUserMessage = {
-      type: 'user',
-      message: {
-        role: 'user',
-        content: content as SDKUserMessage['message']['content'],
-      },
-      parent_tool_use_id: null,
-      session_id: session.sessionId ?? '',
+    const closePromptStream = () => {
+      promptStreamOpen = false;
+      // Wake the generator so it can observe the close and return.
+      notifyPrompt?.();
     };
-
-    // Resolved once the turn genuinely ends (real `result`, error, or abort).
-    // Until then the input generator stays suspended, which keeps stdin — and
-    // therefore the permission control channel — open.
-    let closePromptStream!: () => void;
-    const promptStreamClosed = new Promise<void>((resolve) => {
-      closePromptStream = resolve;
-    });
     session.closePromptStream = closePromptStream;
 
     const prompt = (async function* () {
       yield userMessage;
-      await promptStreamClosed;
+      // Drain first, THEN test for close: a message accepted by
+      // `pushPromptMessage` (which only accepts while open) must always be
+      // handed to the CLI, even if the stream closes before the generator is
+      // pulled again. Dropping it here would lose the user's prompt silently.
+      for (;;) {
+        while (pendingPrompts.length > 0) {
+          const next = pendingPrompts.shift();
+          if (next) {
+            yield next;
+            // Control returns here only when the SDK pulls again, i.e. after it
+            // has written this message to the CLI's stdin.
+            injectedPromptWritten = true;
+          }
+        }
+        if (!promptStreamOpen) break;
+        // No `await` between the emptiness check above and installing the
+        // waiter, so a concurrent push can never be missed.
+        await new Promise<void>((resolve) => {
+          notifyPrompt = resolve;
+        });
+        notifyPrompt = null;
+      }
     })();
 
     // Holding stdin open costs us the SDK's implicit liveness guarantee: with a
@@ -637,16 +736,30 @@ export class ClaudeCodeBackend implements AgentBackend {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = null;
     };
+    // Set when a follow-up prompt has been injected and the CLI has not yet
+    // answered with any message. Without this the run has NO liveness guarantee
+    // after an injection: the withheld-result watchdog below is gated on
+    // `deferredResultEvents`, which injection clears, so a CLI that swallows the
+    // message would leave the generator suspended, stdin open, and the step
+    // stuck `running` forever. Any message at all clears it.
+    let awaitingInjectedResponse = false;
     const syncIdleWatchdog = () => {
       clearIdleWatchdog();
-      // Only armed while a withheld result is outstanding — a normal run in
-      // progress may legitimately be silent for a long time (a slow tool call).
-      if (!session.deferredResultEvents) return;
+      // Only armed while a withheld result or an unanswered injected prompt is
+      // outstanding — a normal run in progress may legitimately be silent for a
+      // long time (a slow tool call).
+      const reason = session.deferredResultEvents
+        ? 'a withheld background result'
+        : awaitingInjectedResponse
+          ? 'an injected follow-up prompt'
+          : null;
+      if (!reason) return;
       idleTimer = setTimeout(() => {
         dbg.agent(
-          'Session %s idle for %dms after a withheld background result — closing input stream',
+          'Session %s idle for %dms after %s — closing input stream',
           sessionKey,
           WITHHELD_RESULT_IDLE_TIMEOUT_MS,
+          reason,
         );
         closePromptStream();
       }, WITHHELD_RESULT_IDLE_TIMEOUT_MS);
@@ -688,6 +801,33 @@ export class ClaudeCodeBackend implements AgentBackend {
     const generator = query({ prompt, options: queryOptions });
     session.queryInstance = generator;
     let sawRealResult = false;
+
+    session.pushPromptMessage = (message) => {
+      if (!promptStreamOpen || session.abortController.signal.aborted) {
+        return false;
+      }
+      // A pending stdin close (armed by the previous turn's result) would kill
+      // the CLI moments after we hand it this prompt, and the idle watchdog is
+      // no longer measuring idleness. The run is live again — stand both down.
+      cancelScheduledClose();
+      // A new user turn starts here, so the previous turn's result no longer
+      // means "the run ends on the next silence", and any withheld
+      // background-notification result must not be replayed onto this turn.
+      sawRealResult = false;
+      session.deferredResultEvents = null;
+      pendingPrompts.push(message);
+      notifyPrompt?.();
+      // Re-arm the watchdog against THIS prompt, so a CLI that never answers
+      // still terminates the run instead of wedging the step on `running`.
+      awaitingInjectedResponse = true;
+      syncIdleWatchdog();
+      dbg.agentSession(
+        'Injected follow-up prompt into live session %s (%d background task(s) still live)',
+        sessionKey,
+        session.backgroundTaskIds.size,
+      );
+      return true;
+    };
 
     try {
       for await (const rawMessage of generator) {
@@ -772,6 +912,39 @@ export class ClaudeCodeBackend implements AgentBackend {
           // early kills the `canUseTool` channel for every later tool call.
           sawRealResult = true;
           session.deferredResultEvents = null;
+          awaitingInjectedResponse = false;
+        }
+
+        // A top-level assistant message received AFTER the injected prompt
+        // reached stdin is our evidence that the CLI is answering it.
+        //
+        // The bounds are narrow on both sides. Clearing on *any* message lets
+        // unrelated background chatter — streaming precisely when injection
+        // happens — disarm the watchdog while the prompt sits unread. But
+        // waiting for a `result` subjects the injected turn to a 10-minute idle
+        // kill that a normal turn never faces: one long foreground tool call
+        // emits nothing, and closing stdin mid-turn would kill the `canUseTool`
+        // channel and the background jobs this path exists to protect.
+        //
+        // `parent_tool_use_id` filters out subagent output (it is set for
+        // anything spawned by a Task tool_use) but NOT background bash/Monitor
+        // completions: those resume the main agent, so their messages are
+        // top-level. `injectedPromptWritten` is what excludes those — it is set
+        // only once the generator has actually handed the prompt to the SDK, so
+        // messages produced by an in-flight background-notification turn cannot
+        // disarm the watchdog before the CLI has even seen the prompt.
+        //
+        // A residual wire race remains: a message written to stdout just before
+        // the CLI reads stdin can still clear the flag. Closing that would need
+        // request/response correlation the SDK does not expose. The exposure is
+        // one watchdog cycle, not data loss — the prompt is already in stdin.
+        if (
+          injectedPromptWritten &&
+          message.type === 'assistant' &&
+          !message.parent_tool_use_id
+        ) {
+          awaitingInjectedResponse = false;
+          injectedPromptWritten = false;
         }
 
         for (const event of agentEvents) {
@@ -811,6 +984,7 @@ export class ClaudeCodeBackend implements AgentBackend {
       cancelScheduledClose();
       closePromptStream();
       session.closePromptStream = null;
+      session.pushPromptMessage = null;
       // The stream ended on a withheld background-notification result and no
       // real result ever arrived: replay it so the step isn't stuck `running`.
       // The run is over, so nothing is still working in the background —

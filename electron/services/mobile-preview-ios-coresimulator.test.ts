@@ -18,6 +18,7 @@ import {
   installIosPreviewTestHooks,
   iosIdbAdapter,
   mockFramebufferWithReadyHid,
+  mockReadyHidHelper,
   pngWithSize,
   runCommandMock,
   spawnManagedMock,
@@ -136,6 +137,76 @@ describe('mobile preview iOS CoreSimulator framebuffer', () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
+  it('reports why it degraded when the helper fails to build at startup', async () => {
+    delete process.env.JC_MOBILE_PREVIEW_IOS_CORE_SIMULATOR;
+    process.env.JC_MOBILE_PREVIEW_IOS_HELPER_SOURCE = join(
+      process.cwd(),
+      'electron/native/mobile-preview-ios-framebuffer.m',
+    );
+    mockReadyHidHelper();
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'which') {
+        return { stdout: `/usr/bin/${args[0]}`, stderr: '' };
+      }
+      if (command === 'idb') {
+        throw new Error('idb unavailable');
+      }
+      if (command === 'xcrun' && args[0] === 'clang') {
+        throw new Error("fatal error: 'CoreSimulator/CoreSimulator.h' not found");
+      }
+      if (command === 'xcode-select') {
+        return {
+          stdout: '/Applications/Xcode-beta.app/Contents/Developer\n',
+          stderr: '',
+        };
+      }
+      if (
+        command === 'xcrun' &&
+        args[0] === 'simctl' &&
+        args[1] === 'io' &&
+        args[3] === 'screenshot'
+      ) {
+        const screenshotPath = args.at(-1)!;
+        await mkdir(dirname(screenshotPath), { recursive: true });
+        await writeFile(screenshotPath, pngWithSize(1206, 2622));
+        return { stdout: '', stderr: '' };
+      }
+
+      return {
+        stdout: JSON.stringify({
+          devices: {
+            'com.apple.CoreSimulator.SimRuntime.iOS-18-2': [
+              { name: 'iPhone 16', udid: 'device-1', state: 'Booted' },
+            ],
+          },
+        }),
+        stderr: '',
+      };
+    });
+
+    const result = await iosIdbAdapter.startStream({
+      taskId: 'task-1',
+      deviceId: 'device-1',
+      onFrame: vi.fn(),
+      onSession: vi.fn(),
+    });
+
+    // The stream is healthy, just slower — the reason belongs on
+    // `degradedReason`, never on `error` (which renders a full-pane failure).
+    expect(result.session.streamStrategy).toBe('simctl-screenshot');
+    expect(result.session.status).toBe('streaming');
+    expect(result.session.error).toBeNull();
+    expect(result.session.degradedReason).toContain('simctl screenshots');
+    expect(result.session.degradedReason).toContain(
+      "'CoreSimulator/CoreSimulator.h' not found",
+    );
+    expect(result.session.degradedReason).toContain(
+      '/Applications/Xcode-beta.app/Contents/Developer',
+    );
+
+    await result.stop();
+  });
+
   it('drains bounded stderr from a pooled CoreSimulator framebuffer helper', async () => {
     delete process.env.JC_MOBILE_PREVIEW_IOS_CORE_SIMULATOR;
     process.env.JC_MOBILE_PREVIEW_IOS_HELPER_SOURCE = join(
@@ -188,13 +259,18 @@ describe('mobile preview iOS CoreSimulator framebuffer', () => {
     child.emit('close', 1, null);
     await vi.waitFor(() =>
       expect(onSession).toHaveBeenCalledWith(
-        expect.objectContaining({ error: expect.stringContaining('bounded-tail') }),
+        expect.objectContaining({
+          error: null,
+          degradedReason: expect.stringContaining('bounded-tail'),
+        }),
       ),
     );
-    const fallbackError = onSession.mock.calls.find(
-      ([patch]) => typeof patch.error === 'string' && patch.error.includes('bounded-tail'),
-    )?.[0].error;
-    expect(fallbackError).not.toContain('discarded-prefix');
+    const fallbackReason = onSession.mock.calls.find(
+      ([patch]) =>
+        typeof patch.degradedReason === 'string' &&
+        patch.degradedReason.includes('bounded-tail'),
+    )?.[0].degradedReason;
+    expect(fallbackReason).not.toContain('discarded-prefix');
     await stream.stop();
   });
 
