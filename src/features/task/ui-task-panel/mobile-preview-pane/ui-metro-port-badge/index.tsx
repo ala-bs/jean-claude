@@ -40,9 +40,9 @@ export function MetroPortBadge({
         className={clsx(
           'size-1.5 rounded-full',
           state === 'running'
-            ? 'bg-green-500'
+            ? 'bg-status-done'
             : state === 'starting'
-              ? 'bg-amber-500'
+              ? 'bg-status-run'
               : 'bg-ink-4',
         )}
       />
