@@ -276,7 +276,10 @@ describe('079_migrate_agent_memory', () => {
       AGENT_MEMORY_MAX_CONTEXT_FIELD_CHARS,
     );
     expect(event.contextTruncated).toBe(true);
-  });
+    // Writes and re-reads multi-megabyte payloads through the real filesystem,
+    // which takes ~1.2s alone and overruns the 5s default once the full suite
+    // is competing for I/O.
+  }, 20_000);
 
   it('creates complete empty structured state and removes every old artifact', async () => {
     await writeOldTree([]);

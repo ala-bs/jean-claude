@@ -13,6 +13,10 @@ import { api } from '@/lib/api';
 import { useNavigate } from '@tanstack/react-router';
 
 import {
+  getRunCommandLogLineCount,
+  useTaskMessagesStore,
+} from '@/stores/task-messages';
+import {
   isFiltered,
   useProjectCommitCount,
   useProjectGitAutoFetch,
@@ -22,15 +26,19 @@ import {
 } from '@/hooks/use-project-git';
 import { useProject, useProjectBranches } from '@/hooks/use-projects';
 import { cleanIpcError } from '@/lib/ipc-error';
+import { CommandLogsPane } from '@/features/task/ui-task-panel/command-logs-pane';
 import { CommitHistory } from './commit-history';
 import { CommitPanel } from './commit-panel';
+import { getProjectRootRunId } from '@shared/run-command-types';
 import type { ProjectGitLogFilter } from '@shared/types';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
+import { RunButton } from '@/features/agent/ui-run-button';
 import { SyncBar } from './sync-bar';
 import { TasksRail } from './tasks-rail';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { useOverlaysStore } from '@/stores/overlays';
+import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
 import { useSetBacklogSelectedProjectId } from '@/stores/backlog-overlay-draft';
 import { useToastStore } from '@/stores/toasts';
 
@@ -61,6 +69,7 @@ function ProjectHeader({
   onOpenInEditor,
   editorLabel,
   onBack,
+  runControl,
   onRefresh,
   isRefreshing,
   children,
@@ -73,6 +82,8 @@ function ProjectHeader({
   onOpenInEditor: () => void;
   editorLabel: string;
   onBack?: () => void;
+  /** Run/stop controls for commands executed in the repository checkout. */
+  runControl?: React.ReactNode;
   /** Omitted for non-git projects, where there is no git state to re-read. */
   onRefresh?: () => void;
   isRefreshing: boolean;
@@ -133,6 +144,7 @@ function ProjectHeader({
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
+          {runControl}
           {onRefresh && (
             <button
               type="button"
@@ -223,6 +235,51 @@ export function ProjectPanel({
   const [selectedHash, setSelectedHash] = useState<string | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
 
+  // Run commands from the repository checkout itself. The run service is keyed
+  // by task id, so project-root runs borrow a synthetic id derived from the
+  // project — the same one the running-commands overlay uses for favorites, so
+  // a command started here shows up there (and vice versa) rather than twice.
+  const runTaskId = getProjectRootRunId(projectId);
+  const [isLogsPaneOpen, setIsLogsPaneOpen] = useState(false);
+  const [selectedCommandId, setSelectedCommandId] = useState<string | null>(
+    null,
+  );
+  const runDropdownRef = useRef<{ toggle: () => void } | null>(null);
+  // The run dropdown renders nothing without configured commands, so offering
+  // its shortcut would be a command palette entry that silently does nothing.
+  const { hasConfiguredItems } = useProjectCommandAvailability(projectId);
+  // Logs outlive their configuration: RunButton keeps showing its ⌘L badge for
+  // historical logs after the commands are deleted, so the shortcut has to stay
+  // bound in that case too — otherwise the badge advertises a dead key.
+  const hasRunCommandLogs = useTaskMessagesStore((state) => {
+    const logs = state.runCommandLogs[runTaskId];
+    if (!logs) return false;
+    return Object.values(logs).some(
+      (entry) => getRunCommandLogLineCount(entry) > 0,
+    );
+  });
+  // ...and while the pane is open the shortcut is also the way to close it.
+  const canToggleLogs =
+    hasConfiguredItems || hasRunCommandLogs || isLogsPaneOpen;
+
+  // The logs pane, the commit diff and the tasks rail all share the right
+  // column. Opening one closes the other so every action has a visible effect —
+  // otherwise ⌘L behind an open commit diff would look like a dead key.
+  const openLogsPane = useCallback(() => {
+    setSelectedHash(null);
+    setIsLogsPaneOpen(true);
+  }, []);
+  // Clearing the commit only belongs on the opening path: closing the logs
+  // reveals the tasks rail, and discarding a commit the user never saw behind
+  // the pane would be a side effect with nothing to show for it.
+  const toggleLogsPane = useCallback(() => {
+    if (isLogsPaneOpen) {
+      setIsLogsPaneOpen(false);
+      return;
+    }
+    openLogsPane();
+  }, [isLogsPaneOpen, openLogsPane]);
+
   // Every keystroke would otherwise run a fresh `git log` over the whole
   // repository; the field itself stays responsive because only the query that
   // reaches git is delayed.
@@ -257,8 +314,15 @@ export function ProjectPanel({
         section: 'Project',
         shortcut: 'cmd+f',
         handler: () => {
+          // The command logs pane binds ⌘F to its own log filter on a bubbling
+          // window listener, which this capture-phase dispatcher would otherwise
+          // pre-empt. Declining hands the key back to whatever is focused.
+          if (document.activeElement?.closest('[data-command-logs-pane]')) {
+            return false;
+          }
           searchInput.current?.focus();
           searchInput.current?.select();
+          return true;
         },
       },
       // Only bound while a commit is open, so Escape stays available to
@@ -267,6 +331,15 @@ export function ProjectPanel({
         label: 'Close Commit Diff',
         shortcut: 'escape',
         handler: () => setSelectedHash(null),
+        hideInCommandPalette: true,
+      },
+      // Escape closes the pane rather than leaving the project entirely. The
+      // three Escape bindings here are mutually exclusive by construction: only
+      // one of the right column's occupants is ever on screen.
+      isLogsPaneOpen && {
+        label: 'Close Command Logs',
+        shortcut: 'escape',
+        handler: () => setIsLogsPaneOpen(false),
         hideInCommandPalette: true,
       },
       status?.isGitRepository !== false && {
@@ -284,8 +357,21 @@ export function ProjectPanel({
           void api.shell.openInEditor(project.path);
         },
       },
+      hasConfiguredItems && {
+        label: 'Run Command',
+        section: 'Project',
+        shortcut: 'cmd+u',
+        handler: () => runDropdownRef.current?.toggle(),
+      },
+      canToggleLogs && {
+        label: 'Toggle Command Logs',
+        section: 'Project',
+        shortcut: 'cmd+l',
+        handler: toggleLogsPane,
+      },
       backToTaskId !== undefined &&
-        selectedHash === null && {
+        selectedHash === null &&
+        !isLogsPaneOpen && {
           label: 'Back to Task',
           section: 'Project',
           shortcut: 'escape',
@@ -336,6 +422,20 @@ export function ProjectPanel({
         }}
         editorLabel={editorLabel}
         onBack={backToTaskId ? goBackToTask : undefined}
+        runControl={
+          <RunButton
+            taskId={runTaskId}
+            projectId={projectId}
+            workingDir={project.path}
+            dropdownRef={runDropdownRef}
+            isLogsPaneOpen={isLogsPaneOpen}
+            onToggleLogs={toggleLogsPane}
+            onRunCommand={(runCommandIds) => {
+              setSelectedCommandId(runCommandIds[0] ?? null);
+              openLogsPane();
+            }}
+          />
+        }
         onRefresh={isGitRepository ? runRefresh : undefined}
         isRefreshing={isRefreshing}
       >
@@ -365,13 +465,14 @@ export function ProjectPanel({
             isCountingMatches={isCountingMatches && isFiltered(filter)}
             searchInputRef={searchInput}
             selectedHash={selectedHash}
-            onSelectCommit={(commit) =>
+            onSelectCommit={(commit) => {
               // Clicking the open commit again closes the pane, so the rail can
               // be brought back without reaching for the Close button.
               setSelectedHash((current) =>
                 current === commit.hash ? null : commit.hash,
-              )
-            }
+              );
+              setIsLogsPaneOpen(false);
+            }}
           />
         ) : (
           <div className="flex min-w-0 flex-1 items-center justify-center p-5">
@@ -386,15 +487,30 @@ export function ProjectPanel({
           </div>
         )}
 
-        {selectedHash ? (
-          <CommitPanel
-            projectId={projectId}
-            commitHash={selectedHash}
-            onClose={() => setSelectedHash(null)}
-          />
-        ) : (
-          <TasksRail projectId={projectId} />
-        )}
+        {/* One right-hand column, three occupants. The commit history beside it
+            is `flex-1` with `flex-basis: 0`, so it carries no shrink weight —
+            the wrapper keeps the pane at the width the user dragged it to
+            instead of letting it absorb every shortfall. */}
+        <div className="flex shrink-0">
+          {selectedHash ? (
+            <CommitPanel
+              projectId={projectId}
+              commitHash={selectedHash}
+              onClose={() => setSelectedHash(null)}
+            />
+          ) : isLogsPaneOpen ? (
+            <CommandLogsPane
+              taskId={runTaskId}
+              projectId={projectId}
+              workingDir={project.path}
+              selectedCommandId={selectedCommandId}
+              onSelectCommand={setSelectedCommandId}
+              onClose={() => setIsLogsPaneOpen(false)}
+            />
+          ) : (
+            <TasksRail projectId={projectId} />
+          )}
+        </div>
       </div>
     </div>
   );

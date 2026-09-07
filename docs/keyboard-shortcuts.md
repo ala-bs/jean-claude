@@ -100,8 +100,9 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `escape` | — | Close or Go Back | `src/features/new-task/ui-new-task-overlay/index.tsx:1744` |
 | `escape` | — | Close Backlog | `src/features/project/ui-backlog-overlay/index.tsx:457` |
 | `escape` | — | Close Project Overlay | `src/features/project/ui-project-overlay/index.tsx:160` |
-| `escape` | — | Close Commit Diff | `src/features/project/ui-project-panel/index.tsx:223` |
-| `escape` | — | Back to Task | `src/features/project/ui-project-panel/index.tsx:241` |
+| `escape` | — | Close Commit Diff | `src/features/project/ui-project-panel/index.tsx:332` |
+| `escape` | — | Close Command Logs | `src/features/project/ui-project-panel/index.tsx:341` |
+| `escape` | — | Back to Task | `src/features/project/ui-project-panel/index.tsx:377` |
 | `escape` | — | Close Resources Overlay | `src/features/resources/ui-resources-overlay/index.tsx:460` |
 | `escape` | — | Close Running Commands Overlay | `src/features/run-commands/ui-running-commands-overlay/index.tsx:747` |
 | `escape` | — | Close Usage Overlay | `src/features/usage/ui-usage-overlay/index.tsx:801` |
@@ -160,12 +161,13 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+enter` | — | Confirm Delete | `src/features/task/ui-task-panel/delete-task-dialog.tsx:50` |
 | `cmd+enter` | work-items-editor | Save Work Items | `src/features/task/ui-task-panel/index.tsx:1461` |
 | `cmd+enter` | pr-creation-form | Submit PR | `src/features/task/ui-task-pr-view/pr-creation-form.tsx:899` |
-| `cmd+f` | — | Search Commits | `src/features/project/ui-project-panel/index.tsx:213` |
+| `cmd+f` | — | Search Commits | `src/features/project/ui-project-panel/index.tsx:315` |
 | `cmd+i` | — | — | `src/features/new-task/ui-new-task-overlay/index.tsx:2019` |
 | `cmd+i` | — | — | `src/features/task/ui-task-panel/add-step-dialog.tsx:1022` |
 | `cmd+j` | — | — | `src/features/settings/ui-skills-settings/create-with-agent-dialog.tsx:170` |
 | `cmd+j` | — | Activity Center | `src/routes/__root.tsx:209` |
 | `cmd+k` | — | Clear Selected Command Logs | `src/features/run-commands/ui-running-commands-overlay/index.tsx:766` |
+| `cmd+l` | — | Toggle Command Logs | `src/features/project/ui-project-panel/index.tsx:369` |
 | `cmd+l` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2269` |
 | `cmd+left` | — | Navigate to Previous Project Tab | `src/features/new-task/ui-new-task-overlay/index.tsx:1786` |
 | `cmd+m` | — | Toggle Input Mode | `src/features/new-task/ui-new-task-overlay/index.tsx:1815` |
@@ -178,6 +180,7 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+p` | — | Open Command Palette | `src/routes/__root.tsx:102` |
 | `cmd+right` | — | Navigate to Next Project Tab | `src/features/new-task/ui-new-task-overlay/index.tsx:1779` |
 | `cmd+t` | — | — | `src/features/task/ui-task-panel/add-step-dialog.tsx:855` |
+| `cmd+u` | — | Run Command | `src/features/project/ui-project-panel/index.tsx:363` |
 | `cmd+u` | task-panel | Run Command | `src/features/task/ui-task-panel/index.tsx:2252` |
 | `cmd+up` | — | Select First Command | `src/features/command-palette/ui-command-palette-overlay/index.tsx:121` |
 | `cmd+up` | feed-list-navigation | Go to Previous Feed Item | `src/features/feed/ui-feed-list/index.tsx:1456` |
@@ -194,7 +197,7 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+shift+b` | skills-settings | Browse Skills Registry | `src/features/settings/ui-skills-settings/index.tsx:59` |
 | `cmd+shift+d` | feed-list-navigation | Dismiss Selected Feed Item | `src/features/feed/ui-feed-list/index.tsx:1468` |
 | `cmd+shift+d` | task-panel | Cycle Diff Mode | `src/features/task/ui-task-panel/index.tsx:2322` |
-| `cmd+shift+e` | — | Open Project in Editor | `src/features/project/ui-project-panel/index.tsx:232` |
+| `cmd+shift+e` | — | Open Project in Editor | `src/features/project/ui-project-panel/index.tsx:355` |
 | `cmd+shift+e` | task-panel | Open Project in Editor | `src/features/task/ui-task-panel/index.tsx:2367` |
 | `cmd+shift+escape` | — | Discard Draft and Close | `src/features/new-task/ui-new-task-overlay/index.tsx:1749` |
 | `cmd+shift+f` | review-files-search | Focus File Search | `src/features/agent/ui-worktree-review-view/review-files-tree.tsx:223` |

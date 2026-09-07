@@ -502,6 +502,10 @@ export function CommandLogsPane({
       tabIndex={-1}
       onMouseDown={focusPaneInput}
       style={{ width }}
+      // Marks the pane so hosts that bind the same keys at panel scope (the
+      // project panel binds ⌘F to commit search) can decline while focus is in
+      // here and let the pane's own handler run.
+      data-command-logs-pane
       className="panel-edge-shadow bg-bg-0 relative flex h-full flex-col"
     >
       <div

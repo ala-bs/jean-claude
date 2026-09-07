@@ -1,4 +1,5 @@
 import {
+  parseProjectRootRunId,
   type ProjectCommand,
   START_PR_COMMAND_CHANNEL,
   type StartPrCommandParams,
@@ -23,10 +24,22 @@ export async function resolveRunCommandStart<Params extends RunStartParams>(
     findCommandById: (id: string) => Promise<ProjectCommand | undefined>;
   },
 ): Promise<Params & { projectId: string; workingDir: string }> {
-  const task = await deps.findTaskById(params.taskId);
-  if (!task) throw new Error(`Task ${params.taskId} not found`);
-  const project = await deps.findProjectById(task.projectId);
-  if (!project) throw new Error(`Project ${task.projectId} not found`);
+  // Project-root runs have no task row: the run id encodes the project and the
+  // command runs in the repository checkout rather than a task worktree.
+  const rootProjectId = parseProjectRootRunId(params.taskId);
+  let projectId: string;
+  let worktreePath: string | null = null;
+  if (rootProjectId) {
+    projectId = rootProjectId;
+  } else {
+    const task = await deps.findTaskById(params.taskId);
+    if (!task) throw new Error(`Task ${params.taskId} not found`);
+    projectId = task.projectId;
+    worktreePath = task.worktreePath;
+  }
+
+  const project = await deps.findProjectById(projectId);
+  if (!project) throw new Error(`Project ${projectId} not found`);
 
   const commandIds =
     'runCommandId' in params
@@ -35,9 +48,9 @@ export async function resolveRunCommandStart<Params extends RunStartParams>(
   if (commandIds.length === 0) throw new Error('Command group is empty');
   for (const commandId of commandIds) {
     const command = await deps.findCommandById(commandId);
-    if (!command || command.projectId !== task.projectId) {
+    if (!command || command.projectId !== projectId) {
       throw new Error(
-        `Command ${commandId} not found for project ${task.projectId}`,
+        `Command ${commandId} not found for project ${projectId}`,
       );
     }
   }
@@ -45,8 +58,8 @@ export async function resolveRunCommandStart<Params extends RunStartParams>(
   return {
     ...params,
     ...('runCommandIds' in params && { runCommandIds: commandIds }),
-    projectId: task.projectId,
-    workingDir: task.worktreePath ?? project.path,
+    projectId,
+    workingDir: worktreePath ?? project.path,
   } as Params & { projectId: string; workingDir: string };
 }
 

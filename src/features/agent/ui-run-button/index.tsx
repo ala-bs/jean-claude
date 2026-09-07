@@ -43,6 +43,11 @@ export function RunButton({
   onRunCommand: (runCommandIds: string[]) => void;
   isLogsPaneOpen: boolean;
   dropdownRef?: MutableRefObject<{ toggle: () => void } | null>;
+  /**
+   * Renders the loading and error strips. Only turn this off where the host
+   * surfaces a load failure itself — otherwise a failed command load leaves no
+   * way back.
+   */
   showAvailabilityState?: boolean;
 }) {
   const commandAvailability = useProjectCommandAvailability(projectId);

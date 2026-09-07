@@ -337,8 +337,9 @@ export interface PackageScriptsResult {
 }
 
 /**
- * Favorite commands run in the project root instead of a task worktree.
- * The run-command service is keyed by task id, so project-root runs use a
+ * Some commands run in the project root instead of a task worktree — favorites
+ * from the running-commands overlay, and anything launched from the project
+ * pane. The run-command service is keyed by task id, so project-root runs use a
  * synthetic id derived from the project id.
  */
 const PROJECT_ROOT_RUN_PREFIX = 'project-root:';
@@ -348,9 +349,11 @@ export function getProjectRootRunId(projectId: string): string {
 }
 
 export function parseProjectRootRunId(taskId: string): string | null {
-  return taskId.startsWith(PROJECT_ROOT_RUN_PREFIX)
-    ? taskId.slice(PROJECT_ROOT_RUN_PREFIX.length)
-    : null;
+  if (!taskId.startsWith(PROJECT_ROOT_RUN_PREFIX)) return null;
+  // An empty suffix names no project. Callers disagree on how they test the
+  // result (`!== null` vs truthiness), so reject it here rather than let one
+  // call site treat `project-root:` as a project-root run and another as a task.
+  return taskId.slice(PROJECT_ROOT_RUN_PREFIX.length) || null;
 }
 
 export function getRunCommandDisplayName(command: {
