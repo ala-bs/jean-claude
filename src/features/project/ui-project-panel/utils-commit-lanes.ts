@@ -115,6 +115,85 @@ export function layoutCommitLanes(
   return { rows, maxLane };
 }
 
+/**
+ * Hashes on the same branch line as `hash`, walking both directions.
+ *
+ * "Same branch" is not a property git stores on a commit, and it deliberately
+ * is not "same lane": `layoutCommitLanes` recycles a lane index once its branch
+ * converges, so an unrelated branch inherits both the lane and its colour.
+ *
+ * The line is instead the first-parent chain, which is what the eye reads as
+ * one continuous rail. Walking stops where the chain changes lane — that is the
+ * point the branch merges into another, and following further would highlight
+ * the whole trunk.
+ *
+ *   ● 9x0y   descendant: its parents[0] is the selection, same lane → included
+ *   ◉ c3d4   selected
+ *   ● a1b2   ancestor: selection's parents[0], same lane → included
+ *   ●/ e5f6  ancestor of a1b2 but sits in lane 0 → chain stops above it
+ *
+ * Returns an empty set when `hash` is not in `rows` (e.g. the row is on a page
+ * that has not loaded yet), so callers highlight nothing rather than guessing.
+ *
+ * Only reasons about loaded rows: a chain continuing past the end of the
+ * loaded window stops there, and the line grows as further pages arrive. That
+ * is why callers should treat this as "the branch line *so far*" rather than a
+ * closed set.
+ */
+export function traceBranchLine({
+  rows,
+  hash,
+}: {
+  rows: CommitLaneRow[];
+  hash: string | null;
+}): Set<string> {
+  const line = new Set<string>();
+  if (!hash) return line;
+
+  const byHash = new Map<string, CommitLaneRow>();
+  /** First-parent children, i.e. the rows continuing a lane upward. */
+  const childrenOf = new Map<string, CommitLaneRow[]>();
+  for (const row of rows) {
+    byHash.set(row.commit.hash, row);
+    const firstParent = row.commit.parents[0];
+    if (!firstParent) continue;
+    const siblings = childrenOf.get(firstParent);
+    if (siblings) siblings.push(row);
+    else childrenOf.set(firstParent, [row]);
+  }
+
+  const start = byHash.get(hash);
+  if (!start) return line;
+  line.add(hash);
+
+  // Downward: the selection's own first-parent chain, while it holds the lane.
+  let current: CommitLaneRow | undefined = start;
+  while (current) {
+    const parent: string | undefined = current.commit.parents[0];
+    const next: CommitLaneRow | undefined = parent
+      ? byHash.get(parent)
+      : undefined;
+    // `line.has` also guards against a cycle in malformed history.
+    if (!next || next.lane !== current.lane || line.has(next.commit.hash)) break;
+    line.add(next.commit.hash);
+    current = next;
+  }
+
+  // Upward: commits whose first parent leads back here in the same lane. A
+  // branch point gives one commit several such children, so this fans out.
+  const queue: CommitLaneRow[] = [start];
+  while (queue.length > 0) {
+    const row = queue.pop() as CommitLaneRow;
+    for (const child of childrenOf.get(row.commit.hash) ?? []) {
+      if (child.lane !== row.lane || line.has(child.commit.hash)) continue;
+      line.add(child.commit.hash);
+      queue.push(child);
+    }
+  }
+
+  return line;
+}
+
 /** Lanes still open above a row, used to draw rails through a day separator. */
 export function openLanesAt(row: CommitLaneRow | undefined): number[] {
   if (!row) return [];

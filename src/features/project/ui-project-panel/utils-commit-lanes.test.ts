@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatDayLabel, groupCommitsByDay, layoutCommitLanes } from './utils-commit-lanes';
+import {
+  formatDayLabel,
+  groupCommitsByDay,
+  layoutCommitLanes,
+  traceBranchLine,
+} from './utils-commit-lanes';
 import type { ProjectGitCommit } from '@shared/types';
 
 function commit(
@@ -92,6 +97,101 @@ describe('layoutCommitLanes', () => {
 
     expect(rows[1].lane).toBe(1);
     expect(rows[1].through).toEqual([0]);
+  });
+});
+
+describe('traceBranchLine', () => {
+  const trace = (commits: ProjectGitCommit[], hash: string | null) =>
+    traceBranchLine({ rows: layoutCommitLanes(commits).rows, hash });
+
+  it('walks both directions from the selection along first parents', () => {
+    // trunk a → b → c, all one lane.
+    const line = trace(
+      [commit('a', ['b']), commit('b', ['c']), commit('c', [])],
+      'b',
+    );
+
+    expect([...line].sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('stops where the branch merges instead of running down the trunk', () => {
+    //  ●   m      merge, lane 0
+    //  │╲
+    //  ●  │  t1   trunk, lane 0
+    //  │  ●  f1   feature, lane 1
+    //  │╱
+    //  ●   base
+    const commits = [
+      commit('m', ['t1', 'f1']),
+      commit('t1', ['base']),
+      commit('f1', ['base']),
+      commit('base', []),
+    ];
+
+    // Selecting the feature commit must not drag in the trunk or the base.
+    expect([...trace(commits, 'f1')]).toEqual(['f1']);
+    // The trunk line continues through its own lane.
+    expect([...trace(commits, 't1')].sort()).toEqual(['base', 'm', 't1']);
+  });
+
+  it('does not highlight an unrelated branch that reuses a freed lane', () => {
+    // `feat` closes lane 1 at `t0`; `fix` is then handed the same free lane.
+    // Both branches are two commits long so the walk actually traverses and
+    // has to stop in the right place, rather than halting on its first step.
+    const commits = [
+      commit('head', ['featmerge']),
+      commit('featmerge', ['t0', 'feat2']),
+      commit('feat2', ['feat1']),
+      commit('feat1', ['t0']),
+      commit('t0', ['fixmerge']),
+      commit('fixmerge', ['t1', 'fix2']),
+      commit('fix2', ['fix1']),
+      commit('fix1', ['t1']),
+      commit('t1', []),
+    ];
+    const { rows } = layoutCommitLanes(commits);
+    const laneOf = (hash: string) =>
+      rows.find((row) => row.commit.hash === hash)?.lane;
+
+    // Precondition: the two branches genuinely share a lane index.
+    expect(laneOf('feat1')).toBe(laneOf('fix1'));
+
+    // Each branch traces its own two commits and stops — no bleed across the
+    // reused lane, which is what a same-lane implementation would get wrong.
+    expect([...trace(commits, 'feat1')].sort()).toEqual(['feat1', 'feat2']);
+    expect([...trace(commits, 'fix2')].sort()).toEqual(['fix1', 'fix2']);
+  });
+
+  it('traces a single-commit topic branch', () => {
+    // Squash-merge repos are mostly these; the highlight must not skip them.
+    const commits = [
+      commit('m', ['t1', 'f1']),
+      commit('t1', ['base']),
+      commit('f1', ['base']),
+      commit('base', []),
+    ];
+
+    expect([...trace(commits, 'f1')]).toEqual(['f1']);
+  });
+
+  it('covers every row on a linear history, letting callers opt out', () => {
+    // No branching means one chain through the whole window. Callers use the
+    // "line is all of it" signal to skip highlighting entirely.
+    const commits = [commit('a', ['b']), commit('b', ['c']), commit('c', [])];
+    const { rows } = layoutCommitLanes(commits);
+
+    expect(traceBranchLine({ rows, hash: 'b' }).size).toBe(rows.length);
+  });
+
+  it('returns nothing for no selection or an unloaded commit', () => {
+    const commits = [commit('a', [])];
+    expect(trace(commits, null).size).toBe(0);
+    expect(trace(commits, 'not-loaded').size).toBe(0);
+  });
+
+  it('terminates on a cycle in malformed history', () => {
+    const line = trace([commit('a', ['b']), commit('b', ['a'])], 'a');
+    expect(line.has('a')).toBe(true);
   });
 });
 

@@ -13,6 +13,7 @@ import {
   groupCommitsByDay,
   layoutCommitLanes,
   openLanesAt,
+  traceBranchLine,
 } from './utils-commit-lanes';
 import { BranchFilter } from './branch-filter';
 import type { CommitLaneRow } from './utils-commit-lanes';
@@ -22,25 +23,30 @@ import { useMessageContextMenu } from '@/features/agent/ui-message-stream/ui-mes
 import { useToastStore } from '@/stores/toasts';
 
 /** Horizontal distance between lanes, and the left inset of lane 0. */
-const LANE_WIDTH = 13;
-const LANE_ORIGIN = 9;
+const LANE_WIDTH = 15;
+const LANE_ORIGIN = 10;
 const ROW_HEIGHT = 36;
 /** Distance from the bottom at which scrolling pulls the next page. */
 const LOAD_MORE_THRESHOLD_PX = 320;
 
+/** Stroke weight of the lane art. Thick enough to trace a branch by eye. */
+const LANE_STROKE = 2.25;
+
 /**
- * Per-lane colours. Lane 0 is deliberately the muted ink tone: it is the trunk
- * and is on nearly every row, so colouring it would tint the whole pane.
+ * Per-lane colours. Every lane is coloured, including lane 0 (the trunk), so a
+ * commit's lane can be matched to its branch at a glance. Ordered so the first
+ * few lanes — which cover almost every real row — are maximally spread in hue
+ * (295, 75, 155, 25); the near neighbours (235/260/205) sit at the tail.
  */
 const LANE_COLORS = [
-  'var(--color-ink-3)',
   'var(--color-acc-ink)',
-  'var(--color-status-review)',
   'var(--color-status-run)',
   'var(--color-status-done)',
-  'var(--color-status-pr)',
-  'var(--color-status-azure)',
   'var(--color-status-fail)',
+  'var(--color-status-review)',
+  'var(--color-status-azure)',
+  'var(--color-status-pr)',
+  'var(--color-ink-2)',
 ];
 
 function laneX(lane: number): number {
@@ -107,8 +113,9 @@ function GraphCell({
           x2={laneX(lane)}
           y2={ROW_HEIGHT}
           stroke={laneColor(lane)}
-          strokeOpacity={0.55}
-          strokeWidth={1.25}
+          strokeOpacity={0.75}
+          strokeWidth={LANE_STROKE}
+          strokeLinecap="round"
         />
       ))}
 
@@ -118,8 +125,9 @@ function GraphCell({
         x2={x}
         y2={isLast ? mid : ROW_HEIGHT}
         stroke={color}
-        strokeOpacity={row.lane === 0 ? 0.85 : 0.7}
-        strokeWidth={1.25}
+        strokeOpacity={0.95}
+        strokeWidth={LANE_STROKE}
+        strokeLinecap="round"
       />
 
       {row.forks.map((lane) => (
@@ -128,8 +136,9 @@ function GraphCell({
           d={`M ${x} ${mid} C ${x} ${mid + 10}, ${laneX(lane)} ${mid + 4}, ${laneX(lane)} ${ROW_HEIGHT}`}
           fill="none"
           stroke={laneColor(lane)}
-          strokeOpacity={0.7}
-          strokeWidth={1.25}
+          strokeOpacity={0.9}
+          strokeWidth={LANE_STROKE}
+          strokeLinecap="round"
         />
       ))}
 
@@ -139,8 +148,9 @@ function GraphCell({
           d={`M ${laneX(lane)} 0 C ${laneX(lane)} ${mid - 4}, ${x} ${mid - 10}, ${x} ${mid}`}
           fill="none"
           stroke={laneColor(lane)}
-          strokeOpacity={0.7}
-          strokeWidth={1.25}
+          strokeOpacity={0.9}
+          strokeWidth={LANE_STROKE}
+          strokeLinecap="round"
         />
       ))}
 
@@ -148,16 +158,16 @@ function GraphCell({
         <circle
           cx={x}
           cy={mid}
-          r={4.2}
+          r={4.8}
           fill="var(--color-bg-0)"
           stroke={color}
-          strokeWidth={2}
+          strokeWidth={2.75}
         />
       ) : (
         <circle
           cx={x}
           cy={mid}
-          r={row.commit.refs.length > 0 ? 3.8 : 3}
+          r={row.commit.refs.length > 0 ? 4.4 : 3.4}
           fill={color}
           stroke="var(--color-bg-0)"
           strokeWidth={2.5}
@@ -273,6 +283,8 @@ function CommitRow({
   isFirst,
   isLast,
   isSelected,
+  isOnBranchLine,
+  isDimmed,
   onSelect,
   onContextMenu,
 }: {
@@ -281,6 +293,10 @@ function CommitRow({
   isFirst: boolean;
   isLast: boolean;
   isSelected: boolean;
+  /** On the selected commit's branch line. False for every row when nothing is selected. */
+  isOnBranchLine: boolean;
+  /** Off that line while some line is active — never true without a selection. */
+  isDimmed: boolean;
   onSelect: () => void;
   onContextMenu: (event: MouseEvent) => void;
 }) {
@@ -294,8 +310,13 @@ function CommitRow({
       onContextMenu={onContextMenu}
       className={clsx(
         GRID,
-        'hover:bg-glass-light w-full text-left transition-colors',
+        'hover:bg-glass-light w-full text-left transition-[color,background-color,opacity]',
         isSelected && 'bg-bg-2 shadow-[inset_2px_0_0_var(--color-acc-ink)]',
+        // The branch line stays lit while everything else recedes. Hover and
+        // keyboard focus both restore a dimmed row, so the list stays
+        // browsable and Tab never lands on something at 40% with no cue.
+        isDimmed && 'opacity-40 hover:opacity-100 focus-visible:opacity-100',
+        isOnBranchLine && !isSelected && 'bg-glass-light',
       )}
       style={{
         height: ROW_HEIGHT,
@@ -354,7 +375,12 @@ function DaySeparator({
       className={clsx(GRID, 'h-[30px]')}
       style={{ gridTemplateColumns: `${width}px auto 1fr` }}
     >
-      <svg width={width} height={30} className="block shrink-0" aria-hidden>
+      <svg
+        width={width}
+        height={30}
+        className="block shrink-0 overflow-visible"
+        aria-hidden
+      >
         {lanes.map((lane) => (
           <line
             key={lane}
@@ -363,8 +389,9 @@ function DaySeparator({
             x2={laneX(lane)}
             y2={30}
             stroke={laneColor(lane)}
-            strokeOpacity={0.35}
-            strokeWidth={1.25}
+            strokeOpacity={0.55}
+            strokeWidth={LANE_STROKE}
+            strokeLinecap="round"
           />
         ))}
       </svg>
@@ -393,7 +420,8 @@ function SkeletonRow({ width }: { width: number }) {
           y2={ROW_HEIGHT}
           stroke="var(--color-ink-3)"
           strokeOpacity={0.4}
-          strokeWidth={1.25}
+          strokeWidth={LANE_STROKE}
+          strokeLinecap="round"
         />
       </svg>
       <span className="bg-bg-3 h-[7px] rounded" />
@@ -494,7 +522,22 @@ export function CommitHistory({
     [commits],
   );
   const groups = useMemo(() => groupCommitsByDay(rows), [rows]);
-  const width = 10 + (maxLane + 1) * LANE_WIDTH;
+  const width = LANE_ORIGIN + (maxLane + 1) * LANE_WIDTH;
+
+  // Empty while nothing is selected, so no row is dimmed in the default view.
+  const branchLine = useMemo(
+    () => traceBranchLine({ rows, hash: selectedHash }),
+    [rows, selectedHash],
+  );
+  // Only trace when the line is a *proper subset* of what is on screen. On a
+  // linear stretch of history every loaded row is one first-parent chain, so
+  // the line covers everything: dimming nothing while tinting every row would
+  // just leave the whole list looking permanently hovered. "All of it" is not
+  // an answer to "which commits share this branch".
+  //
+  // Size 1 still traces — a single-commit topic branch is the case where
+  // pointing it out is most useful, and squash-merge repos are full of them.
+  const isTracing = branchLine.size > 0 && branchLine.size < rows.length;
 
   const addToast = useToastStore((state) => state.addToast);
   const { openMenu, closeMenu, portal } = useMessageContextMenu({
@@ -675,6 +718,10 @@ export function CommitHistory({
                     rowIndex === group.rows.length - 1
                   }
                   isSelected={selectedHash === row.commit.hash}
+                  isOnBranchLine={
+                    isTracing && branchLine.has(row.commit.hash)
+                  }
+                  isDimmed={isTracing && !branchLine.has(row.commit.hash)}
                   onSelect={() => onSelectCommit(row.commit)}
                   onContextMenu={(event) => openCommitMenu(event, row.commit)}
                 />
