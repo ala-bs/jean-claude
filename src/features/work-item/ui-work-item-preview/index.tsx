@@ -11,6 +11,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import {
+  memo,
   type ReactNode,
   startTransition,
   useCallback,
@@ -67,7 +68,13 @@ import { WorkItemTagEditor } from '../ui-work-item-tag-editor';
 import { WorkItemTypeIcon } from '../ui-work-item-shared';
 type DetailsTab = 'content' | 'comments' | 'history' | 'test-cases';
 
-export function WorkItemPreview({
+/**
+ * Memoized: this renders the highlighted work item's description through a full
+ * markdown/HTML pipeline. It sits beside the work-item search box, so without
+ * this it re-parsed the description on every filter keystroke even though none
+ * of its props changed.
+ */
+export const WorkItemPreview = memo(function WorkItemPreview({
   workItem,
   projectId,
   providerId,
@@ -859,7 +866,7 @@ export function WorkItemPreview({
       </div>
     </div>
   );
-}
+});
 
 function RelatedWorkItems({
   workItem,
