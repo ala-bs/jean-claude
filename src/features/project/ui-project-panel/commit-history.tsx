@@ -1,5 +1,11 @@
-import { GitBranch, GitPullRequest, Search } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { Clipboard, GitBranch, GitPullRequest, Search } from 'lucide-react';
+import {
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+} from 'react';
 import clsx from 'clsx';
 
 import type { BranchInfo, ProjectGitCommit, ProjectGitRef } from '@shared/types';
@@ -12,6 +18,8 @@ import { BranchFilter } from './branch-filter';
 import type { CommitLaneRow } from './utils-commit-lanes';
 import { CommitSearch } from './commit-search';
 import { formatRelativeTime } from '@/lib/time';
+import { useMessageContextMenu } from '@/features/agent/ui-message-stream/ui-message-context-menu';
+import { useToastStore } from '@/stores/toasts';
 
 /** Horizontal distance between lanes, and the left inset of lane 0. */
 const LANE_WIDTH = 13;
@@ -202,11 +210,13 @@ function ResultRow({
   query,
   isSelected,
   onSelect,
+  onContextMenu,
 }: {
   commit: ProjectGitCommit;
   query: string;
   isSelected: boolean;
   onSelect: () => void;
+  onContextMenu: (event: MouseEvent) => void;
 }) {
   const branchRef =
     commit.refs.find((ref) => ref.kind === 'branch') ??
@@ -216,6 +226,7 @@ function ResultRow({
     <button
       type="button"
       onClick={onSelect}
+      onContextMenu={onContextMenu}
       className={clsx(
         GRID,
         'hover:bg-glass-light w-full text-left transition-colors',
@@ -263,6 +274,7 @@ function CommitRow({
   isLast,
   isSelected,
   onSelect,
+  onContextMenu,
 }: {
   row: CommitLaneRow;
   width: number;
@@ -270,6 +282,7 @@ function CommitRow({
   isLast: boolean;
   isSelected: boolean;
   onSelect: () => void;
+  onContextMenu: (event: MouseEvent) => void;
 }) {
   const commit: ProjectGitCommit = row.commit;
   const [primaryRef, ...extraRefs] = commit.refs;
@@ -278,6 +291,7 @@ function CommitRow({
     <button
       type="button"
       onClick={onSelect}
+      onContextMenu={onContextMenu}
       className={clsx(
         GRID,
         'hover:bg-glass-light w-full text-left transition-colors',
@@ -482,18 +496,26 @@ export function CommitHistory({
   const groups = useMemo(() => groupCommitsByDay(rows), [rows]);
   const width = 10 + (maxLane + 1) * LANE_WIDTH;
 
+  const addToast = useToastStore((state) => state.addToast);
+  const { openMenu, closeMenu, portal } = useMessageContextMenu({
+    overlayId: 'commit-history-context-menu',
+  });
+
   const loadMore = useCallback(() => {
     if (isLoadingMore || !hasMore) return;
     onLoadMore();
   }, [hasMore, isLoadingMore, onLoadMore]);
 
   const handleScroll = useCallback(() => {
+    // The menu is position:fixed and scrolling fires no mousedown, so without
+    // this it stays pinned to the viewport while the rows slide underneath.
+    closeMenu();
     const element = scroller.current;
     if (!element) return;
     const remaining =
       element.scrollHeight - element.scrollTop - element.clientHeight;
     if (remaining < LOAD_MORE_THRESHOLD_PX) loadMore();
-  }, [loadMore]);
+  }, [closeMenu, loadMore]);
 
   // A page shorter than the viewport never fires a scroll event, so infinite
   // scrolling would stall on tall panes until the user resized the window.
@@ -511,6 +533,46 @@ export function CommitHistory({
 
   const loadedLabel = rows.length.toLocaleString();
   const totalLabel = totalCommits?.toLocaleString();
+
+  // Copying is silent by nature — without a toast a denied clipboard
+  // permission is indistinguishable from a successful copy.
+  const copyWithFeedback = useCallback(
+    (label: string, text: string) => {
+      navigator.clipboard.writeText(text).then(
+        () => addToast({ message: `Copied ${label}`, type: 'success' }),
+        () => addToast({ message: `Could not copy ${label}`, type: 'error' }),
+      );
+    },
+    [addToast],
+  );
+
+  const openCommitMenu = useCallback(
+    (event: MouseEvent, commit: ProjectGitCommit) => {
+      // Right-clicking a row that isn't the selected one leaves the menu with
+      // no visual anchor in a dense uniform grid, so select the target first.
+      onSelectCommit(commit);
+      openMenu(event, [
+        {
+          label: 'Copy commit hash',
+          icon: <Clipboard />,
+          onClick: () => copyWithFeedback('commit hash', commit.hash),
+        },
+        {
+          label: 'Copy short hash',
+          icon: <Clipboard />,
+          onClick: () => copyWithFeedback('short hash', commit.shortHash),
+        },
+        {
+          // `subject` is git's %s — the first line only, so the label must not
+          // promise the full message body.
+          label: 'Copy commit subject',
+          icon: <Clipboard />,
+          onClick: () => copyWithFeedback('commit subject', commit.subject),
+        },
+      ]);
+    },
+    [copyWithFeedback, onSelectCommit, openMenu],
+  );
 
   const clearFilters = () => {
     onQueryChange('');
@@ -599,6 +661,7 @@ export function CommitHistory({
                   query={query}
                   isSelected={selectedHash === row.commit.hash}
                   onSelect={() => onSelectCommit(row.commit)}
+                  onContextMenu={(event) => openCommitMenu(event, row.commit)}
                 />
               ) : (
                 <CommitRow
@@ -613,6 +676,7 @@ export function CommitHistory({
                   }
                   isSelected={selectedHash === row.commit.hash}
                   onSelect={() => onSelectCommit(row.commit)}
+                  onContextMenu={(event) => openCommitMenu(event, row.commit)}
                 />
               ),
             )}
@@ -672,6 +736,8 @@ export function CommitHistory({
             </div>
           );
         })()}
+
+      {portal}
     </div>
   );
 }

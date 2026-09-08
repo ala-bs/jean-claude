@@ -121,7 +121,7 @@ export function useMessageContextMenu(
       document.body,
     );
 
-  return { openMenu, portal };
+  return { openMenu, closeMenu: close, portal };
 }
 
 // Pre-built item factories
