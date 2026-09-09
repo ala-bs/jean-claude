@@ -16,6 +16,7 @@ import {
   useInvalidatePullRequestDetails,
   usePullRequest,
   usePullRequestPolicyEvaluations,
+  useRequeuePolicyEvaluation,
   useSetAutoComplete,
 } from '@/hooks/use-pull-requests';
 import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
@@ -313,6 +314,50 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
     setJobId,
     setStatus,
   ]);
+
+  // Kick off the required CI the PR still owes, once it is this entry's turn.
+  // Azure leaves manual/expired build policies at `status: 'queued'` with no
+  // `context.buildId`; auto-complete will never fire until they actually run,
+  // so the queue would sit on the head entry forever waiting on a build nobody
+  // asked for.
+  const requeueMutation = useRequeuePolicyEvaluation(projectId, prId, repoInfo);
+  // Tracks evaluations we already asked Azure to run. Deliberately NOT a
+  // "requeued once, ever" list: the marker is dropped again as soon as the
+  // evaluation stops looking pending, so a policy that re-expires later (a push
+  // to the source branch while the PR sits armed) gets run again, and a requeue
+  // that errored is retried on the next poll instead of wedging the queue.
+  const requeuedEvaluationIdsRef = useRef<Set<string>>(new Set());
+  const requeueRef = useRef(requeueMutation);
+  useEffect(() => {
+    requeueRef.current = requeueMutation;
+  }, [requeueMutation]);
+  useEffect(() => {
+    if (!isArmed) return;
+    for (const evaluation of evaluations) {
+      if (!evaluation.configuration.settings.buildDefinitionId) continue;
+      if (!evaluation.isBlocking) continue;
+      const { evaluationId } = evaluation;
+      // `queued` + a buildId means a run is already in flight — unless Azure
+      // flagged it expired, in which case that build is for an old commit.
+      const isPendingRun =
+        evaluation.status === 'queued' &&
+        (!evaluation.context?.buildId || !!evaluation.context.isExpired);
+      if (!isPendingRun) {
+        requeuedEvaluationIdsRef.current.delete(evaluationId);
+        continue;
+      }
+      if (requeuedEvaluationIdsRef.current.has(evaluationId)) continue;
+      requeuedEvaluationIdsRef.current.add(evaluationId);
+      requeueRef.current.mutate(
+        { evaluationId },
+        {
+          onError: () => {
+            requeuedEvaluationIdsRef.current.delete(evaluationId);
+          },
+        },
+      );
+    }
+  }, [evaluations, isArmed]);
 
   // Watch the armed PR for a terminal state.
   const hasObservedArmedRef = useRef(false);
