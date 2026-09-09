@@ -51,18 +51,95 @@ export function detectJson(text: string): DetectedJson | null {
   const looksLikeArray = first === '[' && last === ']';
   if (!looksLikeObject && !looksLikeArray) return null;
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return null;
-  }
+  const parsed = parseJsonTolerantly(trimmed);
+  if (parsed === PARSE_FAILED) return null;
 
   const summary = summarizeJsonValue(parsed);
   if (!summary) return null;
 
-  return { ...summary, json: JSON.stringify(parsed) };
+  // Re-check the size after serialization, not just on the input: escaping
+  // control characters grows the payload (up to 6x for chars without a short
+  // escape), and it is the serialized value that lands in a DOM attribute.
+  const json = JSON.stringify(parsed);
+  if (json.length > MAX_JSON_LENGTH) return null;
+
+  return { ...summary, json };
 }
+
+/** Sentinel so `undefined`/`null` parse results stay distinguishable from failure. */
+const PARSE_FAILED = Symbol('json-parse-failed');
+
+/**
+ * `JSON.parse`, with one retry for the most common real-world paste defect:
+ * literal control characters (newlines, tabs) inside string values. Copying a
+ * multi-line message field out of a log viewer, DB client or API console keeps
+ * the raw newline, which strict JSON forbids — so the payload is obviously JSON
+ * to a human but throws "Bad control character in string literal".
+ */
+function parseJsonTolerantly(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    // fall through to the repaired retry
+  }
+
+  try {
+    return JSON.parse(escapeControlCharsInStrings(text));
+  } catch {
+    return PARSE_FAILED;
+  }
+}
+
+/**
+ * Escapes literal control characters that sit inside a JSON string literal.
+ * Walks the text tracking string/escape state so control characters in the
+ * structural whitespace (between tokens) are left untouched.
+ */
+function escapeControlCharsInStrings(text: string): string {
+  let result = '';
+  let inString = false;
+  let isEscaped = false;
+
+  for (const char of text) {
+    if (isEscaped) {
+      result += char;
+      isEscaped = false;
+      continue;
+    }
+
+    if (char === '\\' && inString) {
+      result += char;
+      isEscaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      result += char;
+      continue;
+    }
+
+    const code = char.codePointAt(0) ?? 0;
+    if (inString && code < 0x20) {
+      result +=
+        CONTROL_CHAR_ESCAPES[char] ??
+        `\\u${code.toString(16).padStart(4, '0')}`;
+      continue;
+    }
+
+    result += char;
+  }
+
+  return result;
+}
+
+const CONTROL_CHAR_ESCAPES: Record<string, string> = {
+  '\n': '\\n',
+  '\r': '\\r',
+  '\t': '\\t',
+  '\b': '\\b',
+  '\f': '\\f',
+};
 
 /** Summarizes an already-parsed value, or `null` if it isn't an object/array. */
 export function summarizeJsonValue(parsed: unknown): JsonSummary | null {
