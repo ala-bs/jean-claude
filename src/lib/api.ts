@@ -207,6 +207,11 @@ import type {
   NormalizedPermissionRequest,
 } from '@shared/normalized-message-v2';
 import type {
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalSnapshot,
+} from '@shared/terminal-types';
+import type {
   TimesheetAction,
   TimesheetAdapterCapability,
   TimesheetAuthStatus,
@@ -1841,6 +1846,28 @@ export interface Api {
       callback: (event: RunCommandGroupAbortEvent) => void,
     ) => () => void;
   };
+  terminal: {
+    /**
+     * Attaches to the session, spawning a shell only if there is not one
+     * already. Returns the scrollback to replay into a fresh xterm.
+     */
+    ensure: (params: {
+      sessionId: string;
+      cwd: string;
+      cols: number;
+      rows: number;
+    }) => Promise<TerminalSnapshot>;
+    write: (params: { sessionId: string; data: string }) => Promise<void>;
+    resize: (params: {
+      sessionId: string;
+      cols: number;
+      rows: number;
+    }) => Promise<void>;
+    /** Kills the shell. Closing the pane alone does NOT call this. */
+    close: (sessionId: string) => Promise<void>;
+    onData: (callback: (event: TerminalDataEvent) => void) => () => void;
+    onExit: (callback: (event: TerminalExitEvent) => void) => () => void;
+  };
   globalPrompt: {
     onShow: (callback: (prompt: GlobalPrompt) => void) => () => void;
     onDismiss: (callback: (promptId: string) => void) => () => void;
@@ -3066,6 +3093,20 @@ export const api: Api = hasWindowApi
         onLog: () => () => {},
         onLogsReset: () => () => {},
         onGroupAborted: () => () => {},
+      },
+      terminal: {
+        ensure: async ({ sessionId }) => ({
+          sessionId,
+          backlog: '',
+          offset: 0,
+          isRunning: false,
+          exitCode: null,
+        }),
+        write: async () => {},
+        resize: async () => {},
+        close: async () => {},
+        onData: () => () => {},
+        onExit: () => () => {},
       },
       globalPrompt: {
         onShow: () => () => {},

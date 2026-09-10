@@ -123,6 +123,10 @@ import {
   type UpdateProjectCommand,
   type UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
+import {
+  TERMINAL_DATA_CHANNEL,
+  TERMINAL_EXIT_CHANNEL,
+} from '@shared/terminal-types';
 
 import type {
   NewWorkActivityEvent,
@@ -524,6 +528,7 @@ import { stopReloadPreviewActivities } from '../services/reload-preview-service'
 import { systemCalendarService } from '../services/system-calendar-service';
 import { taskRuntimeCleanupService } from '../services/task-runtime-cleanup-service';
 import { TaskStepRepository } from '../database/repositories/task-steps';
+import { terminalService } from '../services/terminal-service';
 import { timesheetService } from '../services/timesheet-service';
 import { TrackedPipelineRepository } from '../database/repositories/tracked-pipelines';
 import { UsageSnapshotRepository } from '../database/repositories/usage-snapshots';
@@ -6144,6 +6149,53 @@ export function registerIpcHandlers() {
           text,
           generation,
         );
+      }
+    });
+  });
+
+  // Interactive terminal (project panel)
+  ipcMain.handle(
+    'project:terminal:ensure',
+    (
+      _,
+      params: { sessionId: string; cwd: string; cols: number; rows: number },
+    ) => {
+      dbg.ipc('project:terminal:ensure %s', params.sessionId);
+      return terminalService.ensureSession(params);
+    },
+  );
+
+  ipcMain.handle(
+    'project:terminal:write',
+    (_, params: { sessionId: string; data: string }) => {
+      terminalService.write(params);
+    },
+  );
+
+  ipcMain.handle(
+    'project:terminal:resize',
+    (_, params: { sessionId: string; cols: number; rows: number }) => {
+      terminalService.resize(params);
+    },
+  );
+
+  ipcMain.handle('project:terminal:close', (_, sessionId: string) => {
+    dbg.ipc('project:terminal:close %s', sessionId);
+    terminalService.close(sessionId);
+  });
+
+  terminalService.onData((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send(TERMINAL_DATA_CHANNEL, event);
+      }
+    });
+  });
+
+  terminalService.onExit((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send(TERMINAL_EXIT_CHANNEL, event);
       }
     });
   });

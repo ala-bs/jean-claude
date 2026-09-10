@@ -130,6 +130,7 @@ export const dbg = {
   usage: createLogger('usage'),
   encryption: createLogger('encryption'),
   runCommand: createLogger('run-command'),
+  terminal: createLogger('terminal'),
   skill: createLogger('skill'),
   mcp: createLogger('mcp'),
   completion: createLogger('completion'),

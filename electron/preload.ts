@@ -73,6 +73,12 @@ import {
   START_PR_COMMAND_CHANNEL,
   type StartPrCommandParams,
 } from '@shared/run-command-types';
+import {
+  TERMINAL_DATA_CHANNEL,
+  TERMINAL_EXIT_CHANNEL,
+  type TerminalDataEvent,
+  type TerminalExitEvent,
+} from '@shared/terminal-types';
 import type {
   TimesheetAction,
   TimesheetAxisLookupRequest,
@@ -1527,6 +1533,30 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('project:commands:run:logsReset', handler);
       return () =>
         ipcRenderer.removeListener('project:commands:run:logsReset', handler);
+    },
+  },
+  terminal: {
+    ensure: (params: {
+      sessionId: string;
+      cwd: string;
+      cols: number;
+      rows: number;
+    }) => ipcRenderer.invoke('project:terminal:ensure', params),
+    write: (params: { sessionId: string; data: string }) =>
+      ipcRenderer.invoke('project:terminal:write', params),
+    resize: (params: { sessionId: string; cols: number; rows: number }) =>
+      ipcRenderer.invoke('project:terminal:resize', params),
+    close: (sessionId: string) =>
+      ipcRenderer.invoke('project:terminal:close', sessionId),
+    onData: (callback: (event: TerminalDataEvent) => void) => {
+      const handler = (_: unknown, event: TerminalDataEvent) => callback(event);
+      ipcRenderer.on(TERMINAL_DATA_CHANNEL, handler);
+      return () => ipcRenderer.removeListener(TERMINAL_DATA_CHANNEL, handler);
+    },
+    onExit: (callback: (event: TerminalExitEvent) => void) => {
+      const handler = (_: unknown, event: TerminalExitEvent) => callback(event);
+      ipcRenderer.on(TERMINAL_EXIT_CHANNEL, handler);
+      return () => ipcRenderer.removeListener(TERMINAL_EXIT_CHANNEL, handler);
     },
   },
   globalPrompt: {

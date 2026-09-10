@@ -192,6 +192,11 @@ const DEFAULT_COMMAND_LOGS_PANE_WIDTH = 520;
 const MIN_COMMAND_LOGS_PANE_WIDTH = 320;
 const MAX_COMMAND_LOGS_PANE_WIDTH = 1200;
 
+// Constants for the project panel's terminal pane width
+const DEFAULT_PROJECT_TERMINAL_PANE_WIDTH = 520;
+const MIN_PROJECT_TERMINAL_PANE_WIDTH = 320;
+const MAX_PROJECT_TERMINAL_PANE_WIDTH = 1200;
+
 // Constants for tool diff preview pane width
 const DEFAULT_TOOL_DIFF_PREVIEW_PANE_WIDTH = 520;
 const MIN_TOOL_DIFF_PREVIEW_PANE_WIDTH = 360;
@@ -267,6 +272,9 @@ interface NavigationState {
   // App-level: run command logs pane width (global setting)
   commandLogsPaneWidth: number;
 
+  // App-level: project panel terminal pane width (global setting)
+  projectTerminalPaneWidth: number;
+
   // App-level: tool diff preview pane width (global setting)
   toolDiffPreviewPaneWidth: number;
 
@@ -328,6 +336,7 @@ interface NavigationState {
   setFileExplorerTreeWidth: (width: number) => void;
   setFileExplorerPaneWidth: (width: number) => void;
   setCommandLogsPaneWidth: (width: number) => void;
+  setProjectTerminalPaneWidth: (width: number) => void;
   setToolDiffPreviewPaneWidth: (width: number) => void;
   setCommitDiffPaneWidth: (width: number) => void;
   setTasksRailWidth: (width: number) => void;
@@ -398,6 +407,7 @@ const useStore = create<NavigationState>()(
       fileExplorerTreeWidth: DEFAULT_FILE_EXPLORER_TREE_WIDTH,
       fileExplorerPaneWidth: DEFAULT_FILE_EXPLORER_PANE_WIDTH,
       commandLogsPaneWidth: DEFAULT_COMMAND_LOGS_PANE_WIDTH,
+      projectTerminalPaneWidth: DEFAULT_PROJECT_TERMINAL_PANE_WIDTH,
       toolDiffPreviewPaneWidth: DEFAULT_TOOL_DIFF_PREVIEW_PANE_WIDTH,
       commitDiffPaneWidth: DEFAULT_COMMIT_DIFF_PANE_WIDTH,
       tasksRailWidth: DEFAULT_TASKS_RAIL_WIDTH,
@@ -454,6 +464,14 @@ const useStore = create<NavigationState>()(
           commandLogsPaneWidth: Math.min(
             Math.max(MIN_COMMAND_LOGS_PANE_WIDTH, width),
             MAX_COMMAND_LOGS_PANE_WIDTH,
+          ),
+        }),
+
+      setProjectTerminalPaneWidth: (width) =>
+        set({
+          projectTerminalPaneWidth: Math.min(
+            Math.max(MIN_PROJECT_TERMINAL_PANE_WIDTH, width),
+            MAX_PROJECT_TERMINAL_PANE_WIDTH,
           ),
         }),
 
@@ -1630,6 +1648,18 @@ export function useCommandLogsPaneWidth() {
     setWidth,
     minWidth: MIN_COMMAND_LOGS_PANE_WIDTH,
     maxWidth: MAX_COMMAND_LOGS_PANE_WIDTH,
+  };
+}
+
+// Hook for the project panel's terminal pane width
+export function useProjectTerminalPaneWidth() {
+  const width = useStore((state) => state.projectTerminalPaneWidth);
+  const setWidth = useStore((state) => state.setProjectTerminalPaneWidth);
+  return {
+    width,
+    setWidth,
+    minWidth: MIN_PROJECT_TERMINAL_PANE_WIDTH,
+    maxWidth: MAX_PROJECT_TERMINAL_PANE_WIDTH,
   };
 }
 

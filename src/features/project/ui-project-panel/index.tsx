@@ -6,10 +6,12 @@ import {
   ListTodo,
   RotateCw,
   Settings,
+  Terminal as TerminalIcon,
 } from 'lucide-react';
 import { getEditorLabel, useEditorSetting } from '@/hooks/use-settings';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
+import clsx from 'clsx';
 import { useNavigate } from '@tanstack/react-router';
 
 import {
@@ -32,6 +34,7 @@ import { CommitPanel } from './commit-panel';
 import { getProjectRootRunId } from '@shared/run-command-types';
 import type { ProjectGitLogFilter } from '@shared/types';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
+import { ProjectTerminal } from '@/features/project/ui-project-terminal';
 import { RunButton } from '@/features/agent/ui-run-button';
 import { SyncBar } from './sync-bar';
 import { TasksRail } from './tasks-rail';
@@ -70,6 +73,8 @@ function ProjectHeader({
   editorLabel,
   onBack,
   runControl,
+  onToggleTerminal,
+  isTerminalOpen,
   onRefresh,
   isRefreshing,
   children,
@@ -84,6 +89,8 @@ function ProjectHeader({
   onBack?: () => void;
   /** Run/stop controls for commands executed in the repository checkout. */
   runControl?: React.ReactNode;
+  onToggleTerminal: () => void;
+  isTerminalOpen: boolean;
   /** Omitted for non-git projects, where there is no git state to re-read. */
   onRefresh?: () => void;
   isRefreshing: boolean;
@@ -145,6 +152,19 @@ function ProjectHeader({
 
         <div className="flex shrink-0 items-center gap-1.5">
           {runControl}
+          <button
+            type="button"
+            onClick={onToggleTerminal}
+            title="Toggle terminal (⌃`)"
+            aria-label="Toggle terminal"
+            aria-pressed={isTerminalOpen}
+            className={clsx(
+              'hover:bg-glass-light hover:text-ink-0 inline-flex h-[26px] w-[26px] items-center justify-center rounded-md transition-colors',
+              isTerminalOpen ? 'bg-glass-light text-ink-0' : 'text-ink-2',
+            )}
+          >
+            <TerminalIcon size={13} />
+          </button>
           {onRefresh && (
             <button
               type="button"
@@ -244,6 +264,7 @@ export function ProjectPanel({
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(
     null,
   );
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const runDropdownRef = useRef<{ toggle: () => void } | null>(null);
   // The run dropdown renders nothing without configured commands, so offering
   // its shortcut would be a command palette entry that silently does nothing.
@@ -262,11 +283,13 @@ export function ProjectPanel({
   const canToggleLogs =
     hasConfiguredItems || hasRunCommandLogs || isLogsPaneOpen;
 
-  // The logs pane, the commit diff and the tasks rail all share the right
-  // column. Opening one closes the other so every action has a visible effect —
-  // otherwise ⌘L behind an open commit diff would look like a dead key.
+  // The logs pane, the commit diff, the terminal and the tasks rail all share
+  // the right column. Opening one closes the others so every action has a
+  // visible effect — otherwise ⌘L behind an open commit diff would look like a
+  // dead key.
   const openLogsPane = useCallback(() => {
     setSelectedHash(null);
+    setIsTerminalOpen(false);
     setIsLogsPaneOpen(true);
   }, []);
   // Clearing the commit only belongs on the opening path: closing the logs
@@ -279,6 +302,18 @@ export function ProjectPanel({
     }
     openLogsPane();
   }, [isLogsPaneOpen, openLogsPane]);
+
+  // Unmounting the terminal only detaches the view; the shell keeps running in
+  // the main process, so toggling it closed is cheap and loses nothing.
+  const toggleTerminal = useCallback(() => {
+    if (isTerminalOpen) {
+      setIsTerminalOpen(false);
+      return;
+    }
+    setSelectedHash(null);
+    setIsLogsPaneOpen(false);
+    setIsTerminalOpen(true);
+  }, [isTerminalOpen]);
 
   // Every keystroke would otherwise run a fresh `git log` over the whole
   // repository; the field itself stays responsive because only the query that
@@ -317,7 +352,11 @@ export function ProjectPanel({
           // The command logs pane binds ⌘F to its own log filter on a bubbling
           // window listener, which this capture-phase dispatcher would otherwise
           // pre-empt. Declining hands the key back to whatever is focused.
-          if (document.activeElement?.closest('[data-command-logs-pane]')) {
+          if (
+            document.activeElement?.closest(
+              '[data-command-logs-pane], [data-project-terminal]',
+            )
+          ) {
             return false;
           }
           searchInput.current?.focus();
@@ -369,9 +408,38 @@ export function ProjectPanel({
         shortcut: 'cmd+l',
         handler: toggleLogsPane,
       },
+      // ⌃` is the conventional terminal toggle and is otherwise unbound in this
+      // app. It must not be ⌘-based: the shell needs ⌘-keys to reach the OS
+      // clipboard, and every ⌘ letter is already taken.
+      {
+        label: 'Toggle Terminal',
+        section: 'Project',
+        shortcut: 'ctrl+`',
+        keywords: ['shell', 'console', 'bash', 'zsh'],
+        handler: toggleTerminal,
+      },
+      // Escape closes the terminal rather than leaving the project. Mutually
+      // exclusive with the other Escape bindings here: only one of the right
+      // column's occupants is ever on screen.
+      isTerminalOpen && {
+        label: 'Close Terminal',
+        shortcut: 'escape',
+        handler: () => {
+          // Escape belongs to the shell while it has focus — it is how you
+          // leave insert mode in vim, dismiss a completion menu, and so on.
+          // Declining hands the key back to xterm; ⌃` still closes the pane.
+          if (document.activeElement?.closest('[data-project-terminal]')) {
+            return false;
+          }
+          setIsTerminalOpen(false);
+          return true;
+        },
+        hideInCommandPalette: true,
+      },
       backToTaskId !== undefined &&
         selectedHash === null &&
-        !isLogsPaneOpen && {
+        !isLogsPaneOpen &&
+        !isTerminalOpen && {
           label: 'Back to Task',
           section: 'Project',
           shortcut: 'escape',
@@ -436,6 +504,8 @@ export function ProjectPanel({
             }}
           />
         }
+        onToggleTerminal={toggleTerminal}
+        isTerminalOpen={isTerminalOpen}
         onRefresh={isGitRepository ? runRefresh : undefined}
         isRefreshing={isRefreshing}
       >
@@ -472,6 +542,7 @@ export function ProjectPanel({
                 current === commit.hash ? null : commit.hash,
               );
               setIsLogsPaneOpen(false);
+              setIsTerminalOpen(false);
             }}
           />
         ) : (
@@ -487,7 +558,7 @@ export function ProjectPanel({
           </div>
         )}
 
-        {/* One right-hand column, three occupants. The commit history beside it
+        {/* One right-hand column, four occupants. The commit history beside it
             is `flex-1` with `flex-basis: 0`, so it carries no shrink weight —
             the wrapper keeps the pane at the width the user dragged it to
             instead of letting it absorb every shortfall. */}
@@ -506,6 +577,12 @@ export function ProjectPanel({
               selectedCommandId={selectedCommandId}
               onSelectCommand={setSelectedCommandId}
               onClose={() => setIsLogsPaneOpen(false)}
+            />
+          ) : isTerminalOpen ? (
+            <ProjectTerminal
+              projectId={projectId}
+              cwd={project.path}
+              onClose={() => setIsTerminalOpen(false)}
             />
           ) : (
             <TasksRail projectId={projectId} />

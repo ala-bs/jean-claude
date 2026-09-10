@@ -54,6 +54,7 @@ import { registerIpcHandlers } from './ipc/handlers';
 import { runCommandService } from './services/run-command-service';
 import { syncBuiltinSkillSymlinks } from './services/skill-management-service';
 import { systemCalendarService } from './services/system-calendar-service';
+import { terminalService } from './services/terminal-service';
 import { upsertBuiltinSkills } from './services/builtin-skills-service';
 
 // Register custom protocol scheme before app is ready
@@ -644,6 +645,10 @@ app.on('before-quit', (event) => {
           dbg.main('Idle shared OpenCode server stopped');
           await runCommandService.stopAllCommands();
           dbg.main('All commands stopped');
+          // Terminal shells are deliberately long lived, so nothing else ever
+          // reaps them — without this they outlive the window as orphan ptys.
+          terminalService.closeAll();
+          dbg.main('All terminal sessions closed');
           // Stops mobile preview sessions and their helper processes. Awaited
           // here so this handler stays the single owner of app.quit(): the
           // registry must not quit while agents/DB writes are still in flight.
