@@ -1079,3 +1079,116 @@ describe('ClaudeCodeBackend directory access', () => {
     }
   });
 });
+
+/**
+ * The wire shape of the first user message. Anthropic content blocks are
+ * ordered, so this is where a pasted image's position in the prompt either
+ * survives or is lost. The empty-text-block rules matter too: an empty
+ * `content` array is a shape the CLI may reject, and a bare-string prompt puts
+ * the SDK into stdin-closing single-turn mode.
+ */
+describe('ClaudeCodeBackend user message content blocks', () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+    vi.useRealTimers();
+  });
+
+  const anchored = {
+    type: 'image' as const,
+    data: 'a-data',
+    mimeType: 'image/png',
+    filename: 'a.png',
+    placeholderToken: 'aaa',
+  };
+  const loose = {
+    type: 'image' as const,
+    data: 'b-data',
+    mimeType: 'image/png',
+    filename: 'b.png',
+  };
+  const imgBlock = (data: string) => ({
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data },
+  });
+
+  async function contentFor(parts: unknown[]) {
+    let promptIterator: AsyncIterator<unknown> | null = null;
+    queryMock.mockImplementation(({ prompt }: { prompt: unknown }) => {
+      promptIterator = (prompt as AsyncIterable<unknown>)[
+        Symbol.asyncIterator
+      ]();
+      return createQuery();
+    });
+
+    const backend = makeBackend();
+    const session = await backend.start(
+      { type: 'claude-code', cwd: '/worktree', interactionMode: 'ask' },
+      parts as Parameters<typeof backend.start>[1],
+    );
+    await vi.waitFor(() => expect(promptIterator).not.toBeNull());
+    try {
+      const first = await promptIterator!.next();
+      return (
+        first.value as { message: { content: unknown[] } }
+      ).message.content;
+    } finally {
+      void session;
+      await backend.dispose();
+    }
+  }
+
+  it('sends text only as a single text block', async () => {
+    expect(await contentFor([{ type: 'text', text: 'go' }])).toEqual([
+      { type: 'text', text: 'go' },
+    ]);
+  });
+
+  it('appends untokened images after the text, as it always has', async () => {
+    expect(
+      await contentFor([{ type: 'text', text: 'go' }, loose]),
+    ).toEqual([{ type: 'text', text: 'go' }, imgBlock('b-data')]);
+  });
+
+  it('omits the text block for an image-only prompt', async () => {
+    expect(await contentFor([loose])).toEqual([imgBlock('b-data')]);
+  });
+
+  it('still emits an empty text block when there is nothing at all', async () => {
+    expect(await contentFor([{ type: 'text', text: '' }])).toEqual([
+      { type: 'text', text: '' },
+    ]);
+  });
+
+  it('splits the text so an anchored image lands in its own slot', async () => {
+    expect(
+      await contentFor([
+        { type: 'text', text: '1. header\n![a.png](jc-image://aaa)\n2. modal' },
+        anchored,
+      ]),
+    ).toEqual([
+      { type: 'text', text: '1. header\n' },
+      imgBlock('a-data'),
+      { type: 'text', text: '\n2. modal' },
+    ]);
+  });
+
+  it('keeps an anchored image inline and an untokened one trailing', async () => {
+    expect(
+      await contentFor([
+        { type: 'text', text: 'see ![a.png](jc-image://aaa)' },
+        anchored,
+        loose,
+      ]),
+    ).toEqual([
+      { type: 'text', text: 'see ' },
+      imgBlock('a-data'),
+      imgBlock('b-data'),
+    ]);
+  });
+
+  it('never drops an image whose placeholder the user deleted', async () => {
+    expect(
+      await contentFor([{ type: 'text', text: 'no marker' }, anchored]),
+    ).toEqual([{ type: 'text', text: 'no marker' }, imgBlock('a-data')]);
+  });
+});

@@ -105,6 +105,43 @@ function getSearchTerms(search: string): string[] {
   return [...terms].sort((a, b) => b.length - a.length);
 }
 
+/**
+ * `HighlightedSearchText` is rendered several times per row/card, so building
+ * the term list and compiling the regex inline meant O(rows x fields) regex
+ * compilations per keystroke. The search string is the same for every instance
+ * in a pass, so cache the compiled pattern for the last one.
+ */
+const HIGHLIGHT_REGEX_CACHE_SIZE = 4;
+const highlightRegexCache = new Map<string, RegExp | null>();
+
+function getHighlightRegex(search: string): RegExp | null {
+  const cached = highlightRegexCache.get(search);
+  if (cached !== undefined) {
+    // Re-insert so this key becomes the most recently used; without it the
+    // Map's insertion order makes eviction FIFO and a still-live search string
+    // gets dropped by four newer ones.
+    highlightRegexCache.delete(search);
+    highlightRegexCache.set(search, cached);
+    return cached;
+  }
+
+  const terms = getSearchTerms(search);
+  const regex =
+    terms.length === 0
+      ? null
+      : new RegExp(`(${terms.map(escapeRegExp).join('|')})`, 'gi');
+
+  // A few entries rather than one: two pickers can be mounted at once (the new
+  // task overlay over the task panel) with different search strings, which
+  // would thrash a single slot into a permanent miss.
+  if (highlightRegexCache.size >= HIGHLIGHT_REGEX_CACHE_SIZE) {
+    const oldest = highlightRegexCache.keys().next().value;
+    if (oldest !== undefined) highlightRegexCache.delete(oldest);
+  }
+  highlightRegexCache.set(search, regex);
+  return regex;
+}
+
 export function HighlightedSearchText({
   text,
   search,
@@ -112,10 +149,9 @@ export function HighlightedSearchText({
   text: string;
   search: string;
 }) {
-  const terms = getSearchTerms(search);
-  if (terms.length === 0) return text;
+  const regex = getHighlightRegex(search);
+  if (!regex) return text;
 
-  const regex = new RegExp(`(${terms.map(escapeRegExp).join('|')})`, 'gi');
   const nodes: ReactNode[] = [];
   let lastIndex = 0;
 

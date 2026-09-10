@@ -22,6 +22,7 @@ import {
   normalizeToolRequest,
 } from '../../permission-settings-service';
 import { getOrCreateVibeAcpServer } from './vibe-acp-server';
+import { interleavePromptParts } from '../../prompt-utils';
 
 import type {
   AcpJsonRpcNotification,
@@ -683,7 +684,8 @@ async function respondRequestError(
 }
 
 function partsToVibePrompt(parts: PromptPart[]): unknown[] {
-  return parts.map((part) => {
+  // Ordered content blocks, so images pasted mid-prompt keep their slot.
+  return interleavePromptParts(parts).map((part) => {
     if (part.type === 'text') return { type: 'text', text: part.text };
     if (part.type === 'image') {
       return { type: 'image', mimeType: part.mimeType, data: part.data };

@@ -49,6 +49,7 @@ import {
   type NewToken,
   PRESET_EDITORS,
   type Project,
+  type ProjectGitLogFilter,
   SETTINGS_DEFINITIONS,
   type SkillCreationStepMeta,
   type Task,
@@ -116,6 +117,7 @@ import {
   type NewProjectCommandGroup,
   parseProjectRootRunId,
   type ProjectSuggestions,
+  RUN_COMMAND_GROUP_ABORT_CHANNEL,
   type RunCommandConfigItem,
   type StartAdHocRunCommandParams,
   type UpdateProjectCommand,
@@ -322,6 +324,18 @@ import {
   updateProjectCommitIgnore,
 } from '../services/worktree-service';
 import {
+  checkoutProjectBranch,
+  fetchProjectRemotes,
+  getProjectCommitCount,
+  getProjectCommitDetail,
+  getProjectCommitFileContent,
+  getProjectGitGraph,
+  getProjectGitStatus,
+  getProjectWorkingTreeFiles,
+  pullProject,
+  pushProject,
+} from '../services/project-git-service';
+import {
   cleanupProjectLogoPath,
   cleanupProjectLogos,
   deleteGeneratedProjectLogo,
@@ -482,6 +496,7 @@ import { generatePrDescriptionForTask } from '../services/pr-description-generat
 import { generateSummary } from '../services/summary-generation-service';
 import { generateTaskName } from '../services/name-generation-service';
 import { generateWorkItemVerificationNote } from '../services/work-item-verification-note-service';
+import { getNonInteractiveGitEnv } from '../lib/git-non-interactive-env';
 import { handlePromptResponse } from '../services/global-prompt-service';
 import { McpTemplateRepository } from '../database/repositories/mcp-templates';
 import { mobilePreviewExpoLaunchService } from '../services/mobile-preview-expo-launch-service';
@@ -825,21 +840,6 @@ async function updateStepAndEmit(
   return step;
 }
 
-/**
- * Adds `-o BatchMode=yes` to an ssh command line.
- *
- * Inserted right after the program name rather than appended: ssh honours the
- * *first* occurrence of a repeated option, so a user whose GIT_SSH_COMMAND
- * already contains `-o BatchMode=no` would otherwise keep their value and the
- * command could still block on a prompt.
- */
-function withBatchMode(sshCommand: string | undefined): string {
-  const command = sshCommand?.trim() || 'ssh';
-  const firstSpace = command.indexOf(' ');
-  if (firstSpace === -1) return `${command} -o BatchMode=yes`;
-  return `${command.slice(0, firstSpace)} -o BatchMode=yes${command.slice(firstSpace)}`;
-}
-
 async function runGit(
   args: string[],
   cwd: string,
@@ -852,17 +852,7 @@ async function runGit(
       stdio: ['ignore', 'pipe', 'pipe'],
       // This helper has no way to answer a credential prompt, so make git and
       // ssh fail immediately instead of blocking until the timeout fires.
-      // SSH_ASKPASS_REQUIRE alone is not enough: it only disables the askpass
-      // helper, and ssh will still open /dev/tty directly — which succeeds
-      // when the app was launched from a terminal (pnpm dev), leaving the
-      // command blocked on an invisible prompt. BatchMode is the actual
-      // fail-fast switch. Callers that need to prompt use the askpass broker.
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-        SSH_ASKPASS_REQUIRE: 'never',
-        GIT_SSH_COMMAND: withBatchMode(process.env.GIT_SSH_COMMAND),
-      },
+      env: { ...process.env, ...getNonInteractiveGitEnv() },
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -1695,6 +1685,98 @@ export function registerIpcHandlers() {
     }
     return isGitRepository(project.path);
   });
+  /**
+   * Resolves a project's repository path, so the git handlers below never act
+   * on a path supplied by the renderer.
+   */
+  const requireProjectPath = async (projectId: string): Promise<string> => {
+    const project = await ProjectRepository.findById(projectId);
+    if (!project) {
+      throw new Error(`Project ${projectId} not found`);
+    }
+    return project.path;
+  };
+
+  ipcMain.handle('projects:git:getStatus', async (_, projectId: string) => {
+    return getProjectGitStatus(await requireProjectPath(projectId));
+  });
+  ipcMain.handle(
+    'projects:git:getGraph',
+    async (
+      _,
+      projectId: string,
+      limit?: number,
+      skip?: number,
+      filter?: ProjectGitLogFilter,
+    ) => {
+      return getProjectGitGraph({
+        repoPath: await requireProjectPath(projectId),
+        limit,
+        skip,
+        query: filter?.query,
+        branches: filter?.branches,
+      });
+    },
+  );
+  ipcMain.handle(
+    'projects:git:getCommitCount',
+    async (_, projectId: string, filter?: ProjectGitLogFilter) => {
+      return getProjectCommitCount({
+        repoPath: await requireProjectPath(projectId),
+        query: filter?.query,
+        branches: filter?.branches,
+      });
+    },
+  );
+  ipcMain.handle(
+    'projects:git:getCommitDetail',
+    async (_, projectId: string, commitHash: string) => {
+      return getProjectCommitDetail({
+        repoPath: await requireProjectPath(projectId),
+        commitHash,
+      });
+    },
+  );
+  ipcMain.handle(
+    'projects:git:getCommitFileContent',
+    async (_, projectId: string, commitHash: string, filePath: string) => {
+      return getProjectCommitFileContent({
+        repoPath: await requireProjectPath(projectId),
+        commitHash,
+        filePath,
+      });
+    },
+  );
+  ipcMain.handle(
+    'projects:git:getWorkingTreeFiles',
+    async (_, projectId: string) => {
+      return getProjectWorkingTreeFiles(await requireProjectPath(projectId));
+    },
+  );
+  ipcMain.handle(
+    'projects:git:fetch',
+    async (_, projectId: string, interactive?: boolean) => {
+      return fetchProjectRemotes(await requireProjectPath(projectId), {
+        interactive,
+      });
+    },
+  );
+  ipcMain.handle('projects:git:push', async (_, projectId: string) => {
+    return pushProject(await requireProjectPath(projectId));
+  });
+  ipcMain.handle('projects:git:pull', async (_, projectId: string) => {
+    return pullProject(await requireProjectPath(projectId));
+  });
+  ipcMain.handle(
+    'projects:git:checkoutBranch',
+    async (_, projectId: string, branchName: string) => {
+      return checkoutProjectBranch({
+        repoPath: await requireProjectPath(projectId),
+        branchName,
+      });
+    },
+  );
+
   ipcMain.handle('projects:getCommitIgnore', async (_, projectId: string) => {
     const project = await ProjectRepository.findById(projectId);
     if (!project) {
@@ -5497,6 +5579,12 @@ export function registerIpcHandlers() {
     (_, projectId: string) =>
       ProjectCommandGroupRepository.findByProjectId(projectId),
   );
+  ipcMain.handle('project:commandGroups:findAll', () =>
+    ProjectCommandGroupRepository.findAll(),
+  );
+  ipcMain.handle('project:commandGroups:findFavorites', () =>
+    ProjectCommandGroupRepository.findFavorites(),
+  );
   ipcMain.handle(
     'project:commandGroups:create',
     (_, data: NewProjectCommandGroup) =>
@@ -5572,6 +5660,30 @@ export function registerIpcHandlers() {
       });
     },
   );
+  // Same project-root semantics as startFavorite, but for a whole group: the
+  // stage plan is read from the database, never trusted from the renderer.
+  ipcMain.handle(
+    'project:commands:run:startFavoriteGroup',
+    async (_, params: { projectId: string; groupId: string }) => {
+      const project = await ProjectRepository.findById(params.projectId);
+      if (!project) throw new Error(`Project ${params.projectId} not found`);
+      const group = await ProjectCommandGroupRepository.findById(
+        params.groupId,
+      );
+      if (!group || group.projectId !== params.projectId) {
+        throw new Error(
+          `Command group ${params.groupId} not found for project ${params.projectId}`,
+        );
+      }
+      return runCommandService.startGroup({
+        taskId: getProjectRootRunId(params.projectId),
+        projectId: params.projectId,
+        workingDir: project.path,
+        runCommandIds: group.commandIds,
+        stages: group.stages,
+      });
+    },
+  );
   ipcMain.handle(
     'project:commands:run:startAdHocCommand',
     (_, params: StartAdHocRunCommandParams) =>
@@ -5584,6 +5696,12 @@ export function registerIpcHandlers() {
       params: {
         taskId: string;
         runCommandIds: string[];
+        /**
+         * When set, the execution plan is re-read from the database rather than
+         * trusted from the renderer. Absent for ad-hoc multi-command runs,
+         * which fall back to a single all-at-once stage.
+         */
+        groupId?: string;
       },
     ) => {
       const resolved = await resolveRunCommandStart(params, {
@@ -5591,9 +5709,29 @@ export function registerIpcHandlers() {
         findProjectById: ProjectRepository.findById,
         findCommandById: ProjectCommandRepository.findById,
       });
+
+      const group = params.groupId
+        ? await ProjectCommandGroupRepository.findById(params.groupId)
+        : undefined;
+      // A groupId that resolves to nothing means the renderer's command list is
+      // suspect too, so fail rather than silently running them all at once.
+      if (params.groupId && (!group || group.projectId !== resolved.projectId)) {
+        throw new Error(
+          `Command group ${params.groupId} not found for project ${resolved.projectId}`,
+        );
+      }
+
       return runCommandWithPrReviewLifecycle(
         resolved,
-        (resolvedParams) => runCommandService.startGroup(resolvedParams),
+        (resolvedParams) =>
+          runCommandService.startGroup({
+            ...resolvedParams,
+            // Membership comes from the same row as the stages. Taking the ids
+            // from the renderer instead lets a stale query cache silently drop
+            // stage entries the user just added.
+            ...(group ? { runCommandIds: group.commandIds } : {}),
+            stages: group?.stages,
+          }),
         { findTaskById: TaskRepository.findById },
       );
     },
@@ -5985,6 +6123,14 @@ export function registerIpcHandlers() {
     } else {
       previousRunCommandStatuses.set(taskId, nextByCommand);
     }
+  });
+
+  runCommandService.onGroupAbort((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send(RUN_COMMAND_GROUP_ABORT_CHANNEL, event);
+      }
+    });
   });
 
   runCommandService.onLog((taskId, runCommandId, stream, text, generation) => {

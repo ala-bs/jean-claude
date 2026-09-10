@@ -20,6 +20,7 @@ import {
   registerBeforeQuitCleanup,
 } from './mobile-preview-lifecycle';
 import { assertSimulatorOnlyIosDeviceAsync } from './mobile-preview-ios-devicectl';
+import { confirmQuit } from '../lib/quit-confirmation';
 import { spawnManaged } from './mobile-preview-process';
 
 /**
@@ -290,6 +291,7 @@ export const mobilePreviewNativeLogService =
     lifecycle: app
       ? {
           onBeforeQuit: (callback) => app.on('before-quit', callback),
+          confirmQuit,
         }
       : undefined,
   });

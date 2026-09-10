@@ -83,6 +83,11 @@ import * as m081 from './migrations/081_mobile_preview_device_usage';
 import * as m082 from './migrations/082_project_command_favorites';
 import * as m083 from './migrations/083_retire_pr_workspace_cleanup_pending';
 import * as m084 from './migrations/084_project_env_vars';
+import * as m085 from './migrations/085_project_command_hidden';
+import * as m086 from './migrations/086_project_queue_pr_auto_complete';
+import * as m087 from './migrations/087_project_command_group_stages';
+import * as m088 from './migrations/088_message_query_indexes';
+import * as m089 from './migrations/089_project_command_group_favorites';
 
 const migrations: Record<string, Migration> = {
   '001_initial': m001,
@@ -168,6 +173,11 @@ const migrations: Record<string, Migration> = {
   '082_project_command_favorites': m082,
   '083_retire_pr_workspace_cleanup_pending': m083,
   '084_project_env_vars': m084,
+  '085_project_command_hidden': m085,
+  '086_project_queue_pr_auto_complete': m086,
+  '087_project_command_group_stages': m087,
+  '088_message_query_indexes': m088,
+  '089_project_command_group_favorites': m089,
 };
 
 export const migrationProvider: MigrationProvider = {

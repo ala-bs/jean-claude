@@ -204,6 +204,63 @@ describe('generateText claude-code structured output', () => {
     expect(result).toBe(false);
   });
 
+  it('rejects Claude narration when structured output is missing', async () => {
+    queryMock.mockReturnValue(
+      createClaudeQueryResponse({
+        type: 'result',
+        result:
+          'I have already called the StructuredOutput tool at the end of my response above.',
+      }),
+    );
+
+    const result = await generateText({
+      backend: 'claude-code',
+      model: 'default',
+      prompt: 'Summarize the step',
+      outputSchema: { type: 'object' },
+    });
+
+    expect(result).toBeNull();
+    expect(queryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a fenced non-object payload when structured output is missing', async () => {
+    queryMock.mockReturnValue(
+      createClaudeQueryResponse({
+        type: 'result',
+        result: 'Here you go:\n```json\n"just a string"\n```',
+      }),
+    );
+
+    await expect(
+      generateText({
+        backend: 'claude-code',
+        model: 'default',
+        prompt: 'Summarize the step',
+        outputSchema: { type: 'object' },
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it('recovers a fenced JSON object when structured output is missing', async () => {
+    queryMock.mockReturnValue(
+      createClaudeQueryResponse({
+        type: 'result',
+        result: 'Done:\n```json\n{"summary":"did the thing"}\n```',
+      }),
+    );
+
+    await expect(
+      generateText({
+        backend: 'claude-code',
+        model: 'default',
+        prompt: 'Summarize the step',
+        outputSchema: { type: 'object' },
+      }),
+    ).resolves.toEqual({ summary: 'did the thing' });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
   it('retries structured generation once when the provider returns null', async () => {
     const structured = { title: 'fix: retry empty structured output' };
     queryMock

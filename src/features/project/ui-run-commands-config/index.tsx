@@ -14,6 +14,7 @@ import {
 } from '@dnd-kit/core';
 import { Download, GitBranch, Plus, Upload } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
+import { createCommandGroupStage } from '@shared/run-command-types';
 import type { DragEndEvent } from '@dnd-kit/core';
 
 
@@ -252,7 +253,9 @@ export function RunCommandsConfig({
     createGroup.mutate({
       projectId,
       name: `Group ${groups.length + 1}`,
-      commandIds: [],
+      // Seed one stage so the card is immediately usable; a single-stage group
+      // behaves exactly like the old all-at-once group.
+      stages: [createCommandGroupStage()],
     });
   };
 
@@ -309,8 +312,9 @@ export function RunCommandsConfig({
           </button>
         </div>
         <p className="text-ink-2 mt-1 max-w-2xl text-sm leading-6">
-          Save commands you run often from tasks. Bundle commands into groups to
-          launch them together in parallel.
+          Save commands you run often from tasks. Bundle commands into groups of
+          stages: everything in a stage starts together, and stages run one
+          after another with an optional wait in between.
         </p>
       </div>
 
@@ -428,7 +432,8 @@ export function RunCommandsConfig({
         </button>
         <div className="flex-1" />
         <p className="text-ink-3 hidden text-xs sm:block">
-          Drag items to reorder. Groups run selected commands in parallel.
+          Drag items to reorder. Groups run their stages in order, each stage in
+          parallel.
         </p>
       </div>
     </div>

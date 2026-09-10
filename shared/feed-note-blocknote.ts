@@ -1,3 +1,5 @@
+import { describeJsonBlockProp, JSON_BLOCK_TYPE } from './json-snippet';
+
 const TASK_LINE_PATTERN = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\]\s*)(.*)$/;
 
 export type FeedNoteLine = {
@@ -152,6 +154,11 @@ export function blockNoteJsonToMarkdown(content: string): string {
         }
         case 'quote':
           lines.push(`> ${text}`);
+          break;
+        // JSON blocks hold their payload in props, not inline content. Render a
+        // compact one-line summary so feed previews stay readable.
+        case JSON_BLOCK_TYPE:
+          lines.push(describeJsonBlockProp(block.props?.json));
           break;
         default:
           lines.push(text);

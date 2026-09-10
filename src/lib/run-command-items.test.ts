@@ -30,6 +30,7 @@ function makeCommand(
     confirmBeforeRun: false,
     confirmMessage: null,
     isFavorite: false,
+    isHidden: false,
     sortOrder: 0,
     createdAt: '2026-07-13T10:00:00.000Z',
     ...overrides,
@@ -39,14 +40,35 @@ function makeCommand(
 function makeGroup(
   overrides: Partial<ProjectCommandGroup> = {},
 ): ProjectCommandGroup {
-  return {
+  const group = {
     id: 'group-1',
     projectId: 'project-1',
     name: 'Development',
     commandIds: ['command-1'],
+    isFavorite: false,
     sortOrder: 0,
     createdAt: '2026-07-13T10:00:00.000Z',
     ...overrides,
+  };
+
+  // Stages are the source of truth; default them to one
+  // all-at-once stage matching the fixture's membership.
+  return {
+    ...group,
+    stages:
+      overrides.stages ??
+      (group.commandIds.length > 0
+        ? [
+            {
+              id: 'stage-1',
+              delayMs: 0,
+              entries: group.commandIds.map((commandId) => ({
+                commandId,
+                waitForExit: false,
+              })),
+            },
+          ]
+        : []),
   };
 }
 

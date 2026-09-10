@@ -138,7 +138,13 @@ const useStore = create<NewTaskDraftState>()(
 // Direct store access for non-React contexts
 export const useNewTaskDraftStore = useStore;
 
-type NewTaskDraftMetadata = Partial<Omit<NewTaskDraft, 'prompt'>>;
+// `prompt` and `workItemsFilter` are deliberately excluded: they change on
+// every keystroke and the overlay must not re-render its whole tree for them.
+// Both are read through narrow selectors in the small input components that
+// own them (`NewTaskPromptInput`, `NewTaskSearchInput`).
+type NewTaskDraftMetadata = Partial<
+  Omit<NewTaskDraft, 'prompt' | 'workItemsFilter'>
+>;
 
 function selectDraftMetadata(
   draft: Partial<NewTaskDraft> | undefined,
@@ -156,7 +162,6 @@ function selectDraftMetadata(
     agentBackend: draft.agentBackend,
     workItemIds: draft.workItemIds,
     updateWorkItemStatus: draft.updateWorkItemStatus,
-    workItemsFilter: draft.workItemsFilter,
     searchStep: draft.searchStep,
     workItemsViewMode: draft.workItemsViewMode,
     selectedCommentIds: draft.selectedCommentIds,

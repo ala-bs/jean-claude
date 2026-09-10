@@ -25,6 +25,7 @@ const command: ProjectCommand = {
   confirmBeforeRun: false,
   confirmMessage: null,
   isFavorite: false,
+  isHidden: false,
   sortOrder: 0,
   createdAt: '2026-01-01T00:00:00.000Z',
 };
@@ -33,16 +34,22 @@ let container: HTMLDivElement;
 let root: Root;
 const onDelete = vi.fn();
 
-function render() {
+function render({
+  overrides,
+  onUpdate = vi.fn(),
+}: {
+  overrides?: Partial<ProjectCommand>;
+  onUpdate?: (data: Partial<ProjectCommand>) => void;
+} = {}) {
   act(() => {
     root.render(
       <RootKeyboardBindings>
         <CommandRow
           sortableId="command:cmd-1"
-          command={command}
+          command={{ ...command, ...overrides }}
           suggestions={[]}
           onDraftChange={vi.fn()}
-          onUpdate={vi.fn()}
+          onUpdate={onUpdate}
           onDelete={onDelete}
         />
       </RootKeyboardBindings>,
@@ -66,6 +73,37 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+});
+
+describe('CommandRow visibility toggle', () => {
+  it('hides a visible command', () => {
+    const onUpdate = vi.fn();
+    render({ onUpdate });
+
+    act(() =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Hide command"]')
+        ?.click(),
+    );
+
+    expect(onUpdate).toHaveBeenCalledWith({ isHidden: true });
+  });
+
+  it('shows a hidden command and dims its row', () => {
+    const onUpdate = vi.fn();
+    render({ overrides: { isHidden: true }, onUpdate });
+
+    const row = container.querySelector('[data-hidden-command="true"]');
+    expect(row?.className).toContain('opacity-55');
+
+    act(() =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Show command"]')
+        ?.click(),
+    );
+
+    expect(onUpdate).toHaveBeenCalledWith({ isHidden: false });
+  });
 });
 
 describe('CommandRow delete confirmation', () => {

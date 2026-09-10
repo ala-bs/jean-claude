@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   PortsInUseErrorData,
   ProjectCommand,
+  ProjectCommandGroup,
   RunStatus,
 } from '@shared/run-command-types';
 
@@ -27,6 +28,7 @@ let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 let queryClient: QueryClient;
 let storedCommands: ProjectCommand[] = [];
+let storedGroups: ProjectCommandGroup[] = [];
 
 const favorite: ProjectCommand = {
   id: 'command-1',
@@ -42,6 +44,7 @@ const favorite: ProjectCommand = {
   confirmBeforeRun: false,
   confirmMessage: null,
   isFavorite: true,
+  isHidden: false,
   sortOrder: 0,
   createdAt: '2026-01-01T00:00:00.000Z',
 };
@@ -124,6 +127,27 @@ const otherCommand: ProjectCommand = {
   command: 'pnpm api',
   ports: [4000],
   isFavorite: false,
+  isHidden: false,
+};
+
+const group: ProjectCommandGroup = {
+  id: 'group-1',
+  projectId: 'project-1',
+  name: 'Dev stack',
+  stages: [
+    {
+      id: 'stage-1',
+      delayMs: 0,
+      entries: [
+        { commandId: 'command-1', waitForExit: false },
+        { commandId: 'command-2', waitForExit: false },
+      ],
+    },
+  ],
+  commandIds: ['command-1', 'command-2'],
+  isFavorite: false,
+  sortOrder: 0,
+  createdAt: '2026-01-01T00:00:00.000Z',
 };
 
 beforeEach(() => {
@@ -143,6 +167,20 @@ beforeEach(() => {
     async (id, data) => {
       const updated = { ...storedCommands.find((c) => c.id === id)!, ...data };
       storedCommands = storedCommands.map((c) => (c.id === id ? updated : c));
+      return updated;
+    },
+  );
+  storedGroups = [group];
+  vi.spyOn(api.projectCommandGroups, 'findFavorites').mockImplementation(
+    async () => storedGroups.filter((entry) => entry.isFavorite),
+  );
+  vi.spyOn(api.projectCommandGroups, 'findAll').mockImplementation(
+    async () => storedGroups,
+  );
+  vi.spyOn(api.projectCommandGroups, 'update').mockImplementation(
+    async (id, data) => {
+      const updated = { ...storedGroups.find((g) => g.id === id)!, ...data };
+      storedGroups = storedGroups.map((g) => (g.id === id ? updated : g));
       return updated;
     },
   );
@@ -361,6 +399,123 @@ describe('running commands overlay favorites', () => {
     expect(projectToggles[0].getAttribute('aria-expanded')).toBe('true');
     // The other project stays collapsed.
     expect(projectToggles[1].getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('favorites a command group from the picker and runs it', async () => {
+    const startFavoriteGroup = vi
+      .spyOn(api.runCommands, 'startFavoriteGroup')
+      .mockResolvedValue(startedStatus);
+
+    render();
+    await flushUpdates();
+
+    click(button('Add a favorite command'));
+    await flushUpdates();
+    expect(document.body.textContent).toContain('Dev stack');
+
+    click(button('Dev stack'));
+    await flushUpdates();
+
+    expect(api.projectCommandGroups.update).toHaveBeenCalledWith('group-1', {
+      isFavorite: true,
+    });
+
+    // Close the picker so only the favorites list remains, then run the group.
+    click(button('Close favorite picker'));
+    await flushUpdates();
+    click(button('Dev stack'));
+    await flushUpdates();
+
+    // Every member's logs are cleared before the group starts.
+    expect(api.runCommands.resetLogs).toHaveBeenCalledWith({
+      taskId: 'project-root:project-1',
+      runCommandId: 'command-2',
+      generation: expect.any(Number),
+    });
+    expect(startFavoriteGroup).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      groupId: 'group-1',
+    });
+  });
+
+  it('confirms once for a group containing a guarded command', async () => {
+    storedGroups = [{ ...group, isFavorite: true }];
+    storedCommands = [
+      favorite,
+      {
+        ...otherCommand,
+        confirmBeforeRun: true,
+        confirmMessage: 'This resets the database.',
+      },
+    ];
+    const startFavoriteGroup = vi
+      .spyOn(api.runCommands, 'startFavoriteGroup')
+      .mockResolvedValue(startedStatus);
+
+    render();
+    await flushUpdates();
+
+    click(button('Dev stack'));
+    await flushUpdates();
+
+    expect(document.body.textContent).toContain('This resets the database.');
+    expect(startFavoriteGroup).not.toHaveBeenCalled();
+
+    click(button('Run'));
+    await flushUpdates();
+
+    expect(startFavoriteGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it('unfavorites a group from the favorites list', async () => {
+    storedGroups = [{ ...group, isFavorite: true }];
+
+    render();
+    await flushUpdates();
+
+    click(button('Remove Dev stack from favorites'));
+    await flushUpdates();
+
+    expect(api.projectCommandGroups.update).toHaveBeenCalledWith('group-1', {
+      isFavorite: false,
+    });
+  });
+
+  it('retries a group as a group after killing the busy ports', async () => {
+    storedGroups = [{ ...group, isFavorite: true }];
+    const startFavoriteGroup = vi
+      .spyOn(api.runCommands, 'startFavoriteGroup')
+      .mockResolvedValueOnce(portsInUse)
+      .mockResolvedValueOnce(startedStatus);
+    const startFavorite = vi.spyOn(api.runCommands, 'startFavorite');
+
+    render();
+    await flushUpdates();
+
+    click(button('Dev stack'));
+    await flushUpdates();
+    expect(document.body.textContent).toContain('Ports in Use');
+
+    click(button('Kill & Start'));
+    await flushUpdates();
+
+    // The retry must re-enter the group path, not the single-command one.
+    expect(startFavoriteGroup).toHaveBeenCalledTimes(2);
+    expect(startFavorite).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain('Ports in Use');
+  });
+
+  it('lists a command favorited on its own only once when a favorite group also contains it', async () => {
+    storedGroups = [{ ...group, isFavorite: true }];
+
+    render();
+    await flushUpdates();
+
+    // `favorite` (command-1) is both an individual favorite and a group member.
+    const rows = Array.from(document.querySelectorAll('button')).filter(
+      (candidate) => candidate.textContent?.trim().startsWith('Web server'),
+    );
+    expect(rows).toHaveLength(1);
   });
 
   it('keeps the conflict dialog open when the user cancels', async () => {

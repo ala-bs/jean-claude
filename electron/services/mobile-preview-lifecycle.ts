@@ -3,6 +3,12 @@ export type MobilePreviewLifecycle = {
     callback: (event?: { preventDefault: () => void }) => void,
   ) => void;
   quitAfterCleanup?: () => void;
+  /**
+   * Consulted before any cleanup runs. Electron runs every `before-quit`
+   * listener even when one calls `preventDefault()`, so without this a
+   * cancelled quit would still stop the user's live preview sessions.
+   */
+  confirmQuit?: () => boolean;
 };
 
 const BEFORE_QUIT_REGISTRY = Symbol.for(
@@ -48,6 +54,12 @@ export function registerBeforeQuitCleanup({
   registry.registered = true;
   lifecycle.onBeforeQuit((event) => {
     if (registry.isQuittingAfterCleanup) return;
+
+    // Quit cancelled by the user: veto it and leave every session running.
+    if (lifecycle.confirmQuit && !lifecycle.confirmQuit()) {
+      event?.preventDefault();
+      return;
+    }
 
     event?.preventDefault();
 

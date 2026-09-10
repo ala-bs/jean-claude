@@ -4,6 +4,7 @@ import {
   type DragEvent,
   memo,
   useCallback,
+  useDeferredValue,
   useMemo,
   useRef,
   useState,
@@ -652,6 +653,24 @@ export function PromptComposer({
     [availableSnippets, onTemplateChange, workItems],
   );
 
+  // `simplifyHtml` + four regex passes over raw comment HTML, once per comment.
+  // Doing this in the render loop re-ran it for every comment on every
+  // keystroke; key it off `comments` so it only runs when they actually change.
+  const cleanCommentTextById = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const comment of comments ?? []) {
+      byId.set(
+        getWorkItemCommentSelectionId(comment),
+        simplifyHtml(comment.text)
+          .replace(/<[^>]*>/g, '')
+          .replace(/[ \t]+/g, ' ')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim(),
+      );
+    }
+    return byId;
+  }, [comments]);
+
   // Filter to selected comments for preview
   const selectedComments = useMemo(
     () =>
@@ -661,21 +680,28 @@ export function PromptComposer({
     [comments, selectedCommentIds],
   );
 
+  // Expanding the template is O(prompt length x work items x features) and the
+  // result is rendered as one large text node, so doing it synchronously per
+  // keystroke froze the editor as the prompt grew. Defer it: the editor stays
+  // responsive and React recomputes the preview at low priority, throwing the
+  // work away if another character arrives first.
+  const deferredTemplate = useDeferredValue(template);
+
   // Expand template to preview — use Handlebars if template contains `{{`, else old {#id} regex
   const preview = useMemo(() => {
     let expanded: string;
-    if (template.includes('{{')) {
+    if (deferredTemplate.includes('{{')) {
       const workItemsContext = buildWorkItemSnippetContext({
         workItems,
         comments: selectedComments,
         testCasesByWorkItem,
       });
-      expanded = resolveSnippetTemplate(template, {
+      expanded = resolveSnippetTemplate(deferredTemplate, {
         ...snippetVariableContext,
         workItems: workItemsContext,
       }).output;
     } else {
-      expanded = expandTemplate(template, workItems, selectedComments);
+      expanded = expandTemplate(deferredTemplate, workItems, selectedComments);
     }
 
     return `${expandFeatureReferencesInPrompt({
@@ -683,7 +709,7 @@ export function PromptComposer({
       featureMap,
     })}${buildAttachedFilesXml(files ?? [])}`;
   }, [
-    template,
+    deferredTemplate,
     workItems,
     selectedComments,
     testCasesByWorkItem,
@@ -992,11 +1018,8 @@ export function PromptComposer({
                   getWorkItemCommentSelectionId(comment);
                 const isSelected =
                   selectedCommentIds?.includes(commentSelectionId) ?? false;
-                const cleanText = simplifyHtml(comment.text)
-                  .replace(/<[^>]*>/g, '')
-                  .replace(/[ \t]+/g, ' ')
-                  .replace(/\n{3,}/g, '\n\n')
-                  .trim();
+                const cleanText =
+                  cleanCommentTextById.get(commentSelectionId) ?? '';
                 return (
                   <div
                     key={commentSelectionId}

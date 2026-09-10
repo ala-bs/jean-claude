@@ -459,6 +459,66 @@ function NewTaskPromptInput({
   );
 }
 
+/**
+ * Owns the work-item search text. Kept separate from the overlay (like
+ * `NewTaskPromptInput`) so typing re-renders only this input instead of the
+ * whole overlay tree, the project grid and the work item list/board.
+ */
+function NewTaskSearchInput({
+  draftKey,
+  inputRef,
+  placeholder,
+  onKeyDown,
+  hasCreateTaskError,
+  resetCreateTaskError,
+}: {
+  draftKey: string;
+  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  placeholder: string;
+  onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
+  hasCreateTaskError: boolean;
+  resetCreateTaskError: () => void;
+}) {
+  const value = useNewTaskDraftStore(
+    (state) => state.drafts[draftKey]?.workItemsFilter ?? '',
+  );
+  const setDraft = useNewTaskDraftStore((state) => state.setDraft);
+
+  const handleChange = useCallback(
+    (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+      if (hasCreateTaskError) {
+        resetCreateTaskError();
+      }
+      setDraft(draftKey, { workItemsFilter: event.target.value });
+    },
+    [draftKey, hasCreateTaskError, resetCreateTaskError, setDraft],
+  );
+
+  return (
+    <div
+      className="flex shrink-0 items-center gap-2.5 px-[18px] py-3.5"
+      style={{ borderBottom: '1px solid oklch(1 0 0 / 0.04)' }}
+    >
+      <Search
+        className="h-3.5 w-3.5 shrink-0"
+        style={{ color: 'oklch(0.55 0.01 280)' }}
+      />
+      <textarea
+        ref={inputRef}
+        value={value}
+        onChange={handleChange}
+        onKeyDown={onKeyDown}
+        placeholder={placeholder}
+        className="text-ink-1 placeholder-ink-3 field-sizing-content max-h-[40svh] min-h-[1lh] flex-1 resize-none bg-transparent text-sm outline-none"
+        style={{
+          caretColor: 'oklch(0.78 0.18 295)',
+          letterSpacing: '-0.005em',
+        }}
+      />
+    </div>
+  );
+}
+
 function getProjectGridColumns(): number {
   if (typeof window === 'undefined') return 8;
   if (window.innerWidth >= 1024) return 10;
@@ -1632,22 +1692,6 @@ export function NewTaskOverlay({
     searchInputRef.current?.focus();
   }, [showPromptInput]);
 
-  // Handle input change
-  const handleInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      // Clear error when user starts typing
-      if (createTaskMutation.isError) {
-        createTaskMutation.reset();
-      }
-      if (inputMode === 'search') {
-        updateDraft({ workItemsFilter: e.target.value });
-      } else {
-        updateDraft({ prompt: e.target.value });
-      }
-    },
-    [inputMode, updateDraft, createTaskMutation],
-  );
-
   const handleImageAttach = useCallback(
     (image: PromptImagePart) => {
       updateDraft((prev) => ({
@@ -1725,8 +1769,6 @@ export function NewTaskOverlay({
       cancelled = true;
     };
   }, [draftKey, updateDraft]);
-
-  const searchInputValue = draft?.workItemsFilter ?? '';
 
   // Register keyboard shortcuts
   useCommands(
@@ -1869,27 +1911,14 @@ export function NewTaskOverlay({
           >
             {/* Search/Prompt input - only show in select or prompt mode */}
             {showSearchInput && (
-              <div
-                className="flex shrink-0 items-center gap-2.5 px-[18px] py-3.5"
-                style={{ borderBottom: '1px solid oklch(1 0 0 / 0.04)' }}
-              >
-                <Search
-                  className="h-3.5 w-3.5 shrink-0"
-                  style={{ color: 'oklch(0.55 0.01 280)' }}
-                />
-                <textarea
-                  ref={searchInputRef}
-                  value={searchInputValue}
-                  onChange={handleInputChange}
-                  onKeyDown={handleKeyDown}
-                  placeholder={getPlaceholder({ mode: inputMode, isNoteMode })}
-                  className="text-ink-1 placeholder-ink-3 field-sizing-content max-h-[40svh] min-h-[1lh] flex-1 resize-none bg-transparent text-sm outline-none"
-                  style={{
-                    caretColor: 'oklch(0.78 0.18 295)',
-                    letterSpacing: '-0.005em',
-                  }}
-                />
-              </div>
+              <NewTaskSearchInput
+                draftKey={draftKey}
+                inputRef={searchInputRef}
+                placeholder={getPlaceholder({ mode: inputMode, isNoteMode })}
+                onKeyDown={handleKeyDown}
+                hasCreateTaskError={createTaskMutation.isError}
+                resetCreateTaskError={createTaskMutation.reset}
+              />
             )}
             {showPromptInput && (
               <NewTaskPromptInput
@@ -1953,7 +1982,7 @@ export function NewTaskOverlay({
               <div className="flex h-full w-full grow flex-col overflow-hidden p-2">
                 <SearchModeContent
                   project={selectedProject}
-                  filter={draft?.workItemsFilter ?? ''}
+                  draftKey={draftKey}
                   selectedWorkItemIds={draft?.workItemIds ?? []}
                   viewMode={draft?.workItemsViewMode ?? 'board'}
                   onViewModeChange={(mode: WorkItemsViewMode) =>
@@ -2568,7 +2597,7 @@ function ToolCheckmark({ checked }: { checked: boolean }) {
 // Work item search mode content with real work items
 function SearchModeContent({
   project,
-  filter,
+  draftKey,
   selectedWorkItemIds,
   viewMode,
   onViewModeChange,
@@ -2583,7 +2612,7 @@ function SearchModeContent({
   canAdvance,
 }: {
   project: Project | null;
-  filter: string;
+  draftKey: string;
   selectedWorkItemIds: string[];
   viewMode: WorkItemsViewMode;
   onViewModeChange: (mode: WorkItemsViewMode) => void;
@@ -2597,6 +2626,15 @@ function SearchModeContent({
   onAdvanceToCompose: () => void;
   canAdvance: boolean;
 }) {
+  // Subscribed here rather than passed down from the overlay, so filter
+  // keystrokes re-render only this subtree. Deliberately NOT deferred:
+  // `exactMatchWorkItemId` (and therefore the highlight that Enter acts on) is
+  // derived from this value, so deferring it lets a fast "type #12345 then
+  // select" land on the previously highlighted item.
+  const filter = useNewTaskDraftStore(
+    (state) => state.drafts[draftKey]?.workItemsFilter ?? '',
+  );
+
   if (!project) {
     return (
       <div className="flex h-full items-center justify-center">

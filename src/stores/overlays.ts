@@ -12,6 +12,7 @@ export type OverlayType =
   | 'backlog'
   | 'azure-board'
   | 'pipelines'
+  | 'pr-completion-queue'
   | 'running-commands'
   | 'calendar'
   | 'usage'

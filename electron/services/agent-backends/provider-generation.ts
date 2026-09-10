@@ -233,8 +233,30 @@ async function generateWithClaudeCode({
           allowEmptyUsage: true,
         });
       }
-      if (outputSchema && msg.structured_output !== undefined) {
-        return msg.structured_output;
+      if (outputSchema) {
+        if (msg.structured_output !== undefined) {
+          return msg.structured_output;
+        }
+        // Structured output was requested but the SDK did not return one (the
+        // model sometimes just narrates "I already called the StructuredOutput
+        // tool"). Never fall back to the raw assistant text here: callers
+        // expect schema-shaped data and would otherwise persist that narration
+        // as the real content. Try a JSON parse, then give up so the caller can
+        // retry / surface an error. The parse must yield a plain object: the
+        // narration often carries a ```json fence echoing the schema or a bare
+        // scalar, which would otherwise sail through as "structured" output.
+        const parsed =
+          typeof msg.result === 'string' ? parseJsonResponse(msg.result) : null;
+        if (parsed !== null && !Array.isArray(parsed) && typeof parsed === 'object') {
+          return parsed;
+        }
+        dbg.agent(
+          'Claude Code structured output missing (model=%s skill=%s preview=%s)',
+          model,
+          skillName ?? '(none)',
+          summarizeForDebug(msg.result ?? ''),
+        );
+        return null;
       }
       return msg.result ?? null;
     }

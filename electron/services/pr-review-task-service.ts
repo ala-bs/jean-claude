@@ -5,10 +5,13 @@ import type {
   PortsInUseErrorData,
   ProjectCommand,
   ProjectCommandGroup,
+  ProjectCommandGroupStage,
   RunStatus,
   StartPrCommandParams,
   StartPrCommandResult,
 } from '@shared/run-command-types';
+import { resolveCommandGroupRunStages } from '@shared/run-command-types';
+
 import { type Task, type TaskStep } from '@shared/types';
 
 import { dbg } from '../lib/debug';
@@ -148,6 +151,7 @@ export type StartPrCommandDeps = PrReviewTaskDeps & {
       projectId: string;
       workingDir: string;
       runCommandIds: string[];
+      stages?: ProjectCommandGroupStage[];
     },
     options?: StartOptions,
   ) => Promise<RunStatus | PortsInUseErrorData>;
@@ -703,12 +707,16 @@ export function startPrCommand(
       }
 
       let runCommandIds: string[];
+      let runStages: ProjectCommandGroupStage[] | undefined;
       if (params.target.type === 'command') {
         const command = await deps.findCommandById(params.target.id);
         if (!command || command.projectId !== params.projectId) {
           throw new Error(
             `Command ${params.target.id} not found for project ${params.projectId}`,
           );
+        }
+        if (command.isHidden) {
+          throw new Error(`Command ${params.target.id} is hidden`);
         }
         runCommandIds = [command.id];
       } else {
@@ -718,19 +726,38 @@ export function startPrCommand(
             `Command group ${params.target.id} not found for project ${params.projectId}`,
           );
         }
-        runCommandIds = [...new Set(group.commandIds)];
-        if (runCommandIds.length === 0) {
+        const groupCommandIds = [...new Set(group.commandIds)];
+        if (groupCommandIds.length === 0) {
           throw new Error(`Command group ${params.target.id} is empty`);
         }
 
-        for (const runCommandId of runCommandIds) {
+        // Group membership is re-derived from the database here rather than
+        // taken from the renderer, so hidden members must be filtered out
+        // again or a partially-hidden group would still start them.
+        const visibleCommands: Array<{ id: string; isHidden: boolean }> = [];
+        for (const runCommandId of groupCommandIds) {
           const command = await deps.findCommandById(runCommandId);
           if (!command || command.projectId !== params.projectId) {
             throw new Error(
               `Command ${runCommandId} not found for project ${params.projectId}`,
             );
           }
+          if (!command.isHidden) {
+            visibleCommands.push({ id: command.id, isHidden: false });
+          }
         }
+        if (visibleCommands.length === 0) {
+          throw new Error(
+            `Command group ${params.target.id} has no visible commands`,
+          );
+        }
+        // The stage plan is re-derived from the database for the same reason
+        // membership is: the renderer is not trusted to supply it.
+        runStages = resolveCommandGroupRunStages({
+          stages: group.stages,
+          commands: visibleCommands,
+        });
+        runCommandIds = visibleCommands.map((command) => command.id);
       }
 
       const { task, created } = await createOrGetPrReviewTaskUnlocked(
@@ -759,7 +786,7 @@ export function startPrCommand(
               options,
             )
           : await deps.startGroup(
-              { ...startParams, runCommandIds },
+              { ...startParams, runCommandIds, stages: runStages },
               options,
             );
 

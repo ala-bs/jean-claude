@@ -1,12 +1,11 @@
+import { getPromptImageDisplayWidth } from '@shared/prompt-image-placeholders';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
-
-export function getImageDisplayWidth(width: number, height: number): number {
-  const aspectRatio = width / Math.max(height, 1);
-  if (aspectRatio < 0.75) return Math.min(width, 280);
-  if (aspectRatio > 1.6) return Math.min(width, 640);
-  return Math.min(width, 420);
-}
+/**
+ * Owned by `shared/prompt-image-placeholders.ts` so the prompt composer and the
+ * comment editors size images identically. Aliased for existing callers.
+ */
+export const getImageDisplayWidth = getPromptImageDisplayWidth;
 
 export function getPromptImageMarkdownSize(image: PromptImagePart): string {
   if (!image.width || !image.height) return '';

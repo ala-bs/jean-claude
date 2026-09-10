@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  blockNoteJsonToMarkdown,
   getFeedNoteTaskIndex,
   markdownToBlockNoteJson,
   parseFeedNoteLines,
@@ -127,5 +128,28 @@ describe('feed-note-checkboxes', () => {
         }),
       )[2].props.checked,
     ).toBe(false);
+  });
+
+  it('renders JSON blocks as a single summary line in markdown', () => {
+    const content = JSON.stringify([
+      { type: 'paragraph', content: 'Payload' },
+      { type: 'jsonSnippet', props: { json: '{"a":1,"b":2}' } },
+      { type: 'checkListItem', props: { checked: false }, content: 'Follow up' },
+    ]);
+
+    expect(blockNoteJsonToMarkdown(content)).toBe(
+      'Payload\n{ } JSON object · 2 keys\n- [ ] Follow up',
+    );
+  });
+
+  it('keeps task indexes correct when a JSON block precedes a checkbox', () => {
+    const content = JSON.stringify([
+      { type: 'jsonSnippet', props: { json: 'not-parseable' } },
+      { type: 'checkListItem', props: { checked: false }, content: 'One' },
+    ]);
+    const markdown = blockNoteJsonToMarkdown(content);
+
+    expect(markdown).toBe('{ } JSON\n- [ ] One');
+    expect(getFeedNoteTaskIndex({ content: markdown, lineIndex: 1 })).toBe(0);
   });
 });

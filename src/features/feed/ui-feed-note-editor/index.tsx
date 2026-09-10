@@ -1,5 +1,7 @@
 import '@blocknote/core/fonts/inter.css';
 import '@blocknote/mantine/style.css';
+import { BlockNoteSchema, defaultBlockSpecs } from '@blocknote/core';
+import type { ClipboardEvent, KeyboardEvent } from 'react';
 import {
   FormattingToolbar,
   FormattingToolbarController,
@@ -11,8 +13,10 @@ import {
 import { Highlighter, ListChecks, X } from 'lucide-react';
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
 import { BlockNoteView } from '@blocknote/mantine';
-import type { KeyboardEvent } from 'react';
 import { useNavigate } from '@tanstack/react-router';
+
+import { detectJson, planJsonPasteInsertion } from '@shared/json-snippet';
+import { JSON_BLOCK_TYPE, jsonBlockSpec } from './json-block';
 
 
 
@@ -28,6 +32,12 @@ import { useDebouncedValue } from '@/hooks/use-debounced-value';
 
 import { useLatestRef } from '@/hooks/use-latest-ref';
 const CHECKBOX_MARKER_PATTERN = /^\s*-\s+\[([ xX])\]\s*/;
+const feedNoteSchema = BlockNoteSchema.create({
+  blockSpecs: {
+    ...defaultBlockSpecs,
+    [JSON_BLOCK_TYPE]: jsonBlockSpec(),
+  },
+});
 const HIGHLIGHT_COLOR = 'oklch(0.72 0.2 295 / 0.16)';
 const MAX_STORED_SCROLL_POSITIONS = 100;
 
@@ -168,7 +178,10 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
   const { note, isLoading } = useFeedNoteById(noteId);
   const updateNote = useUpdateFeedNote();
   const deleteNote = useDeleteFeedNote();
-  const editor = useCreateBlockNote({ tabBehavior: 'prefer-indent' });
+  const editor = useCreateBlockNote({
+    tabBehavior: 'prefer-indent',
+    schema: feedNoteSchema,
+  });
 
   const [value, setValue] = useState('');
   const [hasInitialized, setHasInitialized] = useState(false);
@@ -347,12 +360,75 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
     syncEditorValue();
   }, [editor, syncEditorValue]);
 
-  const handleEditorKeyDown = useCallback((event: KeyboardEvent) => {
-    if (event.key === 'Tab') {
+  // The JSON viewer modal is portaled from a block's React tree, so it is still
+  // a React descendant of this container. Container-level key/paste handlers
+  // must ignore events that did not originate in the editable surface.
+  const isEventInsideEditor = useCallback(
+    (target: EventTarget | null) =>
+      target instanceof Node && Boolean(editor.domElement?.contains(target)),
+    [editor],
+  );
+
+  // Intercept pastes before ProseMirror sees them (React's capture listener on
+  // this container runs above ProseMirror's own handler on `view.dom`, and
+  // stopPropagation on the synthetic event stops the native one too): a JSON
+  // payload becomes a dedicated json block instead of a wall of text.
+  const handleEditorPaste = useCallback(
+    (event: ClipboardEvent<HTMLDivElement>) => {
+      if (!isEventInsideEditor(event.target)) return;
+
+      const text = event.clipboardData?.getData('text/plain') ?? '';
+      const detected = detectJson(text);
+      if (!detected) return;
+
+      const currentBlock = editor.getTextCursorPosition().block;
+      const placement = planJsonPasteInsertion({
+        block: currentBlock,
+        hasSelectedText: !editor.prosemirrorState.selection.empty,
+      });
+      if (!placement) return;
+
       event.preventDefault();
       event.stopPropagation();
-    }
-  }, []);
+
+      type PartialBlock = Parameters<typeof editor.insertBlocks>[0][number];
+      const jsonBlock = {
+        type: JSON_BLOCK_TYPE,
+        props: { json: detected.json },
+      } as PartialBlock;
+      const trailingParagraph = { type: 'paragraph' } as PartialBlock;
+
+      editor.transact(() => {
+        const inserted = editor.insertBlocks(
+          [jsonBlock, trailingParagraph],
+          currentBlock,
+          placement === 'replace' ? 'before' : 'after',
+        );
+        if (placement === 'replace') {
+          editor.removeBlocks([currentBlock]);
+        }
+
+        // Leave the caret in the paragraph below the card so typing continues
+        // after the JSON, not above it.
+        const paragraph = inserted[1];
+        if (paragraph) editor.setTextCursorPosition(paragraph, 'end');
+      });
+
+      syncEditorValue();
+    },
+    [editor, isEventInsideEditor, syncEditorValue],
+  );
+
+  const handleEditorKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      if (!isEventInsideEditor(event.target)) return;
+      if (event.key === 'Tab') {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    },
+    [isEventInsideEditor],
+  );
 
   const handleDelete = useCallback(() => {
     isDeletedRef.current = true;
@@ -410,6 +486,7 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
         ref={scrollContainerRef}
         className="feed-note-blocknote flex-1 overflow-y-auto px-2 py-3"
         onKeyDown={handleEditorKeyDown}
+        onPasteCapture={handleEditorPaste}
         onScroll={handleScroll}
       >
         <BlockNoteView

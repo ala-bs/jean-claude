@@ -580,16 +580,64 @@ export const TaskRepository = {
     const changedKeys = Object.keys(data).filter((key) => key !== 'updatedAt');
     const shouldUpdateTimestamp =
       changedKeys.length !== 1 || changedKeys[0] !== 'name';
-    const row = await db
-      .updateTable('tasks')
-      .set({
-        ...toDbUpdateValues(data),
-        ...(shouldUpdateTimestamp && { updatedAt: new Date().toISOString() }),
-      })
-      .where('id', '=', id)
-      .returningAll()
-      .executeTakeFirstOrThrow();
-    return toTask(row);
+
+    // Dirty-check: skip the write (and the resulting updatedAt bump + renderer
+    // broadcast) when no column value actually changes. Hot paths like
+    // syncTaskStatus and respond() re-assert the status a task already has on
+    // every tool call, which otherwise churns the row and invalidates the whole
+    // project task list + feed.
+    //
+    // The read and the write run in one transaction: otherwise a concurrent
+    // update could land between them and we would return (and broadcast via
+    // emitTaskUpsert) the pre-concurrent-write snapshot, visually reverting it
+    // in the renderer until the next invalidation.
+    const nextValues = toDbUpdateValues(data);
+    const comparableKeys = (
+      Object.keys(nextValues) as (keyof UpdateTaskRow)[]
+    ).filter((key) => key !== 'updatedAt');
+
+    if (comparableKeys.length === 0) {
+      const row = await db
+        .updateTable('tasks')
+        .set({
+          ...nextValues,
+          ...(shouldUpdateTimestamp && { updatedAt: new Date().toISOString() }),
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      return toTask(row);
+    }
+
+    return db.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom('tasks')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirst();
+      if (
+        current &&
+        comparableKeys.every(
+          (key) =>
+            (current as Record<string, unknown>)[key] ===
+            (nextValues as Record<string, unknown>)[key],
+        )
+      ) {
+        dbg.db('tasks.update id=%s no-op (values unchanged)', id);
+        return toTask(current);
+      }
+
+      const row = await trx
+        .updateTable('tasks')
+        .set({
+          ...nextValues,
+          ...(shouldUpdateTimestamp && { updatedAt: new Date().toISOString() }),
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      return toTask(row);
+    });
   },
 
   updatePendingMessage: async (

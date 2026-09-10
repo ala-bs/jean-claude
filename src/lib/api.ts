@@ -45,10 +45,16 @@ import type {
   NewTaskStep,
   NewToken,
   Project,
+  ProjectCommitDetail,
+  ProjectCommitFileContent,
   ProjectEnvVar,
   ProjectFeatureMap,
+  ProjectGitGraphRow,
+  ProjectGitLogFilter,
+  ProjectGitStatus,
   ProjectLogoHistoryItem,
   ProjectTodo,
+  ProjectWorkingTreeFile,
   Provider,
   PrWorkspaceResolutionResult,
   Task,
@@ -183,6 +189,7 @@ import type {
   ProjectCommandGroup,
   ProjectSuggestions,
   RunCommandConfigItem,
+  RunCommandGroupAbortEvent,
   RunStatus,
   StartAdHocRunCommandParams,
   StartPrCommandParams,
@@ -629,6 +636,46 @@ export interface Api {
     getBranchesForPath: (projectPath: string) => Promise<BranchInfo[]>;
     getCurrentBranch: (projectId: string) => Promise<string>;
     isGitRepository: (projectId: string) => Promise<boolean>;
+    /** Git operations scoped to the project's main repository (not a worktree). */
+    git: {
+      getStatus: (projectId: string) => Promise<ProjectGitStatus>;
+      getGraph: (
+        projectId: string,
+        limit?: number,
+        /** Commits to skip before the window, for paging older history. */
+        skip?: number,
+        /** Resolved by git, so search covers the whole repo and not just what is loaded. */
+        filter?: ProjectGitLogFilter,
+      ) => Promise<ProjectGitGraphRow[]>;
+      /**
+       * Reachable commits, for the history pane's load progress — or matching
+       * commits when a filter is passed, so the search count is honest.
+       */
+      getCommitCount: (
+        projectId: string,
+        filter?: ProjectGitLogFilter,
+      ) => Promise<number>;
+      /** A commit's metadata plus the files it touched. Null when unknown. */
+      getCommitDetail: (
+        projectId: string,
+        commitHash: string,
+      ) => Promise<ProjectCommitDetail | null>;
+      /** Both sides of one file in a commit, for the diff viewer. */
+      getCommitFileContent: (
+        projectId: string,
+        commitHash: string,
+        filePath: string,
+      ) => Promise<ProjectCommitFileContent>;
+      /** Changed paths behind the status counts. Fetched lazily, not polled. */
+      getWorkingTreeFiles: (
+        projectId: string,
+      ) => Promise<ProjectWorkingTreeFile[]>;
+      /** `interactive` allows credential prompts; omit it for background refreshes. */
+      fetch: (projectId: string, interactive?: boolean) => Promise<void>;
+      push: (projectId: string) => Promise<void>;
+      pull: (projectId: string) => Promise<void>;
+      checkoutBranch: (projectId: string, branchName: string) => Promise<void>;
+    };
     getCommitIgnore: (projectId: string) => Promise<string>;
     updateCommitIgnore: (projectId: string, content: string) => Promise<void>;
     getDetected: () => Promise<DetectedProject[]>;
@@ -1698,6 +1745,8 @@ export interface Api {
   };
   projectCommandGroups: {
     findByProjectId: (projectId: string) => Promise<ProjectCommandGroup[]>;
+    findAll: () => Promise<ProjectCommandGroup[]>;
+    findFavorites: () => Promise<ProjectCommandGroup[]>;
     create: (data: NewProjectCommandGroup) => Promise<ProjectCommandGroup>;
     update: (
       id: string,
@@ -1725,9 +1774,16 @@ export interface Api {
       projectId: string;
       runCommandId: string;
     }) => Promise<RunStatus | PortsInUseErrorData>;
+    /** Runs a favorite group's stages in the project root folder. */
+    startFavoriteGroup: (params: {
+      projectId: string;
+      groupId: string;
+    }) => Promise<RunStatus | PortsInUseErrorData>;
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];
+      /** Runs the group's configured stages instead of one parallel batch. */
+      groupId?: string;
     }) => Promise<RunStatus | PortsInUseErrorData>;
     stopCommand: (params: {
       taskId: string;
@@ -1779,6 +1835,10 @@ export interface Api {
         runCommandId: string,
         generation: number,
       ) => void,
+    ) => () => void;
+    /** Fires when a staged group run stops early (not on a user-initiated stop). */
+    onGroupAborted: (
+      callback: (event: RunCommandGroupAbortEvent) => void,
     ) => () => void;
   };
   globalPrompt: {
@@ -2264,6 +2324,34 @@ export const api: Api = hasWindowApi
         getBranchesForPath: async () => [],
         getCurrentBranch: async () => '',
         isGitRepository: async () => false,
+        git: {
+          getStatus: async () => ({
+            isGitRepository: false,
+            branch: '',
+            isDetached: false,
+            upstream: null,
+            ahead: null,
+            behind: null,
+            remoteUrl: null,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflicted: 0,
+          }),
+          getGraph: async () => [],
+          getCommitCount: async () => 0,
+          getCommitDetail: async () => null,
+          getCommitFileContent: async () => ({
+            oldContent: '',
+            newContent: '',
+            isBinary: false,
+          }),
+          getWorkingTreeFiles: async () => [],
+          fetch: async () => {},
+          push: async () => {},
+          pull: async () => {},
+          checkoutBranch: async () => {},
+        },
         getCommitIgnore: async () => '',
         updateCommitIgnore: async () => {},
         getDetected: async () => [],
@@ -2920,6 +3008,8 @@ export const api: Api = hasWindowApi
       },
       projectCommandGroups: {
         findByProjectId: async () => [],
+        findAll: async () => [],
+        findFavorites: async () => [],
         create: async () => {
           throw new Error('API not available');
         },
@@ -2942,6 +3032,10 @@ export const api: Api = hasWindowApi
           commands: [],
         }),
         startFavorite: async () => ({
+          isRunning: false,
+          commands: [],
+        }),
+        startFavoriteGroup: async () => ({
           isRunning: false,
           commands: [],
         }),
@@ -2971,6 +3065,7 @@ export const api: Api = hasWindowApi
         onStatusChange: () => () => {},
         onLog: () => () => {},
         onLogsReset: () => () => {},
+        onGroupAborted: () => () => {},
       },
       globalPrompt: {
         onShow: () => () => {},

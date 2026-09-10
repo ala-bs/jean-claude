@@ -1,5 +1,6 @@
 import {
   ChevronRight,
+  Layers,
   Loader2,
   Play,
   Plus,
@@ -32,7 +33,13 @@ import {
   parseProjectRootRunId,
   type PortsInUseErrorData,
   type ProjectCommand,
+  type ProjectCommandGroup,
 } from '@shared/run-command-types';
+import {
+  useAllProjectCommandGroups,
+  useFavoriteProjectCommandGroups,
+  useUpdateProjectCommandGroup,
+} from '@/hooks/use-project-command-groups';
 import {
   useAllProjectCommands,
   useFavoriteProjectCommands,
@@ -41,6 +48,7 @@ import {
 import { useTask, useTasks } from '@/hooks/use-tasks';
 import { api } from '@/lib/api';
 import { ConfirmRunModal } from '@/features/agent/ui-run-button/confirm-run-modal';
+import { getTaskPromptPreview } from '@/lib/task-prompt-preview';
 import { IconButton } from '@/common/ui/icon-button';
 import { InteractiveLog } from '@/features/common/interactive-log';
 import { Kbd } from '@/common/ui/kbd';
@@ -56,6 +64,21 @@ import { useToastStore } from '@/stores/toasts';
 
 /** Keys the overlay handles itself — don't forward to PTY. */
 const OVERLAY_IGNORED_KEYS = new Set(['Escape']);
+
+interface FavoriteCommandRun {
+  command: ProjectCommand;
+  runTaskId: string;
+}
+
+interface FavoriteGroupRun {
+  group: ProjectCommandGroup;
+  runTaskId: string;
+  members: FavoriteCommandRun[];
+}
+
+type FavoriteRun =
+  | { type: 'command'; favorite: FavoriteCommandRun }
+  | { type: 'group'; row: FavoriteGroupRun };
 
 interface RunningCommand {
   taskId: string;
@@ -118,7 +141,7 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
           taskName: rootProjectId
             ? 'Project root'
             : (task?.name ??
-              task?.prompt.split('\n')[0].slice(0, 30) ??
+              (task ? getTaskPromptPreview(task.prompt).slice(0, 30) : undefined) ??
               taskId),
           projectName: project?.name ?? 'Unknown Project',
           commandStatus: cmd,
@@ -140,7 +163,7 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
         taskId: target.taskId,
         taskName:
           task?.name ??
-          task?.prompt.split('\n')[0].slice(0, 30) ??
+          (task ? getTaskPromptPreview(task.prompt).slice(0, 30) : undefined) ??
           target.taskId,
         projectName: project?.name ?? 'Unknown Project',
         commandStatus: {
@@ -161,15 +184,25 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
   const [startingFavoriteIds, setStartingFavoriteIds] = useState<Set<string>>(
     new Set(),
   );
+  const [startingGroupIds, setStartingGroupIds] = useState<Set<string>>(
+    new Set(),
+  );
+  // `null` = untouched, so favorite groups start expanded.
+  const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<string>>(
+    new Set(),
+  );
+  // The run that hit the conflict is kept as data (not a closure) so retrying
+  // reruns a group as a group and a single command as a single command.
   const [portConflict, setPortConflict] = useState<{
     error: PortsInUseErrorData;
-    command: ProjectCommand;
-    runTaskId: string;
+    projectId: string;
+    retry: FavoriteRun;
   } | null>(null);
   const [isKillingPorts, setIsKillingPorts] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{
-    command: ProjectCommand;
-    runTaskId: string;
+    name: string;
+    message: string | null;
+    run: () => void;
   } | null>(null);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [togglingFavoriteIds, setTogglingFavoriteIds] = useState<Set<string>>(
@@ -179,14 +212,34 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
   // Both lists go through React Query so project settings and this overlay
   // stay in sync — the update mutation invalidates the shared key.
   const { data: favoriteCommands } = useFavoriteProjectCommands();
+  const { data: favoriteGroups } = useFavoriteProjectCommandGroups();
+  // Groups store member ids only, so their rows need the full command list to
+  // render names — fetch it whenever a favorite group is on screen.
+  const needsAllCommands = isPickerOpen || (favoriteGroups ?? []).length > 0;
   const { data: pickerCommands, isPending: isPickerPending } =
-    useAllProjectCommands({ enabled: isPickerOpen });
+    useAllProjectCommands({ enabled: needsAllCommands });
+  const { data: pickerGroups, isPending: isPickerGroupsPending } =
+    useAllProjectCommandGroups({ enabled: isPickerOpen });
   const updateProjectCommand = useUpdateProjectCommand();
   const updateProjectCommandAsync = updateProjectCommand.mutateAsync;
+  const updateProjectCommandGroup = useUpdateProjectCommandGroup();
+  const updateProjectCommandGroupAsync = updateProjectCommandGroup.mutateAsync;
 
   const favoriteIds = useMemo(
     () => new Set((favoriteCommands ?? []).map((command) => command.id)),
     [favoriteCommands],
+  );
+  const favoriteGroupIds = useMemo(
+    () => new Set((favoriteGroups ?? []).map((group) => group.id)),
+    [favoriteGroups],
+  );
+  // Group rows resolve their members from this list. Until it lands a group
+  // looks empty, so running it would skip the per-member log reset that gives
+  // the run its restart semantics — the row stays disabled until then.
+  const areCommandsLoaded = pickerCommands !== undefined;
+  const commandsById = useMemo(
+    () => new Map((pickerCommands ?? []).map((command) => [command.id, command])),
+    [pickerCommands],
   );
 
   const handleToggleFavorite = useCallback(
@@ -217,44 +270,155 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
     [addToast, favoriteIds, updateProjectCommandAsync],
   );
 
+  const handleToggleFavoriteGroup = useCallback(
+    async (group: ProjectCommandGroup) => {
+      const nextIsFavorite = !favoriteGroupIds.has(group.id);
+      setTogglingFavoriteIds((prev) => new Set(prev).add(group.id));
+      try {
+        await updateProjectCommandGroupAsync({
+          id: group.id,
+          data: { isFavorite: nextIsFavorite },
+        });
+      } catch (error) {
+        addToast({
+          type: 'error',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Failed to update favorites',
+        });
+      } finally {
+        setTogglingFavoriteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(group.id);
+          return next;
+        });
+      }
+    },
+    [addToast, favoriteGroupIds, updateProjectCommandGroupAsync],
+  );
+
   const pickerItems = useMemo(() => {
     const projectMap = new Map(projects?.map((p) => [p.id, p]));
-    return (pickerCommands ?? []).map((command) => ({
-      command,
-      projectName: projectMap.get(command.projectId)?.name ?? 'Unknown Project',
-      isFavorite: favoriteIds.has(command.id),
-    }));
+    // Hidden commands are excluded from the favorites list, so offering them
+    // here would render a star that can never turn on.
+    return (pickerCommands ?? [])
+      .filter((command) => !command.isHidden)
+      .map((command) => ({
+        command,
+        projectName:
+          projectMap.get(command.projectId)?.name ?? 'Unknown Project',
+        isFavorite: favoriteIds.has(command.id),
+      }));
   }, [favoriteIds, pickerCommands, projects]);
+
+  const pickerGroupItems = useMemo(() => {
+    const projectMap = new Map(projects?.map((p) => [p.id, p]));
+    // A group whose members are all hidden or deleted can never run, so it is
+    // not offered as a favorite.
+    return (pickerGroups ?? [])
+      .filter((group) =>
+        group.commandIds.some((id) => {
+          const command = commandsById.get(id);
+          return command != null && !command.isHidden;
+        }),
+      )
+      .map((group) => ({
+        group,
+        projectName: projectMap.get(group.projectId)?.name ?? 'Unknown Project',
+        isFavorite: favoriteGroupIds.has(group.id),
+      }));
+  }, [commandsById, favoriteGroupIds, pickerGroups, projects]);
+
+  const favoriteGroupRows = useMemo(() => {
+    const projectMap = new Map(projects?.map((p) => [p.id, p]));
+    // Membership of the favorites query is decided server-side, but the update
+    // mutation writes optimistically into every `projectCommandGroups` query —
+    // so an unstarred group briefly sits in this list with `isFavorite: false`.
+    return (favoriteGroups ?? [])
+      .filter((group) => group.isFavorite)
+      .map((group) => {
+      const runTaskId = getProjectRootRunId(group.projectId);
+      const statuses = runCommandRunning[runTaskId]?.commands ?? [];
+      const members = group.commandIds.flatMap((commandId) => {
+        const command = commandsById.get(commandId);
+        if (!command || command.isHidden) return [];
+        return [
+          {
+            command,
+            runTaskId,
+            projectName:
+              projectMap.get(group.projectId)?.name ?? 'Unknown Project',
+            isRunning:
+              statuses.find((c) => c.id === commandId)?.status === 'running',
+          },
+        ];
+      });
+      return {
+        group,
+        runTaskId,
+        projectName:
+          projectMap.get(group.projectId)?.name ?? 'Unknown Project',
+        members,
+        runningCount: members.filter((member) => member.isRunning).length,
+      };
+      });
+  }, [commandsById, favoriteGroups, projects, runCommandRunning]);
+
+  // Keys already rendered under a favorite group — a command that is also an
+  // individual favorite must not get a second row (which would also duplicate
+  // an entry in `navigableCommands` and stall arrow navigation).
+  const groupMemberKeys = useMemo(
+    () =>
+      new Set(
+        favoriteGroupRows.flatMap((row) =>
+          row.members.map((member) => makeKey(row.runTaskId, member.command.id)),
+        ),
+      ),
+    [favoriteGroupRows],
+  );
 
   const favorites = useMemo(() => {
     const projectMap = new Map(projects?.map((p) => [p.id, p]));
-    return (favoriteCommands ?? []).map((command) => {
-      const runTaskId = getProjectRootRunId(command.projectId);
-      const status = runCommandRunning[runTaskId]?.commands.find(
-        (c) => c.id === command.id,
+    return (favoriteCommands ?? [])
+      .map((command) => {
+        const runTaskId = getProjectRootRunId(command.projectId);
+        const status = runCommandRunning[runTaskId]?.commands.find(
+          (c) => c.id === command.id,
+        );
+        return {
+          command,
+          runTaskId,
+          projectName:
+            projectMap.get(command.projectId)?.name ?? 'Unknown Project',
+          isRunning: status?.status === 'running',
+        };
+      })
+      .filter(
+        (favorite) =>
+          !groupMemberKeys.has(makeKey(favorite.runTaskId, favorite.command.id)),
       );
-      return {
-        command,
-        runTaskId,
-        projectName: projectMap.get(command.projectId)?.name ?? 'Unknown Project',
-        isRunning: status?.status === 'running',
-      };
-    });
-  }, [favoriteCommands, projects, runCommandRunning]);
+  }, [favoriteCommands, groupMemberKeys, projects, runCommandRunning]);
+
+  const isGroupExpanded = useCallback(
+    (groupId: string) => !collapsedGroupIds.has(groupId),
+    [collapsedGroupIds],
+  );
 
   // A running favorite already has a row (with its own stop/restart controls)
   // in the Favorites section — don't list it twice.
   const otherRunningCommands = useMemo(() => {
-    const favoriteKeys = new Set(
-      favorites.map((favorite) =>
+    const favoriteKeys = new Set([
+      ...favorites.map((favorite) =>
         makeKey(favorite.runTaskId, favorite.command.id),
       ),
-    );
+      ...groupMemberKeys,
+    ]);
     return runningCommands.filter(
       (command) =>
         !favoriteKeys.has(makeKey(command.taskId, command.commandStatus.id)),
     );
-  }, [favorites, runningCommands]);
+  }, [favorites, groupMemberKeys, runningCommands]);
 
   // Keyboard navigation must follow what the user sees: Favorites first (only
   // the ones that actually have a row in `runningCommands`), then Running.
@@ -267,13 +431,27 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
         command,
       ]),
     );
+    const groupRows = favoriteGroupRows
+      .filter((row) => isGroupExpanded(row.group.id))
+      .flatMap((row) =>
+        row.members.map((member) =>
+          byKey.get(makeKey(row.runTaskId, member.command.id)),
+        ),
+      )
+      .filter((command): command is RunningCommand => command !== undefined);
     const favoriteRows = favorites
       .map((favorite) =>
         byKey.get(makeKey(favorite.runTaskId, favorite.command.id)),
       )
       .filter((command): command is RunningCommand => command !== undefined);
-    return [...favoriteRows, ...otherRunningCommands];
-  }, [favorites, otherRunningCommands, runningCommands]);
+    return [...groupRows, ...favoriteRows, ...otherRunningCommands];
+  }, [
+    favoriteGroupRows,
+    favorites,
+    isGroupExpanded,
+    otherRunningCommands,
+    runningCommands,
+  ]);
 
   const handleRunFavorite = useCallback(
     async (favorite: { command: ProjectCommand; runTaskId: string }) => {
@@ -294,11 +472,20 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
           runCommandId: command.id,
         });
         if (isPortsInUseError(result)) {
-          setPortConflict({ error: result, command, runTaskId });
+          setPortConflict({
+            error: result,
+            projectId: command.projectId,
+            retry: { type: 'command', favorite },
+          });
           return;
         }
+        // Only this run's conflict is resolved — a prompt raised by a different
+        // favorite must stay up.
         setPortConflict((current) =>
-          current?.command.id === command.id ? null : current,
+          current?.retry.type === 'command' &&
+          current.retry.favorite.command.id === command.id
+            ? null
+            : current,
         );
         setSelectedKey(makeKey(runTaskId, command.id));
       } catch (error) {
@@ -323,12 +510,88 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
   const requestRunFavorite = useCallback(
     (favorite: { command: ProjectCommand; runTaskId: string }) => {
       if (favorite.command.confirmBeforeRun) {
-        setPendingConfirm(favorite);
+        setPendingConfirm({
+          name: getRunCommandDisplayName(favorite.command),
+          message: favorite.command.confirmMessage,
+          run: () => void handleRunFavorite(favorite),
+        });
         return;
       }
       void handleRunFavorite(favorite);
     },
     [handleRunFavorite],
+  );
+
+  const handleRunFavoriteGroup = useCallback(
+    async (row: FavoriteGroupRun) => {
+      const { group, runTaskId, members } = row;
+      setStartingGroupIds((prev) => new Set(prev).add(group.id));
+      try {
+        // Restart semantics for every member, same as a single favorite.
+        for (const member of members) {
+          const generation = resetRunCommandLogs(runTaskId, member.command.id);
+          await api.runCommands.resetLogs({
+            taskId: runTaskId,
+            runCommandId: member.command.id,
+            generation,
+          });
+        }
+
+        const result = await api.runCommands.startFavoriteGroup({
+          projectId: group.projectId,
+          groupId: group.id,
+        });
+        if (isPortsInUseError(result)) {
+          setPortConflict({
+            error: result,
+            projectId: group.projectId,
+            retry: { type: 'group', row },
+          });
+          return;
+        }
+        setPortConflict((current) =>
+          current?.retry.type === 'group' && current.retry.row.group.id === group.id
+            ? null
+            : current,
+        );
+        if (members[0]) {
+          setSelectedKey(makeKey(runTaskId, members[0].command.id));
+        }
+      } catch (error) {
+        addToast({
+          type: 'error',
+          message:
+            error instanceof Error ? error.message : 'Failed to start group',
+        });
+      } finally {
+        setStartingGroupIds((prev) => {
+          const next = new Set(prev);
+          next.delete(group.id);
+          return next;
+        });
+      }
+    },
+    [addToast, resetRunCommandLogs],
+  );
+
+  const requestRunFavoriteGroup = useCallback(
+    (row: FavoriteGroupRun) => {
+      // One confirmation for the whole group — a member flagged
+      // `confirmBeforeRun` still must not run unannounced from the project root.
+      const guarded = row.members.find(
+        (member) => member.command.confirmBeforeRun,
+      );
+      if (guarded) {
+        setPendingConfirm({
+          name: row.group.name,
+          message: guarded.command.confirmMessage,
+          run: () => void handleRunFavoriteGroup(row),
+        });
+        return;
+      }
+      void handleRunFavoriteGroup(row);
+    },
+    [handleRunFavoriteGroup],
   );
 
   const handleConfirmKillPorts = useCallback(async () => {
@@ -341,12 +604,14 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
       ];
       for (const commandId of commandIds) {
         await api.runCommands.killPortsForCommand(
-          conflict.command.projectId,
+          conflict.projectId,
           commandId,
         );
       }
       setPortConflict(null);
-      await handleRunFavorite(conflict);
+      await (conflict.retry.type === 'group'
+        ? handleRunFavoriteGroup(conflict.retry.row)
+        : handleRunFavorite(conflict.retry.favorite));
     } catch (error) {
       addToast({
         type: 'error',
@@ -356,7 +621,7 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
     } finally {
       setIsKillingPorts(false);
     }
-  }, [addToast, handleRunFavorite, portConflict]);
+  }, [addToast, handleRunFavorite, handleRunFavoriteGroup, portConflict]);
 
   useEffect(() => {
     if (target) {
@@ -586,18 +851,200 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                     {isPickerOpen && (
                       <FavoritePicker
                         items={pickerItems}
-                        isLoading={isPickerPending}
+                        groups={pickerGroupItems}
+                        isLoading={isPickerPending || isPickerGroupsPending}
                         togglingIds={togglingFavoriteIds}
                         onToggle={(command) =>
                           void handleToggleFavorite(command)
                         }
+                        onToggleGroup={(group) =>
+                          void handleToggleFavoriteGroup(group)
+                        }
                       />
                     )}
-                    {favorites.length === 0 && !isPickerOpen && (
-                      <p className="text-ink-4 px-3 py-1 text-[11px]">
-                        No favorites yet — add one with +
-                      </p>
-                    )}
+                    {favorites.length === 0 &&
+                      favoriteGroupRows.length === 0 &&
+                      !isPickerOpen && (
+                        <p className="text-ink-4 px-3 py-1 text-[11px]">
+                          No favorites yet — add one with +
+                        </p>
+                      )}
+                    {favoriteGroupRows.map((row) => {
+                      const isStarting = startingGroupIds.has(row.group.id);
+                      const isExpanded = isGroupExpanded(row.group.id);
+                      const isRunning = row.runningCount > 0;
+                      return (
+                        <div key={row.group.id}>
+                          <div className="group text-ink-2 hover:text-ink-1 flex w-full items-start rounded-lg transition-colors hover:bg-white/5">
+                            <button
+                              type="button"
+                              aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${row.group.name}`}
+                              aria-expanded={isExpanded}
+                              onClick={() =>
+                                setCollapsedGroupIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(row.group.id)) {
+                                    next.delete(row.group.id);
+                                  } else {
+                                    next.add(row.group.id);
+                                  }
+                                  return next;
+                                })
+                              }
+                              className="text-ink-4 hover:text-ink-1 mt-2 ml-1 shrink-0 cursor-pointer rounded p-0.5"
+                            >
+                              <ChevronRight
+                                className={clsx(
+                                  'h-3 w-3 transition-transform',
+                                  isExpanded && 'rotate-90',
+                                )}
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isStarting || !areCommandsLoaded}
+                              onClick={() => requestRunFavoriteGroup(row)}
+                              className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 px-2 py-2 text-left disabled:opacity-60"
+                            >
+                              {isStarting ? (
+                                <Loader2 className="text-ink-4 mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+                              ) : (
+                                <Layers
+                                  className={clsx(
+                                    'mt-0.5 h-3.5 w-3.5 shrink-0',
+                                    isRunning
+                                      ? 'text-status-done'
+                                      : 'text-ink-4',
+                                  )}
+                                />
+                              )}
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-xs font-medium">
+                                  {row.group.name}
+                                </span>
+                                <span className="text-ink-4 block truncate text-[11px]">
+                                  {row.projectName} ·{' '}
+                                  {!areCommandsLoaded
+                                    ? 'loading…'
+                                    : isRunning
+                                      ? `${row.runningCount}/${row.members.length} running`
+                                      : `${row.members.length} command${row.members.length === 1 ? '' : 's'}`}
+                                </span>
+                              </span>
+                            </button>
+                            {isRunning && (
+                              <button
+                                type="button"
+                                aria-label={`Stop ${row.group.name}`}
+                                className="text-ink-4 hover:bg-status-fail/20 hover:text-status-fail mt-2 shrink-0 cursor-pointer rounded p-1 transition-colors"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  for (const member of row.members) {
+                                    if (!member.isRunning) continue;
+                                    void handleStop(
+                                      row.runTaskId,
+                                      member.command.id,
+                                    );
+                                  }
+                                }}
+                              >
+                                <Square className="h-3 w-3" />
+                              </button>
+                            )}
+                            {isRunning && (
+                              <button
+                                type="button"
+                                aria-label={`Restart ${row.group.name}`}
+                                disabled={isStarting}
+                                className="text-ink-4 hover:text-ink-1 mt-2 shrink-0 cursor-pointer rounded p-1 transition-colors hover:bg-white/10 disabled:cursor-not-allowed"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  requestRunFavoriteGroup(row);
+                                }}
+                              >
+                                <RotateCw className="h-3 w-3" />
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              aria-label={`Remove ${row.group.name} from favorites`}
+                              disabled={togglingFavoriteIds.has(row.group.id)}
+                              className="text-ink-4 hover:text-ink-1 mt-2 mr-2 shrink-0 cursor-pointer rounded p-1 opacity-0 transition-colors group-hover:opacity-100 hover:bg-white/10 focus-visible:opacity-100 disabled:cursor-not-allowed"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleToggleFavoriteGroup(row.group);
+                              }}
+                            >
+                              <Star className="h-3 w-3" fill="currentColor" />
+                            </button>
+                          </div>
+                          {isExpanded && (
+                            <div className="ml-4 border-l border-white/10 pl-1">
+                              {row.members.map((member) => {
+                                const memberKey = makeKey(
+                                  row.runTaskId,
+                                  member.command.id,
+                                );
+                                const isSelected = selectedKey === memberKey;
+                                return (
+                                  <div
+                                    key={member.command.id}
+                                    ref={isSelected ? selectedRowRef : undefined}
+                                    className={clsx(
+                                      'flex w-full items-start rounded-lg transition-colors',
+                                      isSelected
+                                        ? 'text-ink-0 bg-white/10'
+                                        : 'text-ink-2 hover:text-ink-1 hover:bg-white/5',
+                                    )}
+                                  >
+                                    <button
+                                      type="button"
+                                      aria-pressed={isSelected}
+                                      onClick={() => {
+                                        if (member.isRunning) {
+                                          setSelectedKey(memberKey);
+                                          return;
+                                        }
+                                        requestRunFavorite(member);
+                                      }}
+                                      className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 px-2 py-1.5 text-left"
+                                    >
+                                      {member.isRunning ? (
+                                        <Loader2 className="text-status-done mt-0.5 h-3 w-3 shrink-0 animate-spin" />
+                                      ) : (
+                                        <Play className="text-ink-4 mt-0.5 h-3 w-3 shrink-0" />
+                                      )}
+                                      <span className="min-w-0 flex-1 truncate text-[11px]">
+                                        {getRunCommandDisplayName(
+                                          member.command,
+                                        )}
+                                      </span>
+                                    </button>
+                                    {member.isRunning && (
+                                      <button
+                                        type="button"
+                                        aria-label={`Stop ${getRunCommandDisplayName(member.command)}`}
+                                        disabled={stoppingKeys.has(memberKey)}
+                                        className="text-ink-4 hover:bg-status-fail/20 hover:text-status-fail mt-1.5 mr-2 shrink-0 cursor-pointer rounded p-1 transition-colors disabled:cursor-not-allowed"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void handleStop(
+                                            row.runTaskId,
+                                            member.command.id,
+                                          );
+                                        }}
+                                      >
+                                        <Square className="h-2.5 w-2.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                     {favorites.map((favorite) => {
                       const isStarting = startingFavoriteIds.has(
                         favorite.command.id,
@@ -708,7 +1155,8 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                       );
                     })}
                 </div>
-                {otherRunningCommands.length > 0 && favorites.length > 0 && (
+                {otherRunningCommands.length > 0 &&
+                  (favorites.length > 0 || favoriteGroupRows.length > 0) && (
                   <div className="text-ink-4 px-3 py-1 text-[10px] font-semibold tracking-wider uppercase">
                     Running
                   </div>
@@ -804,12 +1252,14 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                 ) : (
                   <div className="text-ink-4 flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center text-sm">
                     <Terminal className="text-ink-4 h-8 w-8" />
-                    {runningCommands.length === 0 && favorites.length === 0
+                    {runningCommands.length === 0 &&
+                    favorites.length === 0 &&
+                    favoriteGroupRows.length === 0
                       ? 'No commands are currently running.'
                       : 'Select a command to view logs'}
                     <span className="text-ink-4 text-xs">
-                      Use + to favorite a project command and run it from the
-                      project root.
+                      Use + to favorite a project command or group and run it
+                      from the project root.
                     </span>
                   </div>
                 )}
@@ -845,13 +1295,13 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
       </div>
       {pendingConfirm && (
         <ConfirmRunModal
-          commandName={getRunCommandDisplayName(pendingConfirm.command)}
-          message={pendingConfirm.command.confirmMessage}
+          commandName={pendingConfirm.name}
+          message={pendingConfirm.message}
           onCancel={() => setPendingConfirm(null)}
           onConfirm={() => {
-            const favorite = pendingConfirm;
+            const { run } = pendingConfirm;
             setPendingConfirm(null);
-            void handleRunFavorite(favorite);
+            run();
           }}
         />
       )}
@@ -871,21 +1321,32 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** Inline picker listing every project command so favorites can be toggled. */
+/**
+ * Inline picker listing every project command and command group so favorites
+ * can be toggled.
+ */
 function FavoritePicker({
   items,
+  groups: groupItems,
   isLoading,
   togglingIds,
   onToggle,
+  onToggleGroup,
 }: {
   items: Array<{
     command: ProjectCommand;
     projectName: string;
     isFavorite: boolean;
   }>;
+  groups: Array<{
+    group: ProjectCommandGroup;
+    projectName: string;
+    isFavorite: boolean;
+  }>;
   isLoading: boolean;
   togglingIds: Set<string>;
   onToggle: (command: ProjectCommand) => void;
+  onToggleGroup: (group: ProjectCommandGroup) => void;
 }) {
   const [query, setQuery] = useState('');
 
@@ -907,28 +1368,50 @@ function FavoritePicker({
     );
   }, [items, query]);
 
-  // One group per project, ordered by project name.
+  const filteredGroups = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return groupItems;
+    return groupItems.filter(
+      (item) =>
+        item.group.name.toLowerCase().includes(needle) ||
+        item.projectName.toLowerCase().includes(needle),
+    );
+  }, [groupItems, query]);
+
+  // One section per project, ordered by project name; groups sit above the
+  // loose commands inside each section.
   const groups = useMemo(() => {
     const byProject = new Map<
       string,
-      { projectId: string; projectName: string; items: typeof filtered }
-    >();
-    for (const item of filtered) {
-      const existing = byProject.get(item.command.projectId);
-      if (existing) {
-        existing.items.push(item);
-      } else {
-        byProject.set(item.command.projectId, {
-          projectId: item.command.projectId,
-          projectName: item.projectName,
-          items: [item],
-        });
+      {
+        projectId: string;
+        projectName: string;
+        items: typeof filtered;
+        groups: typeof filteredGroups;
       }
+    >();
+    const ensure = (projectId: string, projectName: string) => {
+      const existing = byProject.get(projectId);
+      if (existing) return existing;
+      const created = {
+        projectId,
+        projectName,
+        items: [] as typeof filtered,
+        groups: [] as typeof filteredGroups,
+      };
+      byProject.set(projectId, created);
+      return created;
+    };
+    for (const item of filteredGroups) {
+      ensure(item.group.projectId, item.projectName).groups.push(item);
+    }
+    for (const item of filtered) {
+      ensure(item.command.projectId, item.projectName).items.push(item);
     }
     return [...byProject.values()].sort((a, b) =>
       a.projectName.localeCompare(b.projectName),
     );
-  }, [filtered]);
+  }, [filtered, filteredGroups]);
 
   const isSearching = query.trim().length > 0;
   // A single project has no ambiguity to resolve, so it starts open; with
@@ -961,9 +1444,10 @@ function FavoritePicker({
             // While filtering, every matching project stays open.
             const isExpanded =
               isSearching || effectiveExpandedIds.has(group.projectId);
-            const favoriteCount = group.items.filter(
+            const favoriteCount = [...group.groups, ...group.items].filter(
               (item) => item.isFavorite,
             ).length;
+            const entryCount = group.groups.length + group.items.length;
             return (
               <div key={group.projectId}>
                 <button
@@ -994,12 +1478,40 @@ function FavoritePicker({
                   </span>
                   <span className="text-ink-4 shrink-0 font-mono text-[10px]">
                     {favoriteCount > 0
-                      ? `${favoriteCount}/${group.items.length}`
-                      : group.items.length}
+                      ? `${favoriteCount}/${entryCount}`
+                      : entryCount}
                   </span>
                 </button>
                 {isExpanded && (
                   <div className="ml-2 border-l border-white/10 pl-1.5">
+                    {group.groups.map((item) => (
+                      <button
+                        key={item.group.id}
+                        type="button"
+                        disabled={togglingIds.has(item.group.id)}
+                        aria-pressed={item.isFavorite}
+                        onClick={() => onToggleGroup(item.group)}
+                        className="text-ink-2 hover:text-ink-1 flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-white/10 disabled:opacity-60"
+                      >
+                        <Star
+                          className={clsx(
+                            'h-3 w-3 shrink-0',
+                            item.isFavorite ? 'text-status-warn' : 'text-ink-4',
+                          )}
+                          fill={item.isFavorite ? 'currentColor' : 'none'}
+                        />
+                        <Layers className="text-ink-4 h-3 w-3 shrink-0" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[11px] font-medium">
+                            {item.group.name}
+                          </span>
+                          <span className="text-ink-4 block truncate text-[10px]">
+                            Group · {item.group.commandIds.length} command
+                            {item.group.commandIds.length === 1 ? '' : 's'}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
                     {group.items.map((item) => (
                       <button
                         key={item.command.id}

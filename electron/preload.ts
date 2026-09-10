@@ -68,6 +68,8 @@ import type {
   WorkActivityWeekParams,
 } from '@shared/work-activity-types';
 import {
+  RUN_COMMAND_GROUP_ABORT_CHANNEL,
+  type RunCommandGroupAbortEvent,
   START_PR_COMMAND_CHANNEL,
   type StartPrCommandParams,
 } from '@shared/run-command-types';
@@ -85,6 +87,7 @@ import { AGENT_CHANNELS } from '@shared/agent-types';
 import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 import type { DebugLogEntry } from '@shared/debug-log-types';
+import type { ProjectGitLogFilter } from '@shared/types';
 import type { StartAdHocRunCommandParams } from '@shared/run-command-types';
 
 const devBadgeLabel = process.env.JC_DEV_BADGE_LABEL?.trim() || undefined;
@@ -179,6 +182,48 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('projects:getCurrentBranch', projectId),
     isGitRepository: (projectId: string) =>
       ipcRenderer.invoke('projects:isGitRepository', projectId),
+    git: {
+      getStatus: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:getStatus', projectId),
+      getGraph: (
+        projectId: string,
+        limit?: number,
+        skip?: number,
+        filter?: ProjectGitLogFilter,
+      ) =>
+        ipcRenderer.invoke(
+          'projects:git:getGraph',
+          projectId,
+          limit,
+          skip,
+          filter,
+        ),
+      getCommitCount: (projectId: string, filter?: ProjectGitLogFilter) =>
+        ipcRenderer.invoke('projects:git:getCommitCount', projectId, filter),
+      getCommitDetail: (projectId: string, commitHash: string) =>
+        ipcRenderer.invoke('projects:git:getCommitDetail', projectId, commitHash),
+      getCommitFileContent: (
+        projectId: string,
+        commitHash: string,
+        filePath: string,
+      ) =>
+        ipcRenderer.invoke(
+          'projects:git:getCommitFileContent',
+          projectId,
+          commitHash,
+          filePath,
+        ),
+      getWorkingTreeFiles: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:getWorkingTreeFiles', projectId),
+      fetch: (projectId: string, interactive?: boolean) =>
+        ipcRenderer.invoke('projects:git:fetch', projectId, interactive),
+      push: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:push', projectId),
+      pull: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:pull', projectId),
+      checkoutBranch: (projectId: string, branchName: string) =>
+        ipcRenderer.invoke('projects:git:checkoutBranch', projectId, branchName),
+    },
     getCommitIgnore: (projectId: string) =>
       ipcRenderer.invoke('projects:getCommitIgnore', projectId),
     updateCommitIgnore: (projectId: string, content: string) =>
@@ -1343,6 +1388,9 @@ contextBridge.exposeInMainWorld('api', {
   projectCommandGroups: {
     findByProjectId: (projectId: string) =>
       ipcRenderer.invoke('project:commandGroups:findByProjectId', projectId),
+    findAll: () => ipcRenderer.invoke('project:commandGroups:findAll'),
+    findFavorites: () =>
+      ipcRenderer.invoke('project:commandGroups:findFavorites'),
     create: (data: unknown) =>
       ipcRenderer.invoke('project:commandGroups:create', data),
     update: (id: string, data: unknown) =>
@@ -1372,13 +1420,17 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('project:commands:run:startAdHocCommand', params),
     startFavorite: (params: { projectId: string; runCommandId: string }) =>
       ipcRenderer.invoke('project:commands:run:startFavorite', params),
+    startFavoriteGroup: (params: { projectId: string; groupId: string }) =>
+      ipcRenderer.invoke('project:commands:run:startFavoriteGroup', params),
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];
+      groupId?: string;
     }) =>
       ipcRenderer.invoke('project:commands:run:startGroup', {
         taskId: params.taskId,
         runCommandIds: params.runCommandIds,
+        groupId: params.groupId,
       }),
     stopCommand: (params: { taskId: string; runCommandId: string }) =>
       ipcRenderer.invoke('project:commands:run:stopCommand', params),
@@ -1430,6 +1482,13 @@ contextBridge.exposeInMainWorld('api', {
           'project:commands:run:statusChange',
           handler,
         );
+    },
+    onGroupAborted: (callback: (event: RunCommandGroupAbortEvent) => void) => {
+      const handler = (_: unknown, event: RunCommandGroupAbortEvent) =>
+        callback(event);
+      ipcRenderer.on(RUN_COMMAND_GROUP_ABORT_CHANNEL, handler);
+      return () =>
+        ipcRenderer.removeListener(RUN_COMMAND_GROUP_ABORT_CHANNEL, handler);
     },
     onLog: (
       callback: (

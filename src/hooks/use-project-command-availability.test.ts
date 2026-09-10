@@ -33,6 +33,8 @@ describe('resolveProjectCommandAvailability', () => {
             projectId: 'project-1',
             name: 'Workspace',
             commandIds: ['missing-command'],
+            isFavorite: false,
+            stages: [{ id: 'stage-1', delayMs: 0, entries: [{ commandId: 'missing-command', waitForExit: false }] }],
             sortOrder: 0,
             createdAt: '2026-01-01T00:00:00.000Z',
           },
@@ -63,6 +65,7 @@ describe('resolveProjectCommandAvailability', () => {
       confirmBeforeRun: false,
       confirmMessage: null,
       isFavorite: false,
+      isHidden: false,
       sortOrder: 1,
       createdAt: '2026-01-01T00:00:00.000Z',
     };
@@ -80,6 +83,8 @@ describe('resolveProjectCommandAvailability', () => {
             projectId: 'project-1',
             name: 'Workspace',
             commandIds: ['command-1'],
+            isFavorite: false,
+            stages: [{ id: 'stage-1', delayMs: 0, entries: [{ commandId: 'command-1', waitForExit: false }] }],
             sortOrder: 0,
             createdAt: '2026-01-01T00:00:00.000Z',
           },
@@ -92,5 +97,66 @@ describe('resolveProjectCommandAvailability', () => {
 
     expect(result.hasConfiguredItems).toBe(true);
     expect(result.items.map((item) => item.type)).toEqual(['group', 'command']);
+  });
+
+  it('drops hidden commands and groups whose only members are hidden', () => {
+    const base = {
+      projectId: 'project-1',
+      ports: [],
+      portConflictStrategy: 'prompt' as const,
+      portOverrideProvider: 'env' as const,
+      portOverrideEnvVar: null,
+      portOverrideArgs: null,
+      envVars: [],
+      confirmBeforeRun: false,
+      confirmMessage: null,
+      isFavorite: false,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    };
+    const result = resolveProjectCommandAvailability({
+      commandsQuery: {
+        data: [
+          {
+            ...base,
+            id: 'command-1',
+            name: 'Dev',
+            command: 'pnpm dev',
+            isHidden: true,
+            sortOrder: 1,
+          },
+          {
+            ...base,
+            id: 'command-2',
+            name: 'Test',
+            command: 'pnpm test',
+            isHidden: false,
+            sortOrder: 2,
+          },
+        ],
+        isError: false,
+        isSuccess: true,
+        refetch,
+      },
+      groupsQuery: {
+        data: [
+          {
+            id: 'group-1',
+            projectId: 'project-1',
+            name: 'Hidden only',
+            commandIds: ['command-1'],
+            isFavorite: false,
+            stages: [{ id: 'stage-1', delayMs: 0, entries: [{ commandId: 'command-1', waitForExit: false }] }],
+            sortOrder: 0,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+        isError: false,
+        isSuccess: true,
+        refetch,
+      },
+    });
+
+    expect(result.commands.map((command) => command.id)).toEqual(['command-2']);
+    expect(result.items.map((item) => item.item.id)).toEqual(['command-2']);
   });
 });

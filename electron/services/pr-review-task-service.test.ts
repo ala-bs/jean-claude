@@ -139,6 +139,7 @@ function makeCommand(
     confirmBeforeRun: false,
     confirmMessage: null,
     isFavorite: false,
+    isHidden: false,
     sortOrder: 0,
     createdAt: '2026-07-05T00:00:00.000Z',
     ...overrides,
@@ -148,14 +149,35 @@ function makeCommand(
 function makeGroup(
   overrides: Partial<ProjectCommandGroup> = {},
 ): ProjectCommandGroup {
-  return {
+  const group = {
     id: 'full-stack',
     projectId: 'project-1',
     name: 'Full stack',
     commandIds: ['web', 'api', 'web'],
+    isFavorite: false,
     sortOrder: 0,
     createdAt: '2026-07-05T00:00:00.000Z',
     ...overrides,
+  };
+
+  // Stages are the source of truth; default them to one all-at-once stage
+  // matching the fixture's membership.
+  return {
+    ...group,
+    stages:
+      overrides.stages ??
+      (group.commandIds.length > 0
+        ? [
+            {
+              id: 'stage-1',
+              delayMs: 0,
+              entries: group.commandIds.map((commandId) => ({
+                commandId,
+                waitForExit: false,
+              })),
+            },
+          ]
+        : []),
   };
 }
 
@@ -1011,6 +1033,69 @@ describe('startPrCommand', () => {
     const afterStop = deps.startGroup.mock.calls[0][1].afterStop;
     await afterStop();
     expect(deps.resetLogs).toHaveBeenCalledWith('task-1', ['web', 'api']);
+  });
+
+  it('drops hidden members when resolving a group server-side', async () => {
+    const deps = makeStartDeps({
+      findCommandById: vi.fn(async (id: string) =>
+        makeCommand({ id, isHidden: id === 'api' }),
+      ),
+    });
+
+    const result = await startPrCommand(
+      {
+        projectId: 'project-1',
+        pullRequestId: 12,
+        target: { type: 'group', id: 'full-stack' },
+      },
+      deps,
+    );
+
+    expect(result.runCommandIds).toEqual(['web']);
+    expect(deps.startGroup).toHaveBeenCalledWith(
+      expect.objectContaining({ runCommandIds: ['web'] }),
+      { afterStop: expect.any(Function) },
+    );
+  });
+
+  it('rejects a group whose members are all hidden', async () => {
+    const deps = makeStartDeps({
+      findCommandById: vi.fn(async (id: string) =>
+        makeCommand({ id, isHidden: true }),
+      ),
+    });
+
+    await expect(
+      startPrCommand(
+        {
+          projectId: 'project-1',
+          pullRequestId: 12,
+          target: { type: 'group', id: 'full-stack' },
+        },
+        deps,
+      ),
+    ).rejects.toThrow('no visible commands');
+    expect(deps.startGroup).not.toHaveBeenCalled();
+  });
+
+  it('rejects a hidden command target', async () => {
+    const deps = makeStartDeps({
+      findCommandById: vi.fn(async (id: string) =>
+        makeCommand({ id, isHidden: true }),
+      ),
+    });
+
+    await expect(
+      startPrCommand(
+        {
+          projectId: 'project-1',
+          pullRequestId: 12,
+          target: { type: 'command', id: 'web' },
+        },
+        deps,
+      ),
+    ).rejects.toThrow('is hidden');
+    expect(deps.startCommand).not.toHaveBeenCalled();
   });
 
   it.each([

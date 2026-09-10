@@ -19,10 +19,18 @@ import {
   useRequeuePolicyEvaluation,
   useSetAutoComplete,
 } from '@/hooks/use-pull-requests';
+import {
+  usePrCompletionQueueEntry,
+  usePrCompletionQueueStore,
+} from '@/stores/pr-completion-queue';
 import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
 import { Checkbox } from '@/common/ui/checkbox';
+import { ListOrdered } from 'lucide-react';
 import type { MergeStrategy } from '@/hooks/use-pull-requests';
 import { Modal } from '@/common/ui/modal';
+import { useLeavePrCompletionQueue } from '../use-leave-pr-completion-queue';
+import { useProject } from '@/hooks/use-projects';
+import { useToastStore } from '@/stores/toasts';
 
 
 
@@ -71,6 +79,25 @@ export function PrAutoComplete({
   }, [pr.reviewers, pr.createdBy, currentUser]);
 
   const isAutoCompleteSet = !!pr.autoCompleteSetBy;
+
+  const { data: project } = useProject(projectId);
+  const isQueueEnabled = !!project?.queuePrAutoComplete;
+  const enqueue = usePrCompletionQueueStore((state) => state.enqueue);
+  const queued = usePrCompletionQueueEntry(projectId, pr.id);
+  const leaveQueue = useLeavePrCompletionQueue();
+  const addToast = useToastStore((state) => state.addToast);
+
+  const handleLeaveQueue = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!queued) return;
+      leaveQueue({
+        entry: queued.entry,
+        disarm: () => autoCompleteMutation.mutate({ enabled: false }),
+      });
+    },
+    [autoCompleteMutation, leaveQueue, queued],
+  );
 
   useEffect(() => {
     if (previousEvaluationsRef.current === evaluations) return;
@@ -160,33 +187,58 @@ export function PrAutoComplete({
 
   const handleEnable = useCallback(() => {
     if (!currentIdentityId || autoCompleteMutation.isAnyPending) return;
-    autoCompleteMutation.mutate(
-      {
-        enabled: true,
+
+    const completionOptions = {
+      mergeStrategy,
+      deleteSourceBranch,
+      transitionWorkItems,
+      mergeCommitMessage:
+        showCommitMessage && mergeCommitMessage ? mergeCommitMessage : undefined,
+      autoCompleteIgnoreConfigIds:
+        ignoreOptionalPolicies && optionalPolicyConfigIds.length > 0
+          ? optionalPolicyConfigIds
+          : undefined,
+    };
+
+    // With the project setting on, the PATCH is deferred to the queue driver so
+    // only one PR of this project is armed at a time.
+    if (isQueueEnabled) {
+      enqueue({
+        projectId,
+        prId: pr.id,
+        prTitle: pr.title,
+        targetBranch: pr.targetRefName.replace('refs/heads/', ''),
+        repoInfo,
         autoCompleteSetById: currentIdentityId,
-        completionOptions: {
-          mergeStrategy,
-          deleteSourceBranch,
-          transitionWorkItems,
-          mergeCommitMessage:
-            showCommitMessage && mergeCommitMessage
-              ? mergeCommitMessage
-              : undefined,
-          autoCompleteIgnoreConfigIds:
-            ignoreOptionalPolicies && optionalPolicyConfigIds.length > 0
-              ? optionalPolicyConfigIds
-              : undefined,
-        },
-      },
+        completionOptions,
+      });
+      addToast({
+        type: 'success',
+        message: `PR !${pr.id} queued for auto-complete`,
+      });
+      setIsModalOpen(false);
+      return;
+    }
+
+    autoCompleteMutation.mutate(
+      { enabled: true, autoCompleteSetById: currentIdentityId, completionOptions },
       { onSuccess: () => setIsModalOpen(false) },
     );
   }, [
+    addToast,
     currentIdentityId,
     autoCompleteMutation,
+    enqueue,
+    isQueueEnabled,
     mergeStrategy,
     deleteSourceBranch,
     transitionWorkItems,
     mergeCommitMessage,
+    pr.id,
+    pr.targetRefName,
+    pr.title,
+    projectId,
+    repoInfo,
     showCommitMessage,
     ignoreOptionalPolicies,
     optionalPolicyConfigIds,
@@ -227,6 +279,34 @@ export function PrAutoComplete({
       }
     }
   }, [handleQueueCi, pendingCi, queuedIds]);
+
+  // Queue membership wins over the plain auto-complete chip: once armed, the PR
+  // is both auto-completing *and* queued, and the position is the useful bit.
+  if (queued) {
+    const isArmed = queued.entry.status !== 'waiting';
+    const queuedClassName =
+      variant === 'compact'
+        ? 'text-status-pr bg-status-pr/10 ring-status-pr/20 ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1'
+        : 'flex items-center gap-1 rounded-lg bg-blue-600/20 px-3 py-1.5 text-xs font-medium text-blue-300';
+
+    return (
+      <div className={queuedClassName}>
+        {isArmed ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <ListOrdered className="h-3.5 w-3.5" />
+        )}
+        <span>{isArmed ? 'Merging' : `Queued #${queued.position}`}</span>
+        <button
+          onClick={handleLeaveQueue}
+          className="ml-0.5 rounded p-0.5 hover:bg-white/10"
+          title={isArmed ? 'Cancel auto-complete' : 'Remove from completion queue'}
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+    );
+  }
 
   // When auto-complete is already set, show status chip with cancel button
   if (isAutoCompleteSet) {
@@ -291,7 +371,7 @@ export function PrAutoComplete({
         ) : (
           <GitMerge className="h-3.5 w-3.5" />
         )}
-        Set auto-complete
+        {isQueueEnabled ? 'Queue auto-complete' : 'Set auto-complete'}
       </button>
       <Modal
         isOpen={isModalOpen}
@@ -450,7 +530,7 @@ export function PrAutoComplete({
               {autoCompleteMutation.isAnyPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                'Enable auto-complete'
+                isQueueEnabled ? 'Add to completion queue' : 'Enable auto-complete'
               )}
             </button>
           </div>

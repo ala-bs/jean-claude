@@ -41,6 +41,7 @@ export function useDeleteOldCompletedTasks() {
         queryKey: ['debug', 'old-completed-tasks-count'],
       });
       queryClient.invalidateQueries({ queryKey: ['debug', 'table'] });
+      queryClient.invalidateQueries({ queryKey: ['debug', 'databaseSize'] });
     },
   });
 }

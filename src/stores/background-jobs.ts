@@ -23,6 +23,7 @@ export type BackgroundJobType =
   | 'merge'
   | 'worktree-cleanup'
   | 'pipeline-run'
+  | 'pr-auto-complete'
   | 'agent-memory-extraction';
 export type BackgroundJobStatus = 'running' | 'succeeded' | 'failed';
 
@@ -158,6 +159,13 @@ export type BackgroundJob =
         runName: string;
         runId: number;
         kind: 'build' | 'release';
+      };
+    })
+  | (BackgroundJobBase & {
+      type: 'pr-auto-complete';
+      details: {
+        prId: number;
+        prTitle: string;
       };
     });
 
@@ -331,6 +339,16 @@ type NewBackgroundJobInput =
         runName: string;
         runId: number;
         kind: 'build' | 'release';
+      };
+    }
+  | {
+      type: 'pr-auto-complete';
+      title: string;
+      taskId?: string | null;
+      projectId?: string | null;
+      details: {
+        prId: number;
+        prTitle: string;
       };
     };
 
@@ -699,6 +717,8 @@ export function bgJobLabel(type: BackgroundJobType): string {
       return 'Cleaning up worktree…';
     case 'pipeline-run':
       return 'Running pipeline…';
+    case 'pr-auto-complete':
+      return 'Waiting for PR to merge…';
     case 'agent-memory-extraction':
       return 'Extracting agent memory…';
   }

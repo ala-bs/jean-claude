@@ -6,12 +6,30 @@ import type {
   UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
 import { api } from '@/lib/api';
+import { flattenCommandGroupStages } from '@shared/run-command-types';
 
 
 export function useProjectCommandGroups(projectId: string) {
   return useQuery({
     queryKey: ['projectCommandGroups', projectId],
     queryFn: () => api.projectCommandGroups.findByProjectId(projectId),
+  });
+}
+
+/** Favorite groups across all projects, runnable from the project root. */
+export function useFavoriteProjectCommandGroups() {
+  return useQuery({
+    queryKey: ['projectCommandGroups', 'favorites'],
+    queryFn: () => api.projectCommandGroups.findFavorites(),
+  });
+}
+
+/** Every command group, used by the favorites picker. */
+export function useAllProjectCommandGroups({ enabled }: { enabled: boolean }) {
+  return useQuery({
+    queryKey: ['projectCommandGroups', 'all'],
+    queryFn: () => api.projectCommandGroups.findAll(),
+    enabled,
   });
 }
 
@@ -38,7 +56,42 @@ export function useUpdateProjectCommandGroup() {
       id: string;
       data: UpdateProjectCommandGroup;
     }) => api.projectCommandGroups.update(id, data),
-    onSuccess: () => {
+    // Optimistic: stage edits (drag, wait-for-exit toggle, delay) fire in quick
+    // succession and each one rebuilds the whole stage array from the cached
+    // group. Without this, an edit made before the previous refetch lands is
+    // computed from stale data and silently reverts the earlier one.
+    onMutate: async ({ id, data }) => {
+      await queryClient.cancelQueries({ queryKey: ['projectCommandGroups'] });
+      const previous = queryClient.getQueriesData<ProjectCommandGroup[]>({
+        queryKey: ['projectCommandGroups'],
+      });
+
+      queryClient.setQueriesData<ProjectCommandGroup[]>(
+        { queryKey: ['projectCommandGroups'] },
+        (old) =>
+          old?.map((group) =>
+            group.id === id
+              ? {
+                  ...group,
+                  ...data,
+                  // Keep the derived field in step with the optimistic stages,
+                  // exactly as the repository does on write.
+                  commandIds: data.stages
+                    ? flattenCommandGroupStages(data.stages)
+                    : group.commandIds,
+                }
+              : group,
+          ),
+      );
+
+      return { previous };
+    },
+    onError: (_err, _variables, context) => {
+      for (const [queryKey, value] of context?.previous ?? []) {
+        queryClient.setQueryData(queryKey, value);
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['projectCommandGroups'] });
     },
   });

@@ -23,6 +23,7 @@ import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-m
 import { Header } from '@/layout/ui-header';
 import { MainSidebar } from '@/layout/ui-main-sidebar';
 import { OverlayHost } from '@/layout/ui-overlay-host';
+import { PrCompletionQueueDriver } from '@/features/pull-request/ui-pr-completion-queue-driver';
 import { pruneOrphanedReviewComments } from '@/stores/review-comments';
 import { pruneOrphanedTaskPrompts } from '@/stores/task-prompts';
 import { pruneOrphanedTaskReviewDrafts } from '@/stores/task-review-comment-drafts';
@@ -384,6 +385,27 @@ function RunningCommandsContainer() {
   return null;
 }
 
+function PrCompletionQueueContainer() {
+  const layer = useKeyboardLayer('global-nav');
+  const toggle = useOverlaysStore((s) => s.toggle);
+
+  useCommands(
+    'pr-completion-queue-trigger',
+    [
+      {
+        label: 'Open PR Completion Queue',
+        section: 'Navigation',
+        handler: () => {
+          toggle('pr-completion-queue');
+        },
+      },
+    ],
+    { layer },
+  );
+
+  return null;
+}
+
 function PipelinesOverlayContainer() {
   const layer = useKeyboardLayer('global-nav');
   const toggle = useOverlaysStore((s) => s.toggle);
@@ -518,6 +540,7 @@ function RootLayout() {
       <RateLimitSwapBridge />
       <AgentMemoryCaptureWarningBridge />
       <TaskMessageManager />
+      <PrCompletionQueueDriver />
       <AppearanceBridge />
       <GlobalPromptFromBackModal />
       <WorkItemModal />
@@ -542,6 +565,7 @@ function RootLayout() {
           <WorkActivityContainer />
           <RunningCommandsContainer />
           <PipelinesOverlayContainer />
+          <PrCompletionQueueContainer />
           <OverlayHost />
         </>
       )}

@@ -11,6 +11,7 @@ import {
   ListTodo,
   Loader2,
   MoreHorizontal,
+  PanelsTopLeft,
   Play,
   RefreshCw,
   Search,
@@ -23,6 +24,7 @@ import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useStat
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { createPortal } from 'react-dom';
+import { getTaskPromptPreview } from '@/lib/task-prompt-preview';
 import { nanoid } from 'nanoid';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -171,6 +173,7 @@ import { shouldShowPrWorkspaceEmptyState } from '@/features/task/ui-pr-workspace
 import { SkillPublishAction } from '@/features/task/ui-skill-publish-action';
 import type { SnippetVariableContext } from '@/lib/resolve-snippet-template';
 import { StepFlowBar } from '@/features/task/ui-step-flow-bar';
+import { stripPromptImagePlaceholders } from '@shared/prompt-image-placeholders';
 import { TaskPrView } from '@/features/task/ui-task-pr-view';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useAgentResourceSnapshots } from '@/hooks/use-agent-resource-snapshots';
@@ -1596,11 +1599,11 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
       const jobId = addRunningJob({
         type: 'task-deletion',
-        title: `Deleting "${task.name ?? task.prompt.slice(0, 40)}"`,
+        title: `Deleting "${task.name ?? getTaskPromptPreview(task.prompt).slice(0, 40)}"`,
         taskId,
         projectId: task.projectId,
         details: {
-          taskName: task.name ?? task.prompt.slice(0, 40),
+          taskName: task.name ?? getTaskPromptPreview(task.prompt).slice(0, 40),
           projectName: project.name,
           deleteWorktree,
         },
@@ -1661,11 +1664,11 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
     const jobId = addRunningJob({
       type: 'task-deletion',
-      title: `Deleting "${task.name ?? task.prompt.slice(0, 40)}"`,
+      title: `Deleting "${task.name ?? getTaskPromptPreview(task.prompt).slice(0, 40)}"`,
       taskId,
       projectId: task.projectId,
       details: {
-        taskName: task.name ?? task.prompt.slice(0, 40),
+        taskName: task.name ?? getTaskPromptPreview(task.prompt).slice(0, 40),
         projectName: project?.name ?? null,
         deleteWorktree: true,
       },
@@ -2030,7 +2033,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             ? 'Review Changes'
             : 'Step';
       const name = data.hasUserPrompt
-        ? data.promptTemplate.split('\n')[0]?.slice(0, 40).trim() || defaultName
+        ? // Skip a leading pasted-image marker line — it is not a step name.
+          stripPromptImagePlaceholders(data.promptTemplate)
+            .split('\n')
+            .find((line) => line.trim())
+            ?.slice(0, 40)
+            .trim() || defaultName
         : defaultName;
 
       const promptTemplate =
@@ -2908,6 +2916,19 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Open Worktree in Editor
                   </DropdownItem>
                 )}
+                <DropdownItem
+                  icon={<PanelsTopLeft />}
+                  onClick={() => {
+                    overflowMenuRef.current?.toggle();
+                    void navigate({
+                      to: '/all/projects/$projectId',
+                      params: { projectId: task.projectId },
+                      search: { fromTaskId: task.id },
+                    });
+                  }}
+                >
+                  Open Project Panel
+                </DropdownItem>
                 {task.branchName && (
                   <DropdownItem
                     icon={<GitFork />}

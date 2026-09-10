@@ -71,6 +71,7 @@ import { useNavigationStore } from '@/stores/navigation';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOpenReviewCommentCount } from '@/stores/review-comments';
 import { useOverlaysStore } from '@/stores/overlays';
+import { usePrCompletionQueueEntry } from '@/stores/pr-completion-queue';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useWorkItemModalStore } from '@/stores/work-item-modal';
 import { WorkItemChip } from '@/common/ui/work-item-chip';
@@ -307,6 +308,7 @@ function RailPrAutoCompleteButton({
   canSet: boolean;
 }) {
   const { data: pr, isLoading } = usePullRequest(projectId, prId);
+  const isQueued = !!usePrCompletionQueueEntry(projectId, prId);
 
   if (isLoading) {
     return (
@@ -321,7 +323,10 @@ function RailPrAutoCompleteButton({
     return null;
   }
 
-  if (!pr.autoCompleteSetBy && !canSet) {
+  // A queued PR must stay visible even when it can no longer be armed (e.g. a
+  // conflict cleared `canSet`), or it would sit in the queue with no chip and
+  // no way to remove it from the feed.
+  if (!pr.autoCompleteSetBy && !canSet && !isQueued) {
     return null;
   }
 
