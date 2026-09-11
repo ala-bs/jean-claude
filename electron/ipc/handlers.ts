@@ -445,6 +445,7 @@ import {
   searchRegistry,
 } from '../services/skill-registry-service';
 import { detectMobilePreviewProjectConfig } from '../services/mobile-preview-project-detector';
+import { logPrImageEventSync } from '../lib/pr-image-log';
 import { mobilePreviewAndroidAppService } from '../services/mobile-preview-android-app-service';
 import { mobilePreviewNativeLogService } from '../services/mobile-preview-native-log-service';
 
@@ -5518,6 +5519,15 @@ export function registerIpcHandlers() {
       // Format-string placeholders keep renderer input out of the format
       // directive itself, so a `%j` in the message stays literal text.
       dbg.renderer('%s %s %s', clamp(params?.scope, 64), clamp(params?.message, 200), data);
+      // PR image uploads are reported long after the fact, so mirror just that
+      // scope to a file the user can hand back.
+      if (clamp(params?.scope, 64) === '[pr-create]') {
+        logPrImageEventSync({
+          source: 'renderer',
+          message: clamp(params?.message, 200),
+          data: params?.data,
+        });
+      }
     },
   );
   ipcMain.handle('debug:getTableNames', () => DebugRepository.getTableNames());

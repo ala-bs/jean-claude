@@ -34,6 +34,7 @@ import {
 
 import { createDebug, dbg } from '../lib/debug';
 import { azureHtmlToMarkdown } from './azure-html-to-markdown';
+import { logPrImageEventSync } from '../lib/pr-image-log';
 import { ProviderRepository } from '../database/repositories/providers';
 import { sendGlobalPromptToWindow } from './global-prompt-service';
 import { TokenRepository } from '../database/repositories/tokens';
@@ -3054,12 +3055,18 @@ export async function updatePullRequestDescription(params: {
 
   const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}?api-version=7.0`;
 
-  dbg.azure('pr-description:update', {
+  const descriptionStats = {
     pullRequestId: params.pullRequestId,
     length: params.description.length,
     imageMarkdownCount: (params.description.match(/!\[[^\]]*\]\(/g) ?? [])
       .length,
     hasPlaceholders: params.description.includes('jc-image://'),
+  };
+  dbg.azure('pr-description:update', descriptionStats);
+  logPrImageEventSync({
+    source: 'azure',
+    message: 'pr-description:update',
+    data: descriptionStats,
   });
 
   const response = await fetch(url, {
@@ -3078,10 +3085,39 @@ export async function updatePullRequestDescription(params: {
       status: response.status,
       error: error.slice(0, 500),
     });
+    logPrImageEventSync({
+      source: 'azure',
+      message: 'pr-description:update-failed',
+      data: {
+        pullRequestId: params.pullRequestId,
+        status: response.status,
+        error: error.slice(0, 500),
+      },
+    });
     throw new Error(`Failed to update pull request description: ${error}`);
   }
 
   const pr: PullRequestResponse = await response.json();
+
+  // Azure echoes the stored description back. Comparing it with what we sent
+  // is the only way to tell "Azure dropped our image markdown" apart from
+  // "Azure kept it but renders it broken" -- the two look identical in the UI.
+  const storedStats = {
+    pullRequestId: params.pullRequestId,
+    sentLength: params.description.length,
+    storedLength: pr.description?.length ?? 0,
+    sentImageMarkdownCount: descriptionStats.imageMarkdownCount,
+    storedImageMarkdownCount: (pr.description?.match(/!\[[^\]]*\]\(/g) ?? [])
+      .length,
+    identical: (pr.description ?? '') === params.description,
+  };
+  dbg.azure('pr-description:stored', storedStats);
+  logPrImageEventSync({
+    source: 'azure',
+    message: 'pr-description:stored',
+    data: storedStats,
+  });
+
   const webUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_git/${params.repoId}/pullrequest/${pr.pullRequestId}`;
 
   return mapPullRequestResponse(pr, webUrl);
@@ -3208,13 +3244,19 @@ export async function uploadPullRequestAttachment(params: {
     ? `${requestedName.replace(/\.[^./\\]+$/, '') || 'image'}.${sniffed}`
     : requestedName;
 
-  dbg.azure('pr-attachment:upload', {
+  const uploadStats = {
     pullRequestId: params.pullRequestId,
     requestedName,
     requestedMimeType: params.mimeType,
     sniffedExtension: sniffed ?? 'unknown',
     bytes: data.byteLength,
     magic: data.subarray(0, 12).toString('hex'),
+  };
+  dbg.azure('pr-attachment:upload', uploadStats);
+  logPrImageEventSync({
+    source: 'azure',
+    message: 'pr-attachment:upload',
+    data: uploadStats,
   });
 
   for (let attempt = 0; attempt < 10; attempt++) {
@@ -3243,6 +3285,16 @@ export async function uploadPullRequestAttachment(params: {
         status: response.status,
         error: error.slice(0, 500),
       });
+      logPrImageEventSync({
+        source: 'azure',
+        message: 'pr-attachment:upload-failed',
+        data: {
+          fileName,
+          attempt,
+          status: response.status,
+          error: error.slice(0, 500),
+        },
+      });
       if (isDuplicateAttachmentNameError(error) && attempt < 9) {
         continue;
       }
@@ -3254,19 +3306,30 @@ export async function uploadPullRequestAttachment(params: {
       throw new Error('Azure DevOps did not return an attachment URL');
     }
 
+    // The bare URL Azure returns is an unversioned API route: fetching it
+    // (even with a PAT) answers 401 with an empty body, which is exactly what
+    // the markdown renderer gets -- so the image never draws. Azure's own web
+    // editor inserts the download-flavoured URL below, so match it.
+    const renderableUrl = `${attachment.url}?download=false&resolveLfs=true&%24format=octetStream&api-version=5.0-preview.1&sanitize=true`;
+
     dbg.azure('pr-attachment:uploaded', {
       fileName,
       attempt,
-      url: attachment.url,
+      url: renderableUrl,
+    });
+    logPrImageEventSync({
+      source: 'azure',
+      message: 'pr-attachment:uploaded',
+      data: { fileName, attempt, url: renderableUrl },
     });
 
     await verifyAttachmentContentType({
-      attachmentUrl: attachment.url,
+      attachmentUrl: renderableUrl,
       authHeader,
       expectedBytes: data.byteLength,
     });
 
-    return { url: attachment.url };
+    return { url: renderableUrl };
   }
 
   throw new Error('Failed to upload pull request attachment');
