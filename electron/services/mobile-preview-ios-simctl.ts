@@ -280,9 +280,23 @@ export async function getDevice(
   );
 }
 
+/**
+ * Boots a simulator, deduping concurrent boots of the same device.
+ *
+ * `minimizeWindow` is applied per caller rather than inside the shared boot
+ * promise: the framebuffer preview hides the Simulator window because it
+ * renders the device itself, while the lightweight mobile dev pane wants the
+ * real window left on screen. Two racing callers must not inherit each other's
+ * preference just because one of them created the cache entry.
+ *
+ * Minimizing is additionally gated on `didBoot`, preserving the original
+ * behavior of never touching a Simulator window that was already open before
+ * this process got involved.
+ */
 export async function ensureIosSimulatorBooted(
   deviceId: string,
   signal?: AbortSignal,
+  options?: { minimizeWindow?: boolean },
 ): Promise<MobilePreviewDevice> {
   if (isIosPreviewDisposed()) throw new Error('iOS preview is shutting down.');
   let entry = pendingIosSimulatorBootsByDeviceId.get(deviceId);
@@ -300,7 +314,7 @@ export async function ensureIosSimulatorBooted(
       if (!device) {
         throw new Error(`iOS simulator not found: ${deviceId}`);
       }
-      if (device.state === 'booted') return device;
+      if (device.state === 'booted') return { device, didBoot: false };
       if (device.state !== 'shutdown') {
         throw new Error(
           `iOS simulator ${deviceId} is not ready to stream (state: ${device.state}). Only booted or shutdown simulators are supported.`,
@@ -316,12 +330,8 @@ export async function ensureIosSimulatorBooted(
         signal: abortController.signal,
       });
       if (isIosPreviewDisposed()) throw new Error('iOS preview is shutting down.');
-      void minimizeMobilePreviewWindows({
-        processNames: IOS_SIMULATOR_PROCESS_NAMES,
-        windowNameIncludes: [device.name],
-      });
       debug('iOS preview simulator booted deviceId=%s', deviceId);
-      return device;
+      return { device, didBoot: true };
     })();
     entry = { promise, abortController, waiters: new Set() };
     pendingIosSimulatorBootsByDeviceId.set(deviceId, entry);
@@ -355,8 +365,15 @@ export async function ensureIosSimulatorBooted(
       if (releaseWaiter(true, reason)) rejectWaiter(reason);
     };
     entry.promise.then(
-      (device) => {
-        if (releaseWaiter(false)) resolveWaiter(device);
+      ({ device, didBoot }) => {
+        if (!releaseWaiter(false)) return;
+        if (didBoot && options?.minimizeWindow !== false) {
+          void minimizeMobilePreviewWindows({
+            processNames: IOS_SIMULATOR_PROCESS_NAMES,
+            windowNameIncludes: [device.name],
+          });
+        }
+        resolveWaiter(device);
       },
       (error) => {
         if (releaseWaiter(false)) rejectWaiter(error);

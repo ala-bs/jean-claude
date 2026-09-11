@@ -140,6 +140,8 @@ import type {
   MobilePreviewAndroidSystemImage,
   MobilePreviewAndroidToolStatus,
   MobilePreviewAttachSessionParams,
+  MobilePreviewBootDeviceParams,
+  MobilePreviewBootDeviceResult,
   MobilePreviewDetachSessionParams,
   MobilePreviewDevice,
   MobilePreviewDeviceAssignment,
@@ -1587,6 +1589,9 @@ export interface Api {
     openDeeplink: (params: MobilePreviewOpenDeeplinkParams) => Promise<void>;
     openDevMenu: (params: MobilePreviewOpenDevMenuParams) => Promise<void>;
     reloadExpo: (params: MobilePreviewReloadExpoParams) => Promise<void>;
+    bootDevice: (
+      params: MobilePreviewBootDeviceParams,
+    ) => Promise<MobilePreviewBootDeviceResult>;
     forwardPort: (params: MobilePreviewForwardPortParams) => Promise<void>;
     ensureMetroReverse: (params: {
       deviceId: string;
@@ -2866,6 +2871,7 @@ export const api: Api = hasWindowApi
         openDeeplink: async () => {},
         openDevMenu: async () => {},
         reloadExpo: async () => {},
+        bootDevice: async () => ({ deviceId: '' }),
         forwardPort: async () => {},
         ensureMetroReverse: async () => ({
           reversed: false,

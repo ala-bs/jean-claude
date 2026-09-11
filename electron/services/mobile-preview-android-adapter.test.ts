@@ -2732,3 +2732,93 @@ id: 33 or "unknown_phone"
     ).toThrow(/Unsupported Android key input: escape/);
   });
 });
+
+describe('android bootDevice', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    commandExistsMock.mockResolvedValue(true);
+  });
+
+  it('rejects an attached-but-unauthorized device with its actionable reason', async () => {
+    // Regression: the naive `resolveAndroidAdbSerial` early-returns on an id
+    // match alone, so an unauthorized handset looked like a successful boot and
+    // failed confusingly later.
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout:
+            'List of devices attached\nABC987 unauthorized usb:1-1 model:Unauthorized_Device transport_id:3\n',
+          stderr: '',
+        };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    // The device's own actionable reason, not raw adb output.
+    await expect(androidAdapter.bootDevice('ABC987')).rejects.toThrow(
+      /Accept the USB debugging prompt/i,
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty device id before touching adb', async () => {
+    await expect(androidAdapter.bootDevice('  ')).rejects.toThrow(
+      /deviceId is required/,
+    );
+    expect(runCommandMock).not.toHaveBeenCalled();
+    expect(commandExistsMock).not.toHaveBeenCalled();
+  });
+
+  it('leaves the emulator window visible when booting an AVD', async () => {
+    // The lightweight mobile dev pane renders no framebuffer, so minimizing the
+    // emulator would hide the only thing the user can look at.
+    let emulatorAttached = false;
+    runCommandMock.mockImplementation(async (command, args) => {
+      const argv = args.join(' ');
+      if (command === 'adb' && argv === 'devices -l') {
+        return {
+          stdout: emulatorAttached
+            ? 'List of devices attached\nemulator-5554 device model:Pixel_8\n'
+            : 'List of devices attached\n',
+          stderr: '',
+        };
+      }
+      if (command === 'emulator' && argv === '-list-avds') {
+        return { stdout: 'Pixel_8\n', stderr: '' };
+      }
+      if (command === 'adb' && argv === '-s emulator-5554 emu avd name') {
+        return { stdout: 'Pixel_8\nOK\n', stderr: '' };
+      }
+      if (
+        command === 'adb' &&
+        argv === '-s emulator-5554 shell getprop sys.boot_completed'
+      ) {
+        return { stdout: '1\n', stderr: '' };
+      }
+      if (
+        command === 'adb' &&
+        argv === '-s emulator-5554 shell getprop init.svc.bootanim'
+      ) {
+        return { stdout: 'stopped\n', stderr: '' };
+      }
+      if (command === 'adb' && argv === '-s emulator-5554 shell wm size') {
+        return { stdout: 'Physical size: 1080x2400\n', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${command} ${argv}`);
+    });
+    spawnMock.mockImplementation(() => {
+      emulatorAttached = true;
+      return { unref: vi.fn() } as unknown as ReturnType<typeof spawn>;
+    });
+
+    const result = await androidAdapter.bootDevice('Pixel_8');
+
+    expect(result).toEqual({ deviceId: 'emulator-5554' });
+    expect(spawnMock).toHaveBeenCalledWith(
+      'emulator',
+      ['-avd', 'Pixel_8'],
+      expect.anything(),
+    );
+    expect(minimizeMobilePreviewWindowsMock).not.toHaveBeenCalled();
+  });
+});

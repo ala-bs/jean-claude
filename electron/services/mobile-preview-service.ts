@@ -11,6 +11,8 @@ import {
   type MobilePreviewAndroidSystemImage,
   type MobilePreviewAndroidToolStatus,
   type MobilePreviewAttachSessionParams,
+  type MobilePreviewBootDeviceParams,
+  type MobilePreviewBootDeviceResult,
   type MobilePreviewDetachSessionParams,
   type MobilePreviewDevice,
   type MobilePreviewDeviceAssignment,
@@ -55,6 +57,7 @@ import { iosIdbAdapter } from './mobile-preview-ios-idb-adapter';
 type MobilePreviewAdapter = {
   dispose?: () => Promise<void>;
   listDevices: () => Promise<MobilePreviewDevice[]>;
+  bootDevice?: (deviceId: string) => Promise<{ deviceId: string }>;
   startStream: (params: {
     taskId: string;
     deviceId: string;
@@ -539,6 +542,24 @@ export function createMobilePreviewService({
     ): Promise<MobilePreviewDevice[]> {
       assertSupportedPlatform(platform);
       return adapters[platform].listDevices();
+    },
+
+    /**
+     * Boots a simulator/emulator without starting a preview stream. Used by the
+     * lightweight mobile dev pane, which lets the user work against the real
+     * simulator window instead of a streamed framebuffer.
+     */
+    async bootDevice(
+      params: MobilePreviewBootDeviceParams,
+    ): Promise<MobilePreviewBootDeviceResult> {
+      assertSupportedPlatform(params.platform);
+      const bootDevice = adapters[params.platform].bootDevice;
+      if (!bootDevice) {
+        throw new Error(
+          `Booting devices is not supported for platform ${params.platform}`,
+        );
+      }
+      return bootDevice(params.deviceId);
     },
 
     listSessions(

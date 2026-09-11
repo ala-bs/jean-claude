@@ -8,6 +8,7 @@ import type {
   MobilePreviewQuality,
 } from '@shared/mobile-simulator-types';
 
+import { clearMobileDevPaneStateForTask } from './mobile-dev-pane';
 import { clearReviewCommentsForTask } from './review-comments';
 import { clearTaskReviewDraftsForTask } from './task-review-comment-drafts';
 
@@ -38,6 +39,9 @@ export type RightPane =
   | {
       type: 'commandLogs';
       selectedCommandId: string | null;
+    }
+  | {
+      type: 'mobileDev';
     };
 
 export type ReviewMode = 'changes' | 'unstaged' | 'files' | 'commits';
@@ -192,6 +196,11 @@ const DEFAULT_COMMAND_LOGS_PANE_WIDTH = 520;
 const MIN_COMMAND_LOGS_PANE_WIDTH = 320;
 const MAX_COMMAND_LOGS_PANE_WIDTH = 1200;
 
+// Constants for the lightweight mobile dev pane width
+const DEFAULT_MOBILE_DEV_PANE_WIDTH = 380;
+const MIN_MOBILE_DEV_PANE_WIDTH = 300;
+const MAX_MOBILE_DEV_PANE_WIDTH = 900;
+
 // Constants for the project panel's terminal pane width
 const DEFAULT_PROJECT_TERMINAL_PANE_WIDTH = 520;
 const MIN_PROJECT_TERMINAL_PANE_WIDTH = 320;
@@ -272,6 +281,9 @@ interface NavigationState {
   // App-level: run command logs pane width (global setting)
   commandLogsPaneWidth: number;
 
+  // App-level: lightweight mobile dev pane width (global setting)
+  mobileDevPaneWidth: number;
+
   // App-level: project panel terminal pane width (global setting)
   projectTerminalPaneWidth: number;
 
@@ -336,6 +348,7 @@ interface NavigationState {
   setFileExplorerTreeWidth: (width: number) => void;
   setFileExplorerPaneWidth: (width: number) => void;
   setCommandLogsPaneWidth: (width: number) => void;
+  setMobileDevPaneWidth: (width: number) => void;
   setProjectTerminalPaneWidth: (width: number) => void;
   setToolDiffPreviewPaneWidth: (width: number) => void;
   setCommitDiffPaneWidth: (width: number) => void;
@@ -407,6 +420,7 @@ const useStore = create<NavigationState>()(
       fileExplorerTreeWidth: DEFAULT_FILE_EXPLORER_TREE_WIDTH,
       fileExplorerPaneWidth: DEFAULT_FILE_EXPLORER_PANE_WIDTH,
       commandLogsPaneWidth: DEFAULT_COMMAND_LOGS_PANE_WIDTH,
+      mobileDevPaneWidth: DEFAULT_MOBILE_DEV_PANE_WIDTH,
       projectTerminalPaneWidth: DEFAULT_PROJECT_TERMINAL_PANE_WIDTH,
       toolDiffPreviewPaneWidth: DEFAULT_TOOL_DIFF_PREVIEW_PANE_WIDTH,
       commitDiffPaneWidth: DEFAULT_COMMIT_DIFF_PANE_WIDTH,
@@ -464,6 +478,14 @@ const useStore = create<NavigationState>()(
           commandLogsPaneWidth: Math.min(
             Math.max(MIN_COMMAND_LOGS_PANE_WIDTH, width),
             MAX_COMMAND_LOGS_PANE_WIDTH,
+          ),
+        }),
+
+      setMobileDevPaneWidth: (width) =>
+        set({
+          mobileDevPaneWidth: Math.min(
+            Math.max(MIN_MOBILE_DEV_PANE_WIDTH, width),
+            MAX_MOBILE_DEV_PANE_WIDTH,
           ),
         }),
 
@@ -941,6 +963,7 @@ const useStore = create<NavigationState>()(
         // Clear associated review state (outside zustand set to avoid circular state)
         clearReviewCommentsForTask(taskId);
         clearTaskReviewDraftsForTask(taskId);
+        clearMobileDevPaneStateForTask(taskId);
 
         set((state) => {
           const { [taskId]: _, ...restTaskState } = state.taskState;
@@ -1291,6 +1314,14 @@ export function useTaskState(taskId: string) {
     [taskId, setTaskRightPaneAction],
   );
 
+  const openMobileDev = useCallback(
+    () =>
+      setTaskRightPaneAction(taskId, {
+        type: 'mobileDev',
+      }),
+    [taskId, setTaskRightPaneAction],
+  );
+
   const openCommandLogs = useCallback(
     (selectedCommandId: string | null = null) =>
       setTaskRightPaneAction(taskId, {
@@ -1348,6 +1379,7 @@ export function useTaskState(taskId: string) {
     openFileExplorer,
     openCommandLogs,
     selectCommandLogsTab,
+    openMobileDev,
     closeRightPane,
     toggleRightPane,
   };
@@ -1637,6 +1669,18 @@ export function useFileExplorerPaneWidth() {
   const width = useStore((state) => state.fileExplorerPaneWidth);
   const setWidth = useStore((state) => state.setFileExplorerPaneWidth);
   return { width, setWidth };
+}
+
+// Hook for the lightweight mobile dev pane width
+export function useMobileDevPaneWidth() {
+  const width = useStore((state) => state.mobileDevPaneWidth);
+  const setWidth = useStore((state) => state.setMobileDevPaneWidth);
+  return {
+    width,
+    setWidth,
+    minWidth: MIN_MOBILE_DEV_PANE_WIDTH,
+    maxWidth: MAX_MOBILE_DEV_PANE_WIDTH,
+  };
 }
 
 // Hook for run command logs pane width

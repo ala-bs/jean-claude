@@ -119,6 +119,10 @@ export {
 } from './mobile-preview-ios-framebuffer';
 export { MAX_STREAM_STDERR_BYTES } from './mobile-preview-ios-shared-state';
 
+// Covers `simctl boot` + `simctl bootstatus -b` for the uncancellable
+// `bootDevice` IPC, which has no renderer-side abort channel.
+const IOS_BOOT_DEVICE_TIMEOUT_MS = 3 * 60 * 1000;
+
 const IOS_CONTENT_SIZE: Record<MobilePreviewTextSize, string> = {
   small: 'small',
   normal: 'large',
@@ -583,6 +587,33 @@ export const iosIdbAdapter = {
       listingSucceeded: physical.ok,
     });
     return [...simulators, ...physical.devices];
+  },
+
+  /**
+   * Boots a simulator without opening a stream, for the lightweight mobile dev
+   * pane. The Simulator window is intentionally left visible.
+   */
+  async bootDevice(deviceId: string): Promise<{ deviceId: string }> {
+    await assertXcrunAvailable();
+    // Matches every other simctl-touching method here: additionally rejects
+    // leading `-` and the `all`/`booted`/`unavailable` simctl selectors.
+    assertSafeSimctlDeviceSelector('iOS simulator deviceId', deviceId);
+    // `listDevices` returns physical devices too, and they cannot be booted.
+    // Without this the user gets a misleading "iOS simulator not found" from
+    // the simctl lookup for a device that is plugged in and working.
+    await assertSimulatorOnlyIosDeviceAsync({
+      deviceId,
+      capability: 'Booting a device',
+    });
+    // There is no cancel channel for this IPC, and `simctl bootstatus -b` can
+    // hang on a wedged simulator. Bound it so the promise always settles and
+    // the pane's spinner cannot stick forever.
+    const device = await ensureIosSimulatorBooted(
+      deviceId,
+      AbortSignal.timeout(IOS_BOOT_DEVICE_TIMEOUT_MS),
+      { minimizeWindow: false },
+    );
+    return { deviceId: device.id };
   },
 
   async startStream(params: {

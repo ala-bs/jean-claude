@@ -22,6 +22,13 @@ export interface ComboboxOption {
   value: string;
   label: string;
   description?: string;
+  /** Renders a sticky header when it differs from the previous option's. */
+  group?: string;
+  /**
+   * Extra terms matched by the search box but not displayed. Use for facets a
+   * user would reasonably type that are not in the label or description.
+   */
+  keywords?: string[];
 }
 
 export function Combobox({
@@ -36,6 +43,8 @@ export function Combobox({
   size = 'md',
   className,
   contentClassName,
+  renderOptionTrailing,
+  onOpenChange,
 }: {
   value: string;
   options: ComboboxOption[];
@@ -48,6 +57,14 @@ export function Combobox({
   size?: ComponentSize;
   className?: string;
   contentClassName?: string;
+  /**
+   * Optional trailing control rendered at the right edge of an option row
+   * (e.g. a favorite toggle). Rendered as a SIBLING of the row button, not a
+   * child: a nested button would be invalid HTML and would swallow the row's
+   * own click. Return null for rows that should not have one.
+   */
+  renderOptionTrailing?: (option: ComboboxOption) => React.ReactNode;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const id = useId();
   const listboxId = `combobox-listbox-${id}`;
@@ -77,7 +94,12 @@ export function Combobox({
     if (!normalizedQuery) return options;
 
     return options.filter((option) => {
-      const haystack = [option.label, option.description, option.value]
+      const haystack = [
+        option.label,
+        option.description,
+        option.value,
+        ...(option.keywords ?? []),
+      ]
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
@@ -89,20 +111,31 @@ export function Combobox({
     setIsOpen(false);
     setQuery('');
     setFocusedIndex(0);
+    onOpenChange?.(false);
     triggerRef.current?.focus();
-  }, []);
+  }, [onOpenChange]);
 
   const open = useCallback(() => {
     if (disabled) return;
     setIsOpen(true);
     setQuery('');
     setFocusedIndex(selectedIndex >= 0 ? selectedIndex : 0);
-  }, [disabled, selectedIndex]);
+    onOpenChange?.(true);
+  }, [disabled, onOpenChange, selectedIndex]);
 
   function handleSelect(option: ComboboxOption) {
     onChange(option.value);
     close();
   }
+
+  // Focus stays in the search input, so the highlight is purely visual and the
+  // browser will not scroll it into view on its own.
+  useEffect(() => {
+    if (!isOpen) return;
+    const options =
+      contentRef.current?.querySelectorAll<HTMLElement>('[role="option"]');
+    options?.[focusedIndex]?.scrollIntoView({ block: 'nearest' });
+  }, [focusedIndex, isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -233,46 +266,91 @@ export function Combobox({
               {filteredOptions.length === 0 ? (
                 <p className="text-ink-3 px-3 py-2 text-sm">{emptyLabel}</p>
               ) : (
-                filteredOptions.map((option, index) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    role="option"
-                    aria-selected={option.value === value}
-                    onMouseEnter={() => setFocusedIndex(index)}
-                    onClick={() => handleSelect(option)}
-                    className={clsx(
-                      'flex w-full items-center text-left transition-colors focus:outline-none',
-                      s.text,
-                      s.gap,
-                      s.px,
-                      s.py,
-                      index === focusedIndex && 'bg-glass-medium',
-                      option.value === value ? 'text-ink-1' : 'text-ink-2',
-                    )}
-                  >
-                    <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-                      {option.value === value && <Check className="h-3 w-3" />}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <span
-                        className={clsx(
-                          'block truncate',
-                          option.value === value
-                            ? 'text-ink-1 font-medium'
-                            : 'text-ink-1',
-                        )}
-                      >
-                        {option.label}
-                      </span>
-                      {option.description && (
-                        <span className="text-ink-3 block truncate text-xs">
-                          {option.description}
-                        </span>
+                filteredOptions.map((option, index) => {
+                  // Headers compare against the previous FILTERED option, so a
+                  // group whose only matches were filtered out shows no header.
+                  const previousGroup =
+                    index > 0 ? filteredOptions[index - 1].group : null;
+                  const showGroupLabel =
+                    option.group && option.group !== previousGroup;
+                  const trailing = renderOptionTrailing?.(option) ?? null;
+
+                  const optionButton = (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={option.value === value}
+                      onMouseEnter={() => setFocusedIndex(index)}
+                      onClick={() => handleSelect(option)}
+                      className={clsx(
+                        'flex w-full items-center text-left transition-colors focus:outline-none',
+                        s.text,
+                        s.gap,
+                        s.px,
+                        s.py,
+                        // Reserve room so the label never runs under the
+                        // absolutely positioned trailing control.
+                        trailing && 'pr-9',
+                        // Clears the sticky group header when scrolled into view.
+                        'scroll-mt-6',
+                        index === focusedIndex && 'bg-glass-medium',
+                        option.value === value ? 'text-ink-1' : 'text-ink-2',
                       )}
-                    </div>
-                  </button>
-                ))
+                    >
+                      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                        {option.value === value && <Check className="h-3 w-3" />}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <span
+                          className={clsx(
+                            'block truncate',
+                            option.value === value
+                              ? 'text-ink-1 font-medium'
+                              : 'text-ink-1',
+                          )}
+                        >
+                          {option.label}
+                        </span>
+                        {option.description && (
+                          <span className="text-ink-3 block truncate text-xs">
+                            {option.description}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  );
+
+                  return (
+                    <React.Fragment key={option.value}>
+                      {showGroupLabel && (
+                        <div
+                          role="presentation"
+                          className="text-ink-4 bg-bg-1 sticky -top-1 z-10 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-[0.14em] uppercase first:pt-1"
+                        >
+                          {option.group}
+                        </div>
+                      )}
+                      {trailing ? (
+                        <div
+                          role="presentation"
+                          className="relative"
+                          // The trailing control overlays the row's right edge,
+                          // so entering it directly never fires the button's
+                          // own mouseenter. Without this, hovering a star and
+                          // pressing Enter would select a different row.
+                          onMouseEnter={() => setFocusedIndex(index)}
+                        >
+                          {optionButton}
+                          <span className="absolute top-1/2 right-1 -translate-y-1/2">
+                            {trailing}
+                          </span>
+                        </div>
+                      ) : (
+                        optionButton
+                      )}
+                    </React.Fragment>
+                  );
+                })
               )}
             </div>
           </div>,

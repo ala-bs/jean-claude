@@ -229,6 +229,21 @@ export type MobilePreviewReloadExpoParams = {
   metroPort: number;
 };
 
+/**
+ * Boot-only request used by the lightweight mobile dev pane. Unlike `start` it
+ * opens no stream and installs nothing: it just brings the simulator/emulator
+ * up and leaves its window on screen for the user to look at directly.
+ */
+export type MobilePreviewBootDeviceParams = {
+  platform: MobilePlatform;
+  deviceId: string;
+};
+
+export type MobilePreviewBootDeviceResult = {
+  /** Resolved device id (an adb serial for Android AVDs booted on demand). */
+  deviceId: string;
+};
+
 export type MobilePreviewExpoLaunchParams = {
   requestId: string;
   taskId: string;

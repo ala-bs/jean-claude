@@ -211,6 +211,7 @@ import { CommandLogsPane } from './command-logs-pane';
 import { CompleteTaskDialog } from './complete-task-dialog';
 import { DebugMessagesPane } from './debug-messages-pane';
 import { DeleteTaskDialog } from './delete-task-dialog';
+import { MobileDevPane } from './mobile-dev-pane';
 import { runPromptSubmission } from './utils-prompt-submit-error';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from './constants';
 import { TaskPendingNoteInput } from './task-pending-note-input';
@@ -1118,6 +1119,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const projectCommandAvailability = useProjectCommandAvailability(
     projectId ?? '',
   );
+  // Computed here (not next to `mobilePreviewEnabled`, which is defined after
+  // the `!project` guard) because `useCommands` runs before that guard.
+  const mobileDevPaneEnabled =
+    getTaskMobilePreviewRuntimeKey({
+      taskId,
+      mobilePreviewConfig: project?.mobilePreviewConfig,
+    }) !== null;
   const isMobilePreviewWorkspaceOpen = useMobilePreviewWorkspaceStore(
     (state) => state.isOpen,
   );
@@ -1179,6 +1187,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     openToolDiffPreview,
     openCommandLogs,
     selectCommandLogsTab,
+    openMobileDev,
     openSettings,
     openDebugMessages,
     closeRightPane,
@@ -1194,20 +1203,22 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     steps,
     showWorkspaceOverview,
   });
+  // Panes that are meaningless on the PR workspace overview: they are scoped to
+  // a task's worktree, which the overview does not have.
+  const isPaneHiddenOnPrWorkspaceOverview =
+    rightPane?.type === 'settings' ||
+    rightPane?.type === 'debugMessages' ||
+    rightPane?.type === 'mobileDev';
   const visibleRightPane =
-    isPrWorkspaceOverview &&
-    (rightPane?.type === 'settings' || rightPane?.type === 'debugMessages')
+    isPrWorkspaceOverview && isPaneHiddenOnPrWorkspaceOverview
       ? null
       : rightPane;
 
   useEffect(() => {
-    if (
-      isPrWorkspaceOverview &&
-      (rightPane?.type === 'settings' || rightPane?.type === 'debugMessages')
-    ) {
+    if (isPrWorkspaceOverview && isPaneHiddenOnPrWorkspaceOverview) {
       closeRightPane();
     }
-  }, [closeRightPane, isPrWorkspaceOverview, rightPane?.type]);
+  }, [closeRightPane, isPrWorkspaceOverview, isPaneHiddenOnPrWorkspaceOverview]);
   const { data: activeStep } = useStep(activeStepId ?? '');
   const handleAddBashToPermissions = useCallback(
     (command: string) => {
@@ -2261,6 +2272,21 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       section: 'Task',
       handler: toggleReviewFiles,
     },
+    mobileDevPaneEnabled && {
+      label:
+        rightPane?.type === 'mobileDev'
+          ? 'Close Mobile Dev'
+          : 'Open Mobile Dev',
+      section: 'Task',
+      keywords: ['metro', 'simulator', 'emulator', 'device', 'mobile'],
+      handler: () => {
+        if (rightPane?.type === 'mobileDev') {
+          closeRightPane();
+        } else {
+          openMobileDev();
+        }
+      },
+    },
     {
       label:
         rightPane?.type === 'commandLogs'
@@ -2895,6 +2921,21 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Mobile Preview
                   </DropdownItem>
                 )}
+                {mobileDevPaneEnabled && (
+                  <DropdownItem
+                    icon={<Smartphone />}
+                    onClick={() => {
+                      if (rightPane?.type === 'mobileDev') {
+                        closeRightPane();
+                      } else {
+                        openMobileDev();
+                      }
+                    }}
+                    checked={rightPane?.type === 'mobileDev'}
+                  >
+                    Mobile Dev
+                  </DropdownItem>
+                )}
 
                 <DropdownDivider />
 
@@ -3292,6 +3333,17 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             taskId={taskId}
             stepId={activeStepId}
             scrollToEntryId={rightPane.scrollToEntryId}
+            onClose={closeRightPane}
+          />
+        )}
+
+        {/* Lightweight mobile dev pane (metro + device, no preview) */}
+        {visibleRightPane?.type === 'mobileDev' && (
+          <MobileDevPane
+            taskId={taskId}
+            projectId={project.id}
+            projectPath={taskRootPath}
+            mobilePreviewConfig={project.mobilePreviewConfig}
             onClose={closeRightPane}
           />
         )}
