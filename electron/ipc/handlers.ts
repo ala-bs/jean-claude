@@ -205,6 +205,7 @@ import {
   getPullRequest,
   getPullRequestChanges,
   getPullRequestCommits,
+  getPullRequestDivergence,
   getPullRequestFileContent,
   getPullRequestPolicyEvaluations,
   getPullRequestTags,
@@ -3950,6 +3951,21 @@ export function registerIpcHandlers() {
         pullRequestId: number;
       },
     ) => getPullRequestCommits(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:getPullRequestDivergence',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+        sourceRefName?: string;
+        targetRefName?: string;
+      },
+    ) => getPullRequestDivergence(params),
   );
 
   ipcMain.handle(

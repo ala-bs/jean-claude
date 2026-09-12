@@ -31,6 +31,7 @@ import {
   type PullRequestRepoInfo,
   useMarkPullRequestDraft,
   usePublishPullRequest,
+  usePullRequestDivergence,
   useUpdatePullRequestTitle,
 } from '@/hooks/use-pull-requests';
 import { Button } from '@/common/ui/button';
@@ -139,6 +140,20 @@ export function PrHeader({
   const sourceBranch = getBranchName(pr.sourceRefName);
   const targetBranch = getBranchName(pr.targetRefName);
   const avatarProviderId = providerId ?? project?.repoProviderId;
+  // Only open PRs can still fall behind their target branch.
+  const { data: divergence } = usePullRequestDivergence(
+    projectId,
+    pr.id,
+    repoInfo,
+    {
+      enabled: pr.status === 'active',
+      // Branch names are already on the PR — pass them so the main process
+      // doesn't re-fetch the PR just to read its refs.
+      sourceRefName: pr.sourceRefName,
+      targetRefName: pr.targetRefName,
+    },
+  );
+  const behindCount = divergence?.behindCount ?? 0;
 
   useEffect(() => {
     if (!isEditingTitle) {
@@ -530,6 +545,14 @@ export function PrHeader({
                 <span className="bg-status-done/15 text-status-done rounded px-1.5 py-0.5">
                   {targetBranch}
                 </span>
+                {behindCount > 0 && (
+                  <span
+                    className="bg-status-run/15 text-status-run rounded px-1.5 py-0.5"
+                    title={`This branch is ${behindCount} commit${behindCount === 1 ? '' : 's'} behind ${targetBranch}`}
+                  >
+                    {behindCount} behind
+                  </span>
+                )}
               </div>
 
               <span className="text-ink-4">·</span>

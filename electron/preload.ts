@@ -698,6 +698,14 @@ contextBridge.exposeInMainWorld('api', {
       repoId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('azureDevOps:getPullRequestCommits', params),
+    getPullRequestDivergence: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      sourceRefName?: string;
+      targetRefName?: string;
+    }) => ipcRenderer.invoke('azureDevOps:getPullRequestDivergence', params),
     getPullRequestChanges: (params: {
       providerId: string;
       projectId: string;

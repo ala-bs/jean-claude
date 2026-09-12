@@ -17,6 +17,7 @@ import type {
   YamlPipelineParameter,
 } from '@shared/pipeline-types';
 import type {
+  AzureDevOpsBranchDivergence,
   AzureDevOpsComment,
   AzureDevOpsCommentThread,
   AzureDevOpsCommit,
@@ -43,6 +44,7 @@ export { azureHtmlToMarkdown } from './azure-html-to-markdown';
 export type {
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
+  AzureDevOpsBranchDivergence,
   AzureDevOpsCommit,
   AzureDevOpsFileChange,
   AzureDevOpsCommentThread,
@@ -3865,6 +3867,63 @@ export async function getPullRequestCommits(params: {
     comment: commit.comment,
     url: commit.url,
   }));
+}
+
+/**
+ * How many commits the PR source branch is ahead of / behind its target branch.
+ *
+ * Azure's `diffs/commits` endpoint reports the counts relative to `baseVersion`,
+ * so we pass the target branch (e.g. `main`) as the base and the PR's source
+ * branch as the target: `behindCount` is then the number of commits that landed
+ * on the target branch since the source branch last took from it.
+ *
+ * Callers that already hold the PR (the renderer always does) should pass the
+ * ref names so we skip a redundant PR round-trip.
+ */
+export async function getPullRequestDivergence(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+  sourceRefName?: string;
+  targetRefName?: string;
+}): Promise<AzureDevOpsBranchDivergence> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  let { sourceRefName, targetRefName } = params;
+  if (!sourceRefName || !targetRefName) {
+    const pr = await getPullRequest(params);
+    sourceRefName = pr.sourceRefName;
+    targetRefName = pr.targetRefName;
+  }
+
+  const sourceBranch = sourceRefName.replace(/^refs\/heads\//, '');
+  const targetBranch = targetRefName.replace(/^refs\/heads\//, '');
+
+  // `$top=0` only pages the `changes[]` payload; the ahead/behind counts are
+  // computed over the full divergence and are unaffected.
+  const url =
+    `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/diffs/commits` +
+    `?baseVersion=${encodeURIComponent(targetBranch)}&baseVersionType=branch` +
+    `&targetVersion=${encodeURIComponent(sourceBranch)}&targetVersionType=branch` +
+    `&$top=0&api-version=7.0`;
+
+  const response = await fetch(url, {
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to get pull request divergence: ${error}`);
+  }
+
+  const data: { aheadCount?: number; behindCount?: number } =
+    await response.json();
+
+  return {
+    aheadCount: data.aheadCount ?? 0,
+    behindCount: data.behindCount ?? 0,
+  };
 }
 
 export async function getPullRequestChanges(params: {

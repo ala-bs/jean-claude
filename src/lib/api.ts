@@ -82,6 +82,7 @@ import type {
   YamlPipelineParameter,
 } from '@shared/pipeline-types';
 import type {
+  AzureDevOpsBranchDivergence,
   AzureDevOpsComment,
   AzureDevOpsCommentThread,
   AzureDevOpsCommit,
@@ -250,6 +251,7 @@ import type { UpcomingMeeting } from '@shared/calendar-types';
 export type {
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
+  AzureDevOpsBranchDivergence,
   AzureDevOpsCommit,
   AzureDevOpsFileChange,
   AzureDevOpsCommentThread,
@@ -1145,6 +1147,14 @@ export interface Api {
       repoId: string;
       pullRequestId: number;
     }) => Promise<AzureDevOpsFileChange[]>;
+    getPullRequestDivergence: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      sourceRefName?: string;
+      targetRefName?: string;
+    }) => Promise<AzureDevOpsBranchDivergence>;
     getCommitChanges: (params: {
       providerId: string;
       projectId: string;
@@ -2657,6 +2667,10 @@ export const api: Api = hasWindowApi
         },
         getPullRequestCommits: async () => [],
         getPullRequestChanges: async () => [],
+        getPullRequestDivergence: async () => ({
+          aheadCount: 0,
+          behindCount: 0,
+        }),
         getCommitChanges: async () => [],
         getFileContentAtCommit: async () => '',
         getPullRequestFileContent: async () => '',
