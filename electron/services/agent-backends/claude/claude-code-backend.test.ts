@@ -11,7 +11,11 @@ const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: queryMock }));
 
-import { ClaudeCodeBackend } from './claude-code-backend';
+import {
+  ClaudeCodeBackend,
+  CLOSE_HOLD_RECHECK_MS,
+  MAX_TOOL_HOLD_MS,
+} from './claude-code-backend';
 
 function makeBackend() {
   return new ClaudeCodeBackend({
@@ -253,6 +257,33 @@ describe('ClaudeCodeBackend prompt stream lifetime', () => {
     return { backend, session };
   }
 
+  /**
+   * Drain the event channel up to the next `permission-request` and return its
+   * id. Bounded and `done`-aware on purpose: a closed `AsyncEventChannel`
+   * returns an already-resolved `{done: true}` forever, so an unguarded
+   * `for(;;)` would spin as an unbroken microtask chain, starve the event loop
+   * and hang the whole suite rather than failing this one test.
+   */
+  async function readPermissionRequestId(
+    events: AsyncIterator<unknown>,
+    maxEvents = 50,
+  ): Promise<string> {
+    for (let i = 0; i < maxEvents; i++) {
+      const next = await events.next();
+      if (next.done) {
+        throw new Error('event channel closed before a permission-request');
+      }
+      const event = next.value as {
+        type: string;
+        request?: { requestId: string };
+      };
+      if (event?.type === 'permission-request' && event.request) {
+        return event.request.requestId;
+      }
+    }
+    throw new Error(`no permission-request within ${maxEvents} events`);
+  }
+
   /** Resolves to true only if `promise` settles within a real tick or two. */
   async function settlesSoon(promise: Promise<unknown>) {
     return Promise.race([
@@ -307,6 +338,440 @@ describe('ClaudeCodeBackend prompt stream lifetime', () => {
       expect(closed).toBe(false);
 
       await vi.advanceTimersByTimeAsync(30 * 1000 + 1_000);
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // A `canUseTool` request arrives on the SDK's CONTROL channel, not the
+  // message stream, so the generator loop never sees it and cannot cancel the
+  // close armed by the preceding `result`. If the user takes longer than the
+  // grace period to click the permission card, stdin — the channel their answer
+  // travels back on — is gone, and the call dies with
+  // "Tool permission request failed: AbortError: Stream closed".
+  it('holds stdin open while a permission card waits on the user past the grace period', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next(); // the user message
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      // A result arms the 30s close.
+      controller.send(realResult);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(closed).toBe(false);
+
+      // The agent is resumed (background notification) and asks for permission.
+      const canUseTool = queryMock.mock.calls[0][0].options.canUseTool;
+      const decision = canUseTool('Bash', { command: 'ls' }, {});
+
+      const requestId = await readPermissionRequestId(events);
+
+      // The user deliberates for far longer than the grace period. stdin must
+      // survive — it is what carries their answer back to the CLI.
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(closed).toBe(false);
+
+      // They finally allow it, and the answer lands on a live channel.
+      await backend.respondToPermission(session.sessionId, requestId, {
+        behavior: 'allow',
+        updatedInput: { command: 'ls' },
+      });
+      await expect(decision).resolves.toMatchObject({ behavior: 'allow' });
+
+      // The approved tool gets a fresh full grace period rather than being cut
+      // off by whatever was left of the deferred one...
+      await vi.advanceTimersByTimeAsync(CLOSE_HOLD_RECHECK_MS + 1_000);
+      expect(closed).toBe(false);
+
+      // ...but nothing blocks on a human any more, so the run does terminate.
+      await vi.advanceTimersByTimeAsync(30 * 1000 + 1_000);
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // The hold is deliberately unbounded: an answer the user walked away from
+  // must never be thrown away by a timeout. `stop()` closes the stream
+  // unconditionally and is the escape hatch for a run they no longer want.
+  it('holds indefinitely for an unanswered card, and stop() still ends it', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      controller.send(realResult);
+      await vi.advanceTimersByTimeAsync(50);
+
+      const canUseTool = queryMock.mock.calls[0][0].options.canUseTool;
+      const decision = canUseTool('Bash', { command: 'ls' }, {});
+      await readPermissionRequestId(events);
+
+      // The user wanders off for the rest of the day. stdin stays open the
+      // whole time — their answer is still worth something whenever it comes.
+      await vi.advanceTimersByTimeAsync(8 * 60 * 60 * 1000);
+      expect(closed).toBe(false);
+      await expect(settlesSoon(decision)).resolves.toBe(false);
+
+      // Stop is the escape hatch, and it settles the card rather than leaving
+      // it dangling for a click that would throw "No Claude session".
+      await backend.stop(session.sessionId);
+      await expect(decision).resolves.toMatchObject({ behavior: 'deny' });
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // The CLI emits nothing between `tool_use` and `tool_result`, so a slow Bash
+  // or a long build is indistinguishable from a finished run. Closing stdin
+  // under it kills the tool's result and every later permission request.
+  it('holds stdin open while an approved tool is still running', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      // The turn ends, arming the close. Then a background task resumes the
+      // agent, which starts a slow tool and goes quiet while it runs.
+      controller.send(realResult);
+      await vi.advanceTimersByTimeAsync(50);
+      controller.send({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_slow',
+              name: 'Bash',
+              input: { command: 'sleep 600' },
+            },
+          ],
+        },
+      });
+      await events.next(); // the tool-use entry
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Ten minutes of silence that used to close stdin at the 30s mark.
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(closed).toBe(false);
+
+      // The tool finally reports back; now the run may wind down.
+      controller.send({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_slow',
+              content: 'done',
+            },
+          ],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(closed).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(
+        CLOSE_HOLD_RECHECK_MS + 30 * 1000 + 1_000,
+      );
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // The close timer is not the only thing that can kill stdin under a live
+  // card: a withheld background-notification result arms the 10-minute idle
+  // watchdog, which used to close the stream regardless of what was pending.
+  it('holds stdin open against the idle watchdog too, not just the close timer', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      // A withheld result arms the idle watchdog and nothing else.
+      controller.send(notificationResult);
+      await vi.advanceTimersByTimeAsync(50);
+
+      const canUseTool = queryMock.mock.calls[0][0].options.canUseTool;
+      const decision = canUseTool('Bash', { command: 'ls' }, {});
+      const requestId = await readPermissionRequestId(events);
+
+      // Well past the 10-minute idle timeout with the card still up.
+      await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+      expect(closed).toBe(false);
+
+      await backend.respondToPermission(session.sessionId, requestId, {
+        behavior: 'allow',
+        updatedInput: { command: 'ls' },
+      });
+      await expect(decision).resolves.toMatchObject({ behavior: 'allow' });
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // A hold is normally ended by an incoming message, which cancels the recheck
+  // timer outright — so no timer fire ever observes the release. If the hold
+  // latch survived that teardown, the next close would read it as "a hold just
+  // ended", grant a second full grace period, and drag every run out by an
+  // extra 30s (or 10 minutes with background tasks live).
+  it('does not grant a second grace period after a hold ended off-timer', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      controller.send(realResult);
+      await vi.advanceTimersByTimeAsync(50);
+
+      const canUseTool = queryMock.mock.calls[0][0].options.canUseTool;
+      const decision = canUseTool('Bash', { command: 'ls' }, {});
+      const requestId = await readPermissionRequestId(events);
+
+      // Let the close timer fire once and latch the hold.
+      await vi.advanceTimersByTimeAsync(30 * 1000 + 1_000);
+      expect(closed).toBe(false);
+
+      await backend.respondToPermission(session.sessionId, requestId, {
+        behavior: 'allow',
+        updatedInput: { command: 'ls' },
+      });
+      await expect(decision).resolves.toMatchObject({ behavior: 'allow' });
+
+      // A message arrives, cancelling the recheck timer without any fire
+      // observing that the card is gone, and re-arming a normal close.
+      controller.send({
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+      });
+      await events.next();
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Exactly one grace period later the run is over — not two.
+      await vi.advanceTimersByTimeAsync(30 * 1000 + 1_000);
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // `pendingToolUses` is drained only by a matching `tool_result`. A turn that
+  // ends as `error_max_turns` leaves an entry that will never be drained, so
+  // treating it as a hold would wedge the run — and the idle watchdog that
+  // exists to break exactly that wedge — forever.
+  it('does not let a tool call abandoned by the turn hold the stream open', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      controller.send({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_abandoned',
+              name: 'Bash',
+              input: { command: 'sleep 600' },
+            },
+          ],
+        },
+      });
+      await events.next(); // the tool-use entry
+
+      // The turn dies without ever producing a `tool_result` for it.
+      controller.send({
+        type: 'result',
+        subtype: 'error_max_turns',
+        num_turns: 12,
+        result: '',
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(closed).toBe(false);
+
+      // The abandoned tool must not keep the run alive.
+      await vi.advanceTimersByTimeAsync(30 * 1000 + 1_000);
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // A background notification result does NOT end the user's turn — that is
+  // the whole reason it is withheld. Treating it as proof that in-flight tools
+  // are finished would excuse a foreground build that is genuinely still
+  // running and let the close timer kill stdin under it.
+  it('does not let a background notification excuse a still-running tool', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      controller.send(realResult);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // A long foreground build starts after the turn's result.
+      controller.send({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_build',
+              name: 'Bash',
+              input: { command: 'pnpm build' },
+            },
+          ],
+        },
+      });
+      await events.next();
+
+      // A background bash finishes mid-build and notifies the agent.
+      controller.send(notificationResult);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // The build is still running, so stdin must survive.
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(closed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // A tool waits on a machine that can simply die (hung mount, crashed MCP
+  // server). Unlike a permission card, that hold must be bounded or an
+  // undrainable `pendingToolUses` entry disables every close path forever.
+  it('gives up on a tool that never returns, instead of wedging the run', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      controller.send(realResult);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // A tool starts after the result and never reports back.
+      controller.send({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_wedged',
+              name: 'Bash',
+              input: { command: 'cat /mnt/hung/file' },
+            },
+          ],
+        },
+      });
+      await events.next();
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Well inside the budget it still holds — a real build must not be cut off.
+      await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+      expect(closed).toBe(false);
+
+      // Past it, the run finalizes on its own rather than staying `running`.
+      await vi.advanceTimersByTimeAsync(
+        MAX_TOOL_HOLD_MS + CLOSE_HOLD_RECHECK_MS + 30 * 1000 + 1_000,
+      );
       expect(closed).toBe(true);
     } finally {
       vi.useRealTimers();
