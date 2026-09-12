@@ -13,6 +13,7 @@ import { setDocumentResource } from '@/cache/cache-actions';
 import { useCacheResource } from '@/cache/use-cache-resource';
 import { useFeedStore } from '@/stores/feed';
 import { useNavigationStore } from '@/stores/navigation';
+import { usePrCompletionQueueStore } from '@/stores/pr-completion-queue';
 import { useProjects } from '@/hooks/use-projects';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useUIStore } from '@/stores/ui';
@@ -416,10 +417,30 @@ export function useFeed() {
     [visibleFeedItems, hiddenProjectIdSet],
   );
 
+  const prCompletionQueueEntries = usePrCompletionQueueStore(
+    (state) => state.entries,
+  );
+  // Both key forms, because the enqueuing surface and the feed item can sit in
+  // different projects that share one repo. The repo-qualified key matches
+  // those; the project-scoped one covers entries without `repoInfo`.
+  const autoCompletePrKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const entry of prCompletionQueueEntries) {
+      if (entry.repoInfo?.providerId && entry.repoInfo?.repoId) {
+        keys.add(
+          `${entry.repoInfo.providerId}:${entry.repoInfo.repoId}:${entry.prId}`,
+        );
+      }
+      keys.add(`${entry.projectId}:${entry.prId}`);
+    }
+    return keys;
+  }, [prCompletionQueueEntries]);
+
   const {
     pinnedItems,
     prWorkspaceItems,
     completedPrItems,
+    autoCompletingPrItems,
     actionNeededItems,
     prReviewItems,
     activeTaskItems,
@@ -436,6 +457,7 @@ export function useFeed() {
       dismissedIds,
       lowPriorityIds,
       taskOwnedPrKeys,
+      autoCompletePrKeys,
       prProjectOrder,
       getProjectPriority,
     });
@@ -449,6 +471,7 @@ export function useFeed() {
     lowPriorityIds,
     prProjectOrder,
     taskOwnedPrKeys,
+    autoCompletePrKeys,
   ]);
 
   const allVisibleItems = useMemo(
@@ -457,6 +480,7 @@ export function useFeed() {
       ...prReviewItems,
       ...prWorkspaceItems,
       ...completedPrItems,
+      ...autoCompletingPrItems,
       ...actionNeededItems,
       ...activeTaskItems,
       ...highPriorityItems,
@@ -466,6 +490,7 @@ export function useFeed() {
       pinnedItems,
       prWorkspaceItems,
       completedPrItems,
+      autoCompletingPrItems,
       prReviewItems,
       actionNeededItems,
       activeTaskItems,
@@ -490,6 +515,7 @@ export function useFeed() {
     pinnedItems,
     prWorkspaceItems,
     completedPrItems,
+    autoCompletingPrItems,
     actionNeededItems,
     prReviewItems,
     activeTaskItems,
