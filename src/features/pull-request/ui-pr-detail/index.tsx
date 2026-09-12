@@ -89,6 +89,7 @@ import { PrDiffView } from '../ui-pr-diff-view';
 import { PrHeader } from '../ui-pr-header';
 import { PrOverview } from '../ui-pr-overview';
 import { PrReviewAgentChatCard } from '../ui-pr-review-agent-chat-card';
+import { useCopyPrLink } from '../use-copy-pr-link';
 
 
 const PR_DETAIL_TABS: PrDetailTab[] = ['overview', 'files', 'commits'];
@@ -176,6 +177,8 @@ export function PrDetail({
     }
   };
 
+  const { copyLink: copyPrLink } = useCopyPrLink(pr?.url);
+
   const navigateTab = useCallback(
     (direction: 'next' | 'prev') => {
       const currentIndex = PR_DETAIL_TABS.indexOf(activeTab);
@@ -219,6 +222,13 @@ export function PrDetail({
       handler: () => setActiveTab('commits'),
       hideInCommandPalette: true,
     },
+    pr?.url ? {
+      label: 'Copy PR Link',
+      section: 'Pull Request',
+      handler: () => {
+        void copyPrLink();
+      },
+    } : false,
     pr?.url ? {
       label: 'Open PR in Azure DevOps',
       shortcut: 'cmd+shift+o',

@@ -152,6 +152,58 @@ describe('PrHeader', () => {
     container.remove();
   });
 
+  it('copies the PR link and shows copied feedback', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+
+    const copyButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Copy PR link"]',
+    );
+    expect(copyButton).not.toBeNull();
+    expect(copyButton?.textContent).toContain('Copy link');
+
+    await new Promise<void>((resolve) => {
+      flushSync(() => {
+        copyButton?.click();
+      });
+      queueMicrotask(resolve);
+    });
+
+    expect(writeText).toHaveBeenCalledWith('https://example.com/pr/17');
+    expect(addToast).toHaveBeenCalledWith({
+      type: 'success',
+      message: 'PR link copied to clipboard',
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(
+      container.querySelector('[aria-label="Copy PR link"]')?.textContent,
+    ).toContain('Copied');
+  });
+
+  it('reports clipboard failures when copying the PR link', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn().mockRejectedValue(new Error('nope')) },
+      configurable: true,
+    });
+
+    await new Promise<void>((resolve) => {
+      flushSync(() => {
+        container
+          .querySelector<HTMLButtonElement>('[aria-label="Copy PR link"]')
+          ?.click();
+      });
+      queueMicrotask(resolve);
+    });
+
+    expect(addToast).toHaveBeenCalledWith({
+      type: 'error',
+      message: 'Failed to copy PR link',
+    });
+  });
+
   it('submits edited title with Cmd+Enter', () => {
     const editButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent === 'Edit',
