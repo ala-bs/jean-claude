@@ -1,24 +1,37 @@
-import { Clipboard, GitBranch, GitPullRequest, Search } from 'lucide-react';
 import {
+  Check,
+  ChevronDown,
+  Clipboard,
+  GitBranch,
+  GitPullRequest,
+  Search,
+  Tag,
+} from 'lucide-react';
+import {
+  type KeyboardEvent,
   type MouseEvent,
   useCallback,
   useEffect,
   useMemo,
   useRef,
+  useState,
 } from 'react';
 import clsx from 'clsx';
 
-import type { BranchInfo, ProjectGitCommit, ProjectGitRef } from '@shared/types';
+import type { BranchInfo, ProjectGitCommit } from '@shared/types';
 import {
   groupCommitsByDay,
   layoutCommitLanes,
   openLanesAt,
   traceBranchLine,
+  traceRefLine,
 } from './utils-commit-lanes';
 import { BranchFilter } from './branch-filter';
 import type { CommitLaneRow } from './utils-commit-lanes';
+import type { CommitRefGroup } from './utils-commit-refs';
 import { CommitSearch } from './commit-search';
 import { formatRelativeTime } from '@/lib/time';
+import { groupCommitRefs } from './utils-commit-refs';
 import { useMessageContextMenu } from '@/features/agent/ui-message-stream/ui-message-context-menu';
 import { useToastStore } from '@/stores/toasts';
 
@@ -31,6 +44,12 @@ const LOAD_MORE_THRESHOLD_PX = 320;
 
 /** Stroke weight of the lane art. Thick enough to trace a branch by eye. */
 const LANE_STROKE = 2.25;
+
+/** Ref-picker geometry, used to flip the menu above the chip near the bottom. */
+const MENU_WIDTH_PX = 260;
+const MENU_ITEM_PX = 30;
+const MENU_HEADER_PX = 26;
+const MENU_PAD_PX = 8;
 
 /**
  * Per-lane colours. Every lane is coloured, including lane 0 (the trunk), so a
@@ -57,20 +76,256 @@ function laneColor(lane: number): string {
   return LANE_COLORS[lane % LANE_COLORS.length];
 }
 
-function RefBadge({ gitRef }: { gitRef: ProjectGitRef }) {
+/** Tooltip text for a badge, naming the refs it stands for. */
+function describeGroup(group: CommitRefGroup, isFocused: boolean): string {
+  const lines = [group.ref.isHead ? `${group.key} (current branch)` : group.key];
+  for (const remote of group.remotes) lines.push(`in sync with ${remote.name}`);
+  if (isFocused) lines.push('focused branch');
+  return lines.join('\n');
+}
+
+/**
+ * One ref on a commit.
+ *
+ * When the commit's badge stands for the focused branch it is tinted with that
+ * commit's lane colour, so the badge and the rail it labels are the same hue
+ * and the eye can link "this name" to "that line" without counting lanes.
+ */
+function RefBadge({
+  group,
+  tint,
+  isFocused,
+}: {
+  group: CommitRefGroup;
+  /** Lane colour of the commit, applied only while focused. */
+  tint: string;
+  isFocused: boolean;
+}) {
+  const { ref: gitRef } = group;
+  const isBranchKind = gitRef.kind === 'branch' || gitRef.kind === 'remote';
+
   return (
     <span
       className={clsx(
-        'max-w-[230px] shrink-0 truncate rounded px-1 py-px font-mono text-[10px] leading-4 whitespace-nowrap',
-        gitRef.kind === 'tag' && 'bg-amber-400/10 text-amber-300',
-        gitRef.kind === 'remote' && 'bg-status-review-soft text-status-review',
-        gitRef.kind === 'branch' && 'bg-acc/15 text-acc-ink',
-        gitRef.kind === 'other' && 'bg-glass-medium text-ink-3',
-        gitRef.isHead && 'ring-acc/40 ring-1',
+        'inline-flex min-w-0 max-w-[180px] items-center gap-1 rounded px-1 py-px font-mono text-[10px] leading-4 whitespace-nowrap',
+        // Weight and the filled node marker carry "focused" on their own. Lane
+        // 0 is the accent colour and lane 7 is near-grey, so a hue swap alone
+        // would be invisible on the trunk and meaningless on the last lane —
+        // exactly the two lanes most commits sit in.
+        isFocused && 'font-semibold',
+        !isFocused && gitRef.kind === 'tag' && 'bg-amber-400/10 text-amber-300',
+        !isFocused &&
+          gitRef.kind === 'remote' &&
+          'bg-status-review-soft text-status-review',
+        !isFocused && gitRef.kind === 'branch' && 'bg-acc/15 text-acc-ink',
+        !isFocused && gitRef.kind === 'other' && 'bg-glass-medium text-ink-3',
+        !isFocused && gitRef.isHead && 'ring-acc/40 ring-1',
       )}
-      title={gitRef.isHead ? `${gitRef.name} (current branch)` : gitRef.name}
+      style={
+        isFocused
+          ? {
+              color: tint,
+              backgroundColor: `color-mix(in oklab, ${tint} 26%, transparent)`,
+              boxShadow: `0 0 0 1px color-mix(in oklab, ${tint} 85%, transparent)`,
+            }
+          : undefined
+      }
+      title={describeGroup(group, isFocused)}
     >
-      {gitRef.name}
+      {isFocused ? (
+        // Same filled disc the graph draws for this commit's node, in the same
+        // hue — the badge and the rail it labels read as one object.
+        <span
+          aria-hidden
+          className="h-[5px] w-[5px] shrink-0 rounded-full"
+          style={{ backgroundColor: tint }}
+        />
+      ) : isBranchKind ? (
+        <GitBranch size={9} className="shrink-0 opacity-70" />
+      ) : gitRef.kind === 'tag' ? (
+        <Tag size={9} className="shrink-0 opacity-70" />
+      ) : null}
+      <span className="truncate">{gitRef.name}</span>
+      {group.remotes.length > 0 && (
+        <span aria-hidden className="shrink-0 opacity-60" title="in sync with its remote">
+          ●
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * Badge strip for a commit, plus the picker that resolves "which branch".
+ *
+ * A commit carrying several refs used to render the first one and a dead `+N`
+ * tooltip, so selecting it left no way to say which branch was meant. The chip
+ * is now a menu: the chosen ref becomes the primary badge, and everything that
+ * reads the selection (the branch-line trace, the diff pane header) follows it.
+ */
+function CommitRefs({
+  groups,
+  tint,
+  focusedKey,
+  onFocusRef,
+}: {
+  groups: CommitRefGroup[];
+  tint: string;
+  /** Null when this commit is not the selected one — nothing is focused then. */
+  focusedKey: string | null;
+  onFocusRef: (key: string) => void;
+}) {
+  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(
+    null,
+  );
+  const container = useRef<HTMLSpanElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!anchor) return;
+    const close = () => setAnchor(null);
+    const onPointerDown = (event: PointerEvent) => {
+      if (!container.current?.contains(event.target as Node)) close();
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    // The menu is position:fixed, so any scroll would leave it floating over
+    // unrelated rows — capture phase catches the history list's own scroller.
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [anchor]);
+
+  if (groups.length === 0) return null;
+
+  /**
+   * Places the fixed-position menu, flipping above the chip when it would run
+   * off the bottom and clamping to the right edge. Without this the last rows
+   * of a full-height history open a menu partly below the viewport, and since
+   * a fixed element does not scroll — and any scroll closes it — those items
+   * would be unreachable.
+   */
+  const placeMenu = (rect: DOMRect) => {
+    const height = MENU_HEADER_PX + groups.length * MENU_ITEM_PX + MENU_PAD_PX;
+    const fitsBelow = rect.bottom + 4 + height <= window.innerHeight - 8;
+    return {
+      top: fitsBelow
+        ? rect.bottom + 4
+        : Math.max(8, rect.top - 4 - height),
+      left: Math.max(
+        8,
+        Math.min(rect.left, window.innerWidth - MENU_WIDTH_PX - 8),
+      ),
+    };
+  };
+
+  const focused = groups.find((group) => group.key === focusedKey);
+  // Promote the focused ref to the visible badge; otherwise show the
+  // highest-ranked one, which is what the row looked like before selection.
+  const primary = focused ?? groups[0];
+  const rest = groups.filter((group) => group !== primary);
+
+  return (
+    <span
+      ref={container}
+      className="flex min-w-0 items-center gap-1.5"
+      // Escape closes the menu without touching the row's own Escape binding
+      // (which closes the whole diff pane) — the nearer intent wins.
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape' || !anchor) return;
+        event.stopPropagation();
+        setAnchor(null);
+        trigger.current?.focus();
+      }}
+    >
+      <RefBadge
+        group={primary}
+        tint={tint}
+        isFocused={focusedKey === primary.key}
+      />
+
+      {rest.length > 0 && (
+        <button
+          ref={trigger}
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={anchor !== null}
+          title={`Also at:\n${rest.map((group) => group.key).join('\n')}\n\nClick to choose which branch to focus`}
+          aria-label="Choose which branch to focus"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (anchor) {
+              setAnchor(null);
+              return;
+            }
+            setAnchor(placeMenu(event.currentTarget.getBoundingClientRect()));
+          }}
+          className={clsx(
+            'border-line bg-bg-2 text-ink-3 hover:text-ink-0 hover:border-acc-line inline-flex shrink-0 items-center gap-0.5 rounded border px-1 font-mono text-[10px] leading-4 transition-colors',
+            anchor && 'text-ink-0 border-acc-line',
+          )}
+        >
+          +{rest.length}
+          {/* The old `+N` was a dead tooltip chip that looked exactly like
+              this. The caret is what says it became a menu. */}
+          <ChevronDown size={9} className="shrink-0 opacity-70" />
+        </button>
+      )}
+
+      {anchor && (
+        <div
+          role="menu"
+          onClick={(event) => event.stopPropagation()}
+          style={{ top: anchor.top, left: anchor.left }}
+          className="border-line bg-bg-1 fixed z-50 w-[260px] overflow-hidden rounded-lg border p-1 shadow-[0_18px_44px_-12px_rgba(0,0,0,0.6)]"
+        >
+          <div className="text-ink-4 px-2 pt-1 pb-1.5 text-[10px] font-semibold tracking-[0.08em] uppercase">
+            Focus branch
+          </div>
+          {groups.map((group) => (
+            <button
+              key={group.key}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onFocusRef(group.key);
+                setAnchor(null);
+              }}
+              className={clsx(
+                'hover:bg-glass-light grid w-full grid-cols-[13px_minmax(0,1fr)_auto] items-center gap-2 rounded px-2 py-1.5 text-left transition-colors',
+                group.key === focusedKey && 'bg-bg-2',
+              )}
+            >
+              <span
+                className={clsx(
+                  'flex',
+                  group.key === focusedKey ? 'text-acc-ink' : 'text-transparent',
+                )}
+              >
+                <Check size={12} />
+              </span>
+              <span
+                title={group.key}
+                className="text-ink-1 truncate font-mono text-[11.5px]"
+              >
+                {group.key}
+              </span>
+              <span className="text-ink-4 font-mono text-[10px] whitespace-nowrap">
+                {group.ref.kind === 'branch' && group.ref.isHead
+                  ? 'HEAD'
+                  : group.remotes.length > 0
+                    ? 'synced'
+                    : group.ref.kind === 'branch'
+                      ? 'local'
+                      : group.ref.kind}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </span>
   );
 }
@@ -219,43 +474,62 @@ function ResultRow({
   commit,
   query,
   isSelected,
+  focusedRef,
+  onFocusRef,
   onSelect,
   onContextMenu,
 }: {
   commit: ProjectGitCommit;
   query: string;
   isSelected: boolean;
+  focusedRef: string | null;
+  onFocusRef: (key: string) => void;
   onSelect: () => void;
   onContextMenu: (event: MouseEvent) => void;
 }) {
-  const branchRef =
-    commit.refs.find((ref) => ref.kind === 'branch') ??
-    commit.refs.find((ref) => ref.kind === 'remote');
+  const groups = useMemo(() => groupCommitRefs(commit.refs), [commit.refs]);
 
   return (
-    <button
-      type="button"
+    // See CommitRow: the row hosts the ref picker, so it cannot be a button.
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(event: KeyboardEvent) => {
+        // Only the row itself. Keydown from the nested ref picker bubbles here,
+        // and a button's click *is* the default action of its Enter keydown —
+        // calling preventDefault() on the way past would cancel it, leaving the
+        // menu unopenable by keyboard and selecting the row instead.
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onSelect();
+      }}
       onContextMenu={onContextMenu}
       className={clsx(
         GRID,
-        'hover:bg-glass-light w-full text-left transition-colors',
+        'hover:bg-glass-light w-full cursor-pointer text-left transition-colors',
         isSelected && 'bg-bg-2 shadow-[inset_2px_0_0_var(--color-acc-ink)]',
       )}
       style={{
         height: ROW_HEIGHT,
-        gridTemplateColumns: '150px 66px minmax(0,1fr) auto',
+        gridTemplateColumns: '170px 66px minmax(0,1fr) auto',
       }}
     >
-      <span
-        title={branchRef?.name}
-        className="text-ink-2 inline-flex min-w-0 items-center gap-1.5 font-mono text-[10.5px]"
-      >
-        {branchRef && (
-          <>
-            <GitBranch size={10} className="text-ink-4 shrink-0" />
-            <span className="truncate">{branchRef.name}</span>
-          </>
+      {/* overflow-hidden: the cell is a fixed track, and the badge strip is
+          content-sized — without it a long branch name paints over the hash. */}
+      <span className="inline-flex min-w-0 items-center gap-1.5 overflow-hidden">
+        {groups.length > 0 ? (
+          <CommitRefs
+            groups={groups}
+            // No lane art while filtering, so there is no rail to match a hue
+            // to — the accent keeps "focused" legible without inventing one.
+            tint="var(--color-acc-ink)"
+            focusedKey={isSelected ? focusedRef : null}
+            onFocusRef={onFocusRef}
+          />
+        ) : (
+          <GitBranch size={10} className="text-ink-4 shrink-0 opacity-40" />
         )}
       </span>
 
@@ -273,7 +547,7 @@ function ResultRow({
           {formatRelativeTime(commit.date)}
         </span>
       </span>
-    </button>
+    </div>
   );
 }
 
@@ -285,6 +559,8 @@ function CommitRow({
   isSelected,
   isOnBranchLine,
   isDimmed,
+  focusedRef,
+  onFocusRef,
   onSelect,
   onContextMenu,
 }: {
@@ -297,20 +573,36 @@ function CommitRow({
   isOnBranchLine: boolean;
   /** Off that line while some line is active — never true without a selection. */
   isDimmed: boolean;
+  /** Focused ref name, only meaningful on the selected row. */
+  focusedRef: string | null;
+  onFocusRef: (key: string) => void;
   onSelect: () => void;
   onContextMenu: (event: MouseEvent) => void;
 }) {
   const commit: ProjectGitCommit = row.commit;
-  const [primaryRef, ...extraRefs] = commit.refs;
+  const groups = useMemo(() => groupCommitRefs(commit.refs), [commit.refs]);
 
   return (
-    <button
-      type="button"
+    // A div rather than a button: the ref picker is an interactive control
+    // inside the row, and a button may not contain a button.
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(event: KeyboardEvent) => {
+        // Only the row itself. Keydown from the nested ref picker bubbles here,
+        // and a button's click *is* the default action of its Enter keydown —
+        // calling preventDefault() on the way past would cancel it, leaving the
+        // menu unopenable by keyboard and selecting the row instead.
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onSelect();
+      }}
       onContextMenu={onContextMenu}
       className={clsx(
         GRID,
-        'hover:bg-glass-light w-full text-left transition-[color,background-color,opacity]',
+        'hover:bg-glass-light w-full cursor-pointer text-left transition-[color,background-color,opacity]',
         isSelected && 'bg-bg-2 shadow-[inset_2px_0_0_var(--color-acc-ink)]',
         // The branch line stays lit while everything else recedes. Hover and
         // keyboard focus both restore a dimmed row, so the list stays
@@ -330,15 +622,12 @@ function CommitRow({
       </span>
 
       <span className="flex min-w-0 items-center gap-2">
-        {primaryRef && <RefBadge gitRef={primaryRef} />}
-        {extraRefs.length > 0 && (
-          <span
-            className="border-line bg-bg-2 text-ink-3 shrink-0 rounded border px-1 font-mono text-[10px] leading-4"
-            title={extraRefs.map((ref) => ref.name).join('\n')}
-          >
-            +{extraRefs.length}
-          </span>
-        )}
+        <CommitRefs
+          groups={groups}
+          tint={laneColor(row.lane)}
+          focusedKey={isSelected ? focusedRef : null}
+          onFocusRef={onFocusRef}
+        />
         {row.isMerge && (
           <span className="border-line bg-bg-2 text-ink-3 inline-flex shrink-0 items-center gap-1 rounded border px-1 font-mono text-[10px] leading-4">
             <GitPullRequest size={9} />
@@ -356,7 +645,7 @@ function CommitRow({
           {formatRelativeTime(commit.date)}
         </span>
       </span>
-    </button>
+    </div>
   );
 }
 
@@ -492,6 +781,8 @@ export function CommitHistory({
   isCountingMatches,
   searchInputRef,
   selectedHash,
+  focusedRef,
+  onFocusRef,
   onSelectCommit,
 }: {
   commits: ProjectGitCommit[];
@@ -511,6 +802,9 @@ export function CommitHistory({
   isCountingMatches: boolean;
   searchInputRef: React.Ref<HTMLInputElement>;
   selectedHash: string | null;
+  /** Ref on the selected commit the user is focusing, null when it has none. */
+  focusedRef: string | null;
+  onFocusRef: (args: { hash: string; refKey: string }) => void;
   onSelectCommit: (commit: ProjectGitCommit) => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -525,9 +819,16 @@ export function CommitHistory({
   const width = LANE_ORIGIN + (maxLane + 1) * LANE_WIDTH;
 
   // Empty while nothing is selected, so no row is dimmed in the default view.
+  //
+  // With a ref focused the selection names an actual branch, so the line is
+  // that branch's own history (`traceRefLine`) rather than the lane-shaped
+  // guess. Commits in the middle of history carry no refs and keep the guess.
   const branchLine = useMemo(
-    () => traceBranchLine({ rows, hash: selectedHash }),
-    [rows, selectedHash],
+    () =>
+      focusedRef
+        ? traceRefLine({ rows, hash: selectedHash, refKey: focusedRef })
+        : traceBranchLine({ rows, hash: selectedHash }),
+    [focusedRef, rows, selectedHash],
   );
   // Only trace when the line is a *proper subset* of what is on screen. On a
   // linear stretch of history every loaded row is one first-parent chain, so
@@ -703,6 +1004,10 @@ export function CommitHistory({
                   commit={row.commit}
                   query={query}
                   isSelected={selectedHash === row.commit.hash}
+                  focusedRef={focusedRef}
+                  onFocusRef={(refKey) =>
+                    onFocusRef({ hash: row.commit.hash, refKey })
+                  }
                   onSelect={() => onSelectCommit(row.commit)}
                   onContextMenu={(event) => openCommitMenu(event, row.commit)}
                 />
@@ -722,6 +1027,10 @@ export function CommitHistory({
                     isTracing && branchLine.has(row.commit.hash)
                   }
                   isDimmed={isTracing && !branchLine.has(row.commit.hash)}
+                  focusedRef={focusedRef}
+                  onFocusRef={(refKey) =>
+                    onFocusRef({ hash: row.commit.hash, refKey })
+                  }
                   onSelect={() => onSelectCommit(row.commit)}
                   onContextMenu={(event) => openCommitMenu(event, row.commit)}
                 />

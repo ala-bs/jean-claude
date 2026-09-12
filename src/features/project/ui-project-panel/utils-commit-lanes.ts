@@ -1,3 +1,4 @@
+import { isBranchish, isSameBranch } from './utils-commit-refs';
 import type { ProjectGitCommit } from '@shared/types';
 
 /**
@@ -189,6 +190,71 @@ export function traceBranchLine({
       line.add(child.commit.hash);
       queue.push(child);
     }
+  }
+
+  return line;
+}
+
+/**
+ * Hashes reachable from a *branch tip* along its first-parent chain, stopping
+ * where another branch already claims a commit.
+ *
+ * Used instead of `traceBranchLine` when the user has focused one of the refs
+ * on the selected commit. Refs only ever decorate tips, so the useful question
+ * there is not "what shares this lane" but "what is on this branch and not yet
+ * on any other" — the commits that would travel if the branch were merged.
+ *
+ *   ● f1     focused tip `feat/x`     → included
+ *   ●        no refs                  → included
+ *   ● a9     carries `main`           → stop here, this is the fork point
+ *   ●                                 → excluded
+ *
+ * The branch's *own* refs never stop it: `origin/feat/x` sitting a few commits
+ * behind local `feat/x` is the same branch, not a competing claim, so unpushed
+ * commits stay on the line rather than being dimmed away.
+ *
+ * Lane changes do not stop the walk either: a branch that was rebased or that
+ * merged trunk into itself still belongs to its own ref, even where the lane
+ * art has recycled an index. Returns an empty set when the hash is not loaded.
+ */
+export function traceRefLine({
+  rows,
+  hash,
+  refKey,
+}: {
+  rows: CommitLaneRow[];
+  hash: string | null;
+  /** Name of the focused ref, so re-focusing recomputes even on the same hash. */
+  refKey: string | null;
+}): Set<string> {
+  const line = new Set<string>();
+  if (!hash || !refKey) return line;
+
+  const byHash = new Map<string, CommitLaneRow>();
+  for (const row of rows) byHash.set(row.commit.hash, row);
+
+  let current = byHash.get(hash);
+  if (!current) return line;
+  line.add(hash);
+
+  while (current) {
+    const parent: string | undefined = current.commit.parents[0];
+    const next: CommitLaneRow | undefined = parent
+      ? byHash.get(parent)
+      : undefined;
+    // `line.has` also guards against a cycle in malformed history.
+    if (!next || line.has(next.commit.hash)) break;
+    // A branch or remote ref on the parent means some *other* branch already
+    // contains it — that is the boundary of "unique to the focused branch".
+    // The focused branch's own remote is excluded, or every commit made since
+    // the last push would fall outside its own line.
+    const isClaimed = next.commit.refs.some(
+      (gitRef) =>
+        isBranchish(gitRef) && !isSameBranch({ name: gitRef.name, refKey }),
+    );
+    if (isClaimed) break;
+    line.add(next.commit.hash);
+    current = next;
   }
 
   return line;

@@ -31,7 +31,9 @@ import { cleanIpcError } from '@/lib/ipc-error';
 import { CommandLogsPane } from '@/features/task/ui-task-panel/command-logs-pane';
 import { CommitHistory } from './commit-history';
 import { CommitPanel } from './commit-panel';
+import { defaultFocusedRef } from './utils-commit-refs';
 import { getProjectRootRunId } from '@shared/run-command-types';
+import { groupCommitRefs } from './utils-commit-refs';
 import type { ProjectGitLogFilter } from '@shared/types';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
 import { ProjectTerminal } from '@/features/project/ui-project-terminal';
@@ -253,6 +255,8 @@ export function ProjectPanel({
   const [query, setQuery] = useState('');
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
   const [selectedHash, setSelectedHash] = useState<string | null>(null);
+  /** Explicit branch pick from the row's ref menu; see `focusedRef` below. */
+  const [refOverride, setRefOverride] = useState<string | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
 
   // Run commands from the repository checkout itself. The run service is keyed
@@ -340,6 +344,27 @@ export function ProjectPanel({
     () => graphPages?.pages.flat() ?? [],
     [graphPages],
   );
+
+  // Which of the selected commit's refs the user means. A commit that is the
+  // tip of several branches used to render one badge and a dead `+N`, so
+  // "clicked commit" never answered "which branch". This does.
+  //
+  // Derived rather than reset in an effect: an override that does not belong to
+  // the current selection is simply ignored, so selecting a new commit falls
+  // back to its own default in the same render instead of flashing the old one.
+  const selectedCommit = useMemo(
+    () => commits.find((commit) => commit.hash === selectedHash),
+    [commits, selectedHash],
+  );
+  const refGroups = useMemo(
+    () => groupCommitRefs(selectedCommit?.refs ?? []),
+    [selectedCommit],
+  );
+  const focusedRef =
+    refGroups.find((group) => group.key === refOverride)?.key ??
+    defaultFocusedRef(selectedCommit?.refs ?? []);
+  const focusedGroup =
+    refGroups.find((group) => group.key === focusedRef) ?? null;
 
   useCommands(
     'project-panel-history',
@@ -535,6 +560,15 @@ export function ProjectPanel({
             isCountingMatches={isCountingMatches && isFiltered(filter)}
             searchInputRef={searchInput}
             selectedHash={selectedHash}
+            focusedRef={focusedRef}
+            onFocusRef={({ hash, refKey }) => {
+              // Picking a branch on a row that is not open also opens it —
+              // otherwise the choice would have nowhere to show itself.
+              setSelectedHash(hash);
+              setRefOverride(refKey);
+              setIsLogsPaneOpen(false);
+              setIsTerminalOpen(false);
+            }}
             onSelectCommit={(commit) => {
               // Clicking the open commit again closes the pane, so the rail can
               // be brought back without reaching for the Close button.
@@ -567,6 +601,15 @@ export function ProjectPanel({
             <CommitPanel
               projectId={projectId}
               commitHash={selectedHash}
+              focusedRef={
+                focusedGroup && {
+                  name: focusedGroup.key,
+                  kind: focusedGroup.ref.kind,
+                  isHead: focusedGroup.ref.isHead,
+                  remotes: focusedGroup.remotes.map((remote) => remote.name),
+                  otherRefCount: refGroups.length - 1,
+                }
+              }
               onClose={() => setSelectedHash(null)}
             />
           ) : isLogsPaneOpen ? (
