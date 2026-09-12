@@ -12,6 +12,10 @@ function makeApi() {
       packageName: 'com.example.android',
       restartedAt: '',
     })),
+    launchExpo: vi.fn(async (params: { requestId: string }) => {
+      void params;
+      return { url: 'exp://127.0.0.1:8082' };
+    }),
   };
 }
 
@@ -20,6 +24,7 @@ const COMMON = {
   taskId: 'task-1',
   appPath: 'apps/mobile',
   androidProjectPath: 'apps/mobile/android',
+  reattach: null,
 };
 
 describe('restartAppOnDevice', () => {
@@ -75,5 +80,83 @@ describe('restartAppOnDevice', () => {
         ...COMMON,
       }),
     ).rejects.toThrow('device offline');
+  });
+
+  it('re-deeplinks the restarted app at the live Metro port', async () => {
+    // The whole point of the re-attach: a relaunched dev client otherwise
+    // reconnects to the port it remembered, not the port Metro actually took.
+    const api = makeApi();
+
+    const result = await restartAppOnDevice({
+      api,
+      device: { id: 'sim-1', platform: 'ios' },
+      ...COMMON,
+      reattach: { metroPort: 8082, appScheme: 'myapp' },
+    });
+
+    expect(api.launchExpo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 'task-1',
+        projectId: 'project-1',
+        appPath: 'apps/mobile',
+        platform: 'ios',
+        deviceId: 'sim-1',
+        metroPort: 8082,
+        appScheme: 'myapp',
+      }),
+    );
+    expect(result.reattachedPort).toBe(8082);
+    expect(result.reattachError).toBeNull();
+  });
+
+  it('uses a fresh requestId per invocation', async () => {
+    // A reused id lets the first launch's teardown clear the second launch's
+    // claim, which then fails with "request superseded".
+    const api = makeApi();
+    const reattach = { metroPort: 8082, appScheme: null };
+    const device = { id: 'sim-1', platform: 'ios' } as const;
+
+    await restartAppOnDevice({ api, device, ...COMMON, reattach });
+    await restartAppOnDevice({ api, device, ...COMMON, reattach });
+
+    const ids = api.launchExpo.mock.calls.map(([params]) => params.requestId);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('skips the deeplink when there is nothing to attach to', async () => {
+    const api = makeApi();
+
+    const result = await restartAppOnDevice({
+      api,
+      device: { id: 'sim-1', platform: 'ios' },
+      ...COMMON,
+      reattach: null,
+    });
+
+    expect(api.launchExpo).not.toHaveBeenCalled();
+    expect(result.reattachedPort).toBeNull();
+  });
+
+  it('reports a failed re-attach without failing the restart', async () => {
+    // The native app really did restart; surfacing this as "restart failed"
+    // would send the user looking in the wrong place.
+    const api = makeApi();
+    api.launchExpo = vi.fn(async () => {
+      throw new Error('Mobile dev server is not running');
+    });
+
+    const result = await restartAppOnDevice({
+      api,
+      device: { id: 'sim-1', platform: 'ios' },
+      ...COMMON,
+      reattach: { metroPort: 8082, appScheme: null },
+    });
+
+    expect(result.label).toBe('com.example.app');
+    expect(result.reattachedPort).toBeNull();
+    expect((result.reattachError as Error).message).toContain(
+      'Mobile dev server is not running',
+    );
   });
 });

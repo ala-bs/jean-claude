@@ -45,6 +45,8 @@ import { resolveActiveDevice } from './utils-active-device';
 import { resolveAndroidProjectPath } from './utils-android-project-path';
 import { resolveDeviceListStatus } from './utils-device-list-status';
 import { resolveMobileDevAppPath } from './utils-app-path';
+import { resolveMobileDevDetectedApp } from './utils-detected-app';
+import { resolveRestartReattach } from './utils-restart-reattach';
 import { restartAppOnDevice } from './utils-restart-app';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from '../constants';
 
@@ -148,11 +150,22 @@ export function MobileDevPane({
   const devServerStopping = runCommands.isCommandStopping(devServerCommandId);
   const devServerRunning = devServerStatus?.status === 'running';
   // Once running, the runner may have picked a different free port than the
-  // configured one, so the status is the source of truth.
-  const effectiveDevServerPort =
-    devServerRunning && !devServerStarting
-      ? (devServerStatus?.ports?.[0] ?? configuredDevServerPort)
-      : configuredDevServerPort;
+  // configured one, so the status is the source of truth. Both guards matter:
+  // `CommandStatus` is 'running' | 'stopped' | 'errored' and a crashed process
+  // keeps its `ports`, while `devServerStarting` means the status still
+  // describes the *previous* run. Either would hand out a dead port.
+  const hasLiveDevServerPort = devServerRunning && !devServerStarting;
+  const effectiveDevServerPort = hasLiveDevServerPort
+    ? (devServerStatus?.ports?.[0] ?? configuredDevServerPort)
+    : configuredDevServerPort;
+
+  // Deeplinking into the app is how it gets pointed at a Metro port; a plain
+  // native relaunch reuses whatever URL the dev client last remembered.
+  const { isExpoApp, appScheme } = useMemo(
+    () =>
+      resolveMobileDevDetectedApp({ config: mobilePreviewConfig, appPath }),
+    [appPath, mobilePreviewConfig],
+  );
 
   // One list, both platforms. Queried separately because the backend lists per
   // platform, and because a missing Android SDK must not hide iOS simulators.
@@ -405,23 +418,53 @@ export function MobileDevPane({
   }, [effectiveDevServerPort]);
 
   const handleRestartApp = useCallback(async () => {
-    if (!activeDevice) return;
+    // Mirrors `handleBootDevice`'s re-entrancy guard: the button disables
+    // itself, but switching device mid-restart re-enables it and would start a
+    // second overlapping restart + deeplink on the same app.
+    if (!activeDevice || restartingDeviceKey !== null) return;
     setActionNotice(null);
     setRestartingDeviceKey(activeDeviceKey);
     const restartedDeviceKey = activeDeviceKey;
     try {
-      const { label } = await restartAppOnDevice({
-        api: api.mobilePreview,
-        device: activeDevice,
-        projectId,
-        taskId,
-        appPath,
-        androidProjectPath,
-      });
+      const { label, reattachedPort, reattachError } = await restartAppOnDevice(
+        {
+          api: api.mobilePreview,
+          device: activeDevice,
+          projectId,
+          taskId,
+          appPath,
+          androidProjectPath,
+          reattach: resolveRestartReattach({
+            isExpoApp,
+            // Must be the same condition that produced `effectiveDevServerPort`
+            // from live status. Gating on `devServerRunning` alone would
+            // deeplink the *configured* port during a restart window, which
+            // `launchExpo` rejects with an exact-port mismatch.
+            hasLiveDevServerPort,
+            device: activeDevice,
+            metroPort: effectiveDevServerPort,
+            appScheme,
+          }),
+        },
+      );
       // Restarts are slow; the user may have picked a different device. A
       // success notice would otherwise claim the NEW device's app restarted.
       if (activeDeviceKeyRef.current !== restartedDeviceKey) return;
-      setActionNotice({ tone: 'info', text: `${label} restarted.` });
+      // The app did restart even when the re-attach failed, so this is a
+      // warning about the Metro connection, not a failed restart.
+      if (reattachError) {
+        setActionNotice({
+          tone: 'error',
+          text: `${label} restarted, but could not attach it to Metro on :${effectiveDevServerPort}: ${cleanIpcError(reattachError)}`,
+        });
+        return;
+      }
+      setActionNotice({
+        tone: 'info',
+        text: reattachedPort
+          ? `${label} restarted on :${reattachedPort}.`
+          : `${label} restarted.`,
+      });
     } catch (error) {
       if (activeDeviceKeyRef.current !== restartedDeviceKey) return;
       setActionNotice({ tone: 'error', text: cleanIpcError(error) });
@@ -433,7 +476,12 @@ export function MobileDevPane({
     activeDeviceKey,
     androidProjectPath,
     appPath,
+    appScheme,
+    effectiveDevServerPort,
+    hasLiveDevServerPort,
+    isExpoApp,
     projectId,
+    restartingDeviceKey,
     taskId,
   ]);
 
