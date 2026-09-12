@@ -2,6 +2,7 @@ import type {
   MobilePlatform,
   MobilePreviewDevice,
 } from '@shared/mobile-simulator-types';
+import { PLATFORM_LABELS } from '@shared/mobile-simulator-types';
 
 import {
   makeMobileDevDeviceKey,
@@ -10,10 +11,9 @@ import {
 
 export const FAVORITES_GROUP_LABEL = 'Favorites';
 
-export const PLATFORM_LABELS: Record<MobilePlatform, string> = {
-  ios: 'iOS',
-  android: 'Android',
-};
+// Re-exported so existing importers in this pane keep their import path; the
+// canonical definition sits beside `MobilePlatform`.
+export { PLATFORM_LABELS };
 
 export function isFavoriteDevice({
   favoriteDevices,

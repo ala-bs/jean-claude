@@ -1,5 +1,15 @@
 export type MobilePlatform = 'ios' | 'android';
 
+/**
+ * Human-readable platform names. Lives next to `MobilePlatform` so the mapping
+ * is exhaustive by construction: adding a platform to the union is a type error
+ * here rather than a silently missing label at some call site.
+ */
+export const PLATFORM_LABELS: Record<MobilePlatform, string> = {
+  ios: 'iOS',
+  android: 'Android',
+};
+
 export type MobilePreviewQuality = 'low' | 'balanced' | 'high' | 'very-high';
 export type MobilePreviewTextSize = 'small' | 'normal' | 'large' | 'x-large';
 

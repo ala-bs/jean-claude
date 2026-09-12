@@ -58,6 +58,8 @@ vi.mock('./use-feed-item-project', () => ({
   useFeedItemProject: (item: FeedItem) => ({ name: item.projectName, color: item.projectColor }),
 }));
 
+import { useMobileDevPaneStore } from '@/stores/mobile-dev-pane';
+
 import { countRailCiStatuses, FeedItemCard } from './feed-item-card';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
@@ -122,6 +124,110 @@ describe('FeedItemCard PR workspace badge', () => {
       ),
     );
     expect(container.querySelector('[aria-label="Draft"]')).toBeNull();
+  });
+});
+
+describe('FeedItemCard mobile device badge', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    useMobileDevPaneStore.setState({ deviceByTaskId: {} });
+  });
+
+  afterEach(async () => {
+    await act(() => root.unmount());
+    container.remove();
+    useMobileDevPaneStore.setState({ deviceByTaskId: {} });
+  });
+
+  function deviceBadge() {
+    return container.querySelector('[title^="Mobile Dev"]');
+  }
+
+  it('names the selected device and hides when the task has no selection', async () => {
+    useMobileDevPaneStore.setState({
+      deviceByTaskId: {
+        'task-1': {
+          platform: 'ios',
+          deviceId: 'sim-1',
+          deviceName: 'iPhone 15 Pro',
+        },
+      },
+    });
+    await act(() => root.render(<FeedItemCard item={item()} />));
+    expect(deviceBadge()?.textContent).toBe('iPhone 15 Pro');
+    expect(deviceBadge()?.getAttribute('title')).toBe(
+      'Mobile Dev · iOS · iPhone 15 Pro',
+    );
+    // The title must survive alongside the badge.
+    expect(container.textContent).toContain('Keep this title');
+
+    await act(() =>
+      root.render(<FeedItemCard item={{ ...item(), taskId: 'other-task' }} />),
+    );
+    expect(deviceBadge()).toBeNull();
+  });
+
+  it('labels an android selection with its platform name', async () => {
+    useMobileDevPaneStore.setState({
+      deviceByTaskId: {
+        'task-1': {
+          platform: 'android',
+          deviceId: 'emu-1',
+          deviceName: 'Pixel 8',
+        },
+      },
+    });
+    await act(() => root.render(<FeedItemCard item={item()} />));
+    expect(deviceBadge()?.getAttribute('title')).toBe(
+      'Mobile Dev · Android · Pixel 8',
+    );
+  });
+
+  it('hides rather than rendering an empty badge when the device name is blank', async () => {
+    // The store's persisted-payload guard length-checks deviceId but not
+    // deviceName, so a blank name can reach the badge.
+    useMobileDevPaneStore.setState({
+      deviceByTaskId: {
+        'task-1': { platform: 'ios', deviceId: 'sim-1', deviceName: '' },
+      },
+    });
+    await act(() => root.render(<FeedItemCard item={item()} />));
+    expect(deviceBadge()).toBeNull();
+  });
+
+  it('shows the badge on subtask rows', async () => {
+    useMobileDevPaneStore.setState({
+      deviceByTaskId: {
+        'child-1': {
+          platform: 'android',
+          deviceId: 'emu-2',
+          deviceName: 'Pixel Fold',
+        },
+      },
+    });
+    await act(() =>
+      root.render(
+        <FeedItemCard
+          item={{
+            ...item(),
+            children: [
+              {
+                ...item(),
+                id: 'task:child-1',
+                taskId: 'child-1',
+                title: 'Child task',
+              },
+            ],
+          }}
+        />,
+      ),
+    );
+    expect(deviceBadge()?.textContent).toBe('Pixel Fold');
   });
 });
 

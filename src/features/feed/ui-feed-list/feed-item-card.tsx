@@ -62,6 +62,7 @@ import {
 import { useCompleteTask, useTask } from '@/hooks/use-tasks';
 import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
 import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-dialog';
+import { FeedItemDeviceBadge } from './feed-item-device-badge';
 import { formatRelativeTime } from '@/lib/time';
 import { getRunCommandDisplayName } from '@shared/run-command-types';
 import { PrAutoComplete } from '@/features/pull-request/ui-pr-auto-complete';
@@ -903,6 +904,7 @@ export function FeedItemCard({
                 >
                   {itemTitle}
                 </span>
+                {isTask && <FeedItemDeviceBadge taskId={item.taskId} />}
                 {item.source === 'task' && needsAttention && (
                   <span
                     className={clsx(
@@ -1401,6 +1403,7 @@ function SubtaskRow({
           <span className="text-ink-2 min-w-0 flex-1 truncate text-[11.5px]">
             {child.title}
           </span>
+          <FeedItemDeviceBadge taskId={child.taskId} />
           {childNeedsAttention && (
             <span
               className={clsx(
