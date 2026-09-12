@@ -32,6 +32,7 @@ import type {
   AzureDevOpsWorkItem,
 } from '@/lib/api';
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
+import { FindInViewBar, useFindInView } from '@/common/ui/find-in-view';
 import {
   getOwnerColor,
   normalizeOwnerName,
@@ -651,6 +652,13 @@ export function WorkItemDetails({
   );
   const [containerWidth, setContainerWidth] = useState(() => window.innerWidth);
   const commentsPaneRef = useRef<HTMLElement>(null);
+  const contentPaneRef = useRef<HTMLDivElement>(null);
+  const findInputRef = useRef<{ focus: () => void }>(null);
+  const find = useFindInView({
+    containerRef: contentPaneRef,
+    inputRef: findInputRef,
+    contentKey: String(workItem?.id ?? ''),
+  });
 
   useEffect(() => {
     if (!hasTestCases && activeTab === 'test-cases') {
@@ -881,7 +889,29 @@ export function WorkItemDetails({
           isDragging && 'select-none',
         )}
       >
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-4">
+        {/* The search bar sits outside `contentPaneRef` on purpose: that
+            element is watched by a MutationObserver, and a bar inside it would
+            observe its own "N of M" counter updates. */}
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {find.isOpen && (
+            <div className="absolute top-2 right-4 z-20">
+              <FindInViewBar
+                ref={findInputRef}
+                query={find.query}
+                onQueryChange={find.setQuery}
+                currentMatch={find.currentMatch}
+                totalMatches={find.matchCount}
+                onNext={find.goToNextMatch}
+                onPrevious={find.goToPreviousMatch}
+                onClose={find.close}
+                placeholder="Find in description..."
+              />
+            </div>
+          )}
+          <div
+            ref={contentPaneRef}
+            className="min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-4"
+          >
           {providerId && projectName && (
             <WorkItemGeneratedSummary
               request={{
@@ -947,6 +977,7 @@ export function WorkItemDetails({
               No description provided.
             </p>
           )}
+          </div>
         </div>
 
         <div
