@@ -8,11 +8,11 @@ export function Separator({
   className?: string;
 }) {
   return orientation === 'horizontal' ? (
-    <div role="separator" className={clsx('separator-h', className)} />
+    <div role="separator" className={clsx('separator-h shrink-0', className)} />
   ) : (
     <div
       role="separator"
-      className={clsx('separator-v self-stretch', className)}
+      className={clsx('separator-v shrink-0 self-stretch', className)}
     />
   );
 }

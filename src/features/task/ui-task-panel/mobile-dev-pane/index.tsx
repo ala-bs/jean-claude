@@ -520,7 +520,10 @@ export function MobileDevPane({
       </div>
       <Separator />
 
-      <div className="flex shrink-0 flex-col gap-3 px-4 py-3">
+      {/* Scrollable rather than shrink-0 so a short window clips nothing: the
+          controls keep their natural height and scroll internally instead of
+          pushing the logs (or the Start/Stop buttons) out of the pane. */}
+      <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-4 py-3">
         {/* Device */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
@@ -778,17 +781,19 @@ export function MobileDevPane({
       </button>
 
       {logsExpanded && (
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <InteractiveLog
-            log={devServerLog}
-            taskId={taskId}
-            runCommandId={devServerCommandId}
-            isRunning={devServerRunning}
-            workingDir={workingDir}
-            ignoreBrowserShortcuts
-            emptyText="Start Metro to see output."
-          />
-        </div>
+        <InteractiveLog
+          log={devServerLog}
+          taskId={taskId}
+          runCommandId={devServerCommandId}
+          isRunning={devServerRunning}
+          workingDir={workingDir}
+          ignoreBrowserShortcuts
+          emptyText="Start Metro to see output."
+          // The floor matters because the logs box has flex-basis 0: without it
+          // flexbox hands every pixel of a squeeze to the controls block above
+          // and the log silently renders at zero height.
+          className="min-h-[120px] overflow-hidden"
+        />
       )}
     </div>
   );
