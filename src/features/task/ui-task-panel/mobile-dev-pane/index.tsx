@@ -34,6 +34,7 @@ import { useMobileDevPaneWidth } from '@/stores/navigation';
 import { useMobilePreviewDevices } from '@/hooks/use-mobile-preview';
 import { useRunCommands } from '@/hooks/use-run-commands';
 import { useTaskMessagesStore } from '@/stores/task-messages';
+import { useToastStore } from '@/stores/toasts';
 
 import {
   buildDeviceOptions,
@@ -48,6 +49,7 @@ import { resolveMobileDevAppPath } from './utils-app-path';
 import { resolveMobileDevDetectedApp } from './utils-detected-app';
 import { resolveRestartReattach } from './utils-restart-reattach';
 import { restartAppOnDevice } from './utils-restart-app';
+import { summarizeDeviceActionError } from './utils-action-error';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from '../constants';
 
 function StatusDot({
@@ -111,10 +113,10 @@ export function MobileDevPane({
   const [restartingDeviceKey, setRestartingDeviceKey] = useState<string | null>(
     null,
   );
-  const [actionNotice, setActionNotice] = useState<{
-    tone: 'info' | 'error';
-    text: string;
-  } | null>(null);
+  // Only success/progress copy lives inline; failures go to a toast because
+  // device errors (devicectl dumps) are far too long for this narrow pane.
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const addToast = useToastStore((state) => state.addToast);
   const activeDeviceKeyRef = useRef('');
   const [bootError, setBootError] = useState<string | null>(null);
 
@@ -409,13 +411,16 @@ export function MobileDevPane({
     setIsReloading(true);
     try {
       await api.mobilePreview.reloadExpo({ metroPort: effectiveDevServerPort });
-      setActionNotice({ tone: 'info', text: 'Reload sent to Metro.' });
+      setActionNotice('Reload sent to Metro.');
     } catch (error) {
-      setActionNotice({ tone: 'error', text: cleanIpcError(error) });
+      addToast({
+        message: summarizeDeviceActionError(error),
+        type: 'error',
+      });
     } finally {
       setIsReloading(false);
     }
-  }, [effectiveDevServerPort]);
+  }, [addToast, effectiveDevServerPort]);
 
   const handleRestartApp = useCallback(async () => {
     // Mirrors `handleBootDevice`'s re-entrancy guard: the button disables
@@ -453,26 +458,29 @@ export function MobileDevPane({
       // The app did restart even when the re-attach failed, so this is a
       // warning about the Metro connection, not a failed restart.
       if (reattachError) {
-        setActionNotice({
-          tone: 'error',
-          text: `${label} restarted, but could not attach it to Metro on :${effectiveDevServerPort}: ${cleanIpcError(reattachError)}`,
+        addToast({
+          message: `${label} restarted, but could not attach it to Metro on :${effectiveDevServerPort}: ${summarizeDeviceActionError(reattachError)}`,
+          type: 'error',
         });
         return;
       }
-      setActionNotice({
-        tone: 'info',
-        text: reattachedPort
+      setActionNotice(
+        reattachedPort
           ? `${label} restarted on :${reattachedPort}.`
           : `${label} restarted.`,
-      });
+      );
     } catch (error) {
       if (activeDeviceKeyRef.current !== restartedDeviceKey) return;
-      setActionNotice({ tone: 'error', text: cleanIpcError(error) });
+      addToast({
+        message: summarizeDeviceActionError(error),
+        type: 'error',
+      });
     } finally {
       setRestartingDeviceKey(null);
     }
   }, [
     activeDevice,
+    addToast,
     activeDeviceKey,
     androidProjectPath,
     appPath,
@@ -747,16 +755,7 @@ export function MobileDevPane({
           </div>
 
           {actionNotice && (
-            <p
-              className={clsx(
-                'text-xs break-words',
-                actionNotice.tone === 'error'
-                  ? 'text-red-500'
-                  : 'text-ink-3',
-              )}
-            >
-              {actionNotice.text}
-            </p>
+            <p className="text-ink-3 text-xs break-words">{actionNotice}</p>
           )}
         </div>
       </div>
