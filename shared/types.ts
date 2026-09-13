@@ -508,6 +508,7 @@ export interface Project {
   autoPullSourceBranch: boolean;
   commitWithNoVerify: boolean;
   queuePrAutoComplete: boolean;
+  autoAcceptOnTaskCreation: boolean;
   defaultAgentBackend: AgentBackendType | null; // null = use global default
   defaultAgentModelPreference: ModelPreference | null;
   completionContext: string | null;
@@ -549,6 +550,7 @@ export interface NewProject {
   autoPullSourceBranch?: boolean;
   commitWithNoVerify?: boolean;
   queuePrAutoComplete?: boolean;
+  autoAcceptOnTaskCreation?: boolean;
   defaultAgentBackend?: AgentBackendType | null;
   defaultAgentModelPreference?: ModelPreference | null;
   completionContext?: string | null;
@@ -590,6 +592,7 @@ export interface UpdateProject {
   autoPullSourceBranch?: boolean;
   commitWithNoVerify?: boolean;
   queuePrAutoComplete?: boolean;
+  autoAcceptOnTaskCreation?: boolean;
   defaultAgentBackend?: AgentBackendType | null;
   defaultAgentModelPreference?: ModelPreference | null;
   completionContext?: string | null;

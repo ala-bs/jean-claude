@@ -119,6 +119,7 @@ function parseProjectRow(row: ProjectRow) {
     autoPullSourceBranch: row.autoPullSourceBranch === 1,
     commitWithNoVerify: row.commitWithNoVerify === 1,
     queuePrAutoComplete: row.queuePrAutoComplete === 1,
+    autoAcceptOnTaskCreation: row.autoAcceptOnTaskCreation === 1,
     aiSkillSlots,
     mobilePreviewConfig,
     workItemTitleParser,
@@ -172,6 +173,7 @@ export const ProjectRepository = {
       autoPullSourceBranch,
       commitWithNoVerify,
       queuePrAutoComplete,
+      autoAcceptOnTaskCreation,
       aiSkillSlots,
       mobilePreviewConfig,
       workItemTitleParser,
@@ -191,6 +193,7 @@ export const ProjectRepository = {
         autoPullSourceBranch: autoPullSourceBranch === true ? 1 : 0,
         commitWithNoVerify: commitWithNoVerify === true ? 1 : 0,
         queuePrAutoComplete: queuePrAutoComplete === true ? 1 : 0,
+        autoAcceptOnTaskCreation: autoAcceptOnTaskCreation === true ? 1 : 0,
         aiSkillSlots: aiSkillSlots ? JSON.stringify(aiSkillSlots) : null,
         mobilePreviewConfig: mobilePreviewConfig
           ? JSON.stringify(mobilePreviewConfig)
@@ -215,6 +218,7 @@ export const ProjectRepository = {
       autoPullSourceBranch,
       commitWithNoVerify,
       queuePrAutoComplete,
+      autoAcceptOnTaskCreation,
       aiSkillSlots,
       mobilePreviewConfig,
       workItemTitleParser,
@@ -240,6 +244,9 @@ export const ProjectRepository = {
         }),
         ...(queuePrAutoComplete !== undefined && {
           queuePrAutoComplete: queuePrAutoComplete ? 1 : 0,
+        }),
+        ...(autoAcceptOnTaskCreation !== undefined && {
+          autoAcceptOnTaskCreation: autoAcceptOnTaskCreation ? 1 : 0,
         }),
         ...(aiSkillSlots !== undefined && {
           aiSkillSlots: aiSkillSlots ? JSON.stringify(aiSkillSlots) : null,

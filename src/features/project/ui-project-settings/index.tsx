@@ -793,6 +793,8 @@ export function ProjectSettings({
   const [autoPullSourceBranch, setAutoPullSourceBranch] = useState(false);
   const [commitWithNoVerify, setCommitWithNoVerify] = useState(false);
   const [queuePrAutoComplete, setQueuePrAutoComplete] = useState(false);
+  const [autoAcceptOnTaskCreation, setAutoAcceptOnTaskCreation] =
+    useState(false);
   const [defaultAgentBackend, setDefaultAgentBackend] =
     useState<AgentBackendType | null>(null);
   const [defaultAgentModelPreference, setDefaultAgentModelPreference] =
@@ -857,6 +859,7 @@ export function ProjectSettings({
       autoPullSourceBranch: project.autoPullSourceBranch,
       commitWithNoVerify: project.commitWithNoVerify,
       queuePrAutoComplete: project.queuePrAutoComplete,
+      autoAcceptOnTaskCreation: project.autoAcceptOnTaskCreation,
       defaultAgentBackend: project.defaultAgentBackend,
       defaultAgentModelPreference: project.defaultAgentModelPreference,
       prPriority: project.prPriority ?? 'normal',
@@ -882,6 +885,7 @@ export function ProjectSettings({
       autoPullSourceBranch,
       commitWithNoVerify,
       queuePrAutoComplete,
+      autoAcceptOnTaskCreation,
       defaultAgentBackend,
       defaultAgentModelPreference,
       prPriority,
@@ -900,6 +904,7 @@ export function ProjectSettings({
       autoPullSourceBranch,
       commitWithNoVerify,
       queuePrAutoComplete,
+      autoAcceptOnTaskCreation,
       color,
       completionContext,
       defaultAgentBackend,
@@ -958,6 +963,7 @@ export function ProjectSettings({
       setAutoPullSourceBranch(project.autoPullSourceBranch);
       setCommitWithNoVerify(project.commitWithNoVerify);
       setQueuePrAutoComplete(project.queuePrAutoComplete);
+      setAutoAcceptOnTaskCreation(project.autoAcceptOnTaskCreation);
       setDefaultAgentBackend(project.defaultAgentBackend);
       setDefaultAgentModelPreference(project.defaultAgentModelPreference);
       setDefaultAgentPresetId(
@@ -1577,6 +1583,25 @@ export function ProjectSettings({
               Arms auto-complete on a single PR of this project at a time and
               starts the next one once the current PR merges. Failed PRs are
               skipped instead of blocking the queue.
+            </p>
+          </div>
+
+          <div>
+            <Checkbox
+              id="autoAcceptOnTaskCreation"
+              checked={autoAcceptOnTaskCreation}
+              onChange={(checked) => {
+                markFieldDirty('autoAcceptOnTaskCreation');
+                setAutoAcceptOnTaskCreation(checked);
+              }}
+              label="Start new tasks in Auto mode"
+            />
+            <p className="text-ink-3 mt-1 text-xs">
+              New tasks and new steps in this project start in Auto mode, where
+              every tool — including file writes and shell commands — runs
+              without asking for approval. You can still change the mode before
+              starting. Backends with no Ask mode (OpenCode, Codex, Copilot)
+              always start in Auto regardless of this setting.
             </p>
           </div>
 

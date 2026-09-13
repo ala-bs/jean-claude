@@ -56,6 +56,10 @@ import {
   prepareProjectFeatureReferences,
 } from '@/lib/prompt-feature-context';
 import {
+  getDefaultInteractionMode,
+  renormalizeDraftInteractionMode,
+} from '@/lib/default-interaction-mode';
+import {
   getModelsForBackend,
   getModelThinkingCapabilities,
 } from '@/features/agent/ui-backend-selector';
@@ -915,7 +919,9 @@ export function NewTaskOverlay({
 
   const currentInteractionMode = normalizeInteractionModeForBackend({
     backend: currentBackend,
-    mode: draft?.interactionMode ?? 'ask',
+    mode:
+      draft?.interactionMode ??
+      getDefaultInteractionMode({ project: selectedProject }),
   });
   const backendModelSelection = useMemo(
     () =>
@@ -1032,23 +1038,26 @@ export function NewTaskOverlay({
     const nextThinkingEffort =
       rateLimitSuggestion.thinkingEffort ??
       (nextBackend !== currentBackend ? 'default' : currentThinkingEffort);
-    updateDraft({
+    // Functional form: the mode must be re-read from live store state, not the
+    // render-scoped snapshot, or an imperative write between render and this
+    // effect would be clobbered with a stale value.
+    updateDraft((prev) => ({
       agentBackend: nextBackend,
       modelPreference: nextModel,
       thinkingEffort: nextThinkingEffort,
       backendModelPresetId: null,
       shouldAutoSelectBackendModelPreset: false,
-      interactionMode: normalizeInteractionModeForBackend({
+      interactionMode: renormalizeDraftInteractionMode({
+        draftMode: prev?.interactionMode,
         backend: nextBackend,
-        mode: currentInteractionMode,
       }),
-    });
+    }));
   }, [
     currentBackend,
-    currentInteractionMode,
     currentModelPreference,
     currentThinkingEffort,
     draft?.agentBackend,
+    draft?.interactionMode,
     draft?.modelPreference,
     isNoteMode,
     rateLimitSuggestion,
@@ -2064,24 +2073,22 @@ export function NewTaskOverlay({
                     layer={layer}
                     onChange={(selection) => {
                       userTouchedSelectionRef.current = true;
-                      const normalizedMode = normalizeInteractionModeForBackend(
-                        {
-                          backend: selection.backend,
-                          mode: currentInteractionMode,
-                        },
-                      );
+
                       const nextThinkingCapabilities =
                         getModelThinkingCapabilities(
                           selection.model,
                           dynamicModels,
                         );
 
-                      updateDraft({
+                      updateDraft((prev) => ({
                         agentBackend: selection.backend,
                         backendModelPresetId: selection.presetId,
                         shouldAutoSelectBackendModelPreset:
                           selection.presetId !== null,
-                        interactionMode: normalizedMode,
+                        interactionMode: renormalizeDraftInteractionMode({
+                          draftMode: prev?.interactionMode,
+                          backend: selection.backend,
+                        }),
                         modelPreference: selection.model,
                         thinkingEffort: normalizeThinkingEffortForModel({
                           backend: selection.backend,
@@ -2096,7 +2103,7 @@ export function NewTaskOverlay({
                             'default',
                           capabilities: nextThinkingCapabilities,
                         }),
-                      });
+                      }));
                     }}
                   />
                 )}
@@ -2124,18 +2131,18 @@ export function NewTaskOverlay({
                     suggestedPresetId={rateLimitSuggestedPresetId}
                     onApplySuggestion={(selection) => {
                       userTouchedSelectionRef.current = true;
-                      updateDraft({
+                      updateDraft((prev) => ({
                         agentBackend: selection.backend,
                         backendModelPresetId: null,
                         shouldAutoSelectBackendModelPreset: false,
-                        interactionMode: normalizeInteractionModeForBackend({
+                        interactionMode: renormalizeDraftInteractionMode({
+                          draftMode: prev?.interactionMode,
                           backend: selection.backend,
-                          mode: currentInteractionMode,
                         }),
                         modelPreference: selection.model,
                         thinkingEffort:
                           selection.thinkingEffort as ThinkingEffort,
-                      });
+                      }));
                     }}
                   />
                 )}

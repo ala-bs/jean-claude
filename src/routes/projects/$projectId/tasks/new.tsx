@@ -7,6 +7,10 @@ import { nanoid } from 'nanoid';
 
 
 import {
+  getDefaultInteractionMode,
+  renormalizeDraftInteractionMode,
+} from '@/lib/default-interaction-mode';
+import {
   getModelsForBackend,
   getModelThinkingCapabilities,
 } from '@/features/agent/ui-backend-selector';
@@ -66,7 +70,7 @@ function NewTask() {
   const { projectId } = Route.useParams();
   const navigate = useNavigate();
   const createTask = useCreateTaskWithWorktree();
-  const { data: project } = useProject(projectId);
+  const { data: project, isLoading: isProjectLoading } = useProject(projectId);
   const { data: featureMap = null } = useProjectFeatureMap(projectId);
   const { data: isGitRepository = false, isFetching: isGitRepositoryFetching } =
     useProjectIsGitRepository(projectId);
@@ -97,7 +101,7 @@ function NewTask() {
     useWorktree,
     useExistingBranch,
     sourceBranch,
-    interactionMode,
+    interactionMode: draftInteractionMode,
     modelPreference,
     thinkingEffort,
     backendModelPresetId,
@@ -106,6 +110,13 @@ function NewTask() {
     workItemUrls,
     updateWorkItemStatus,
   } = draft;
+  // Deliberately NOT normalized here. ModeSelector normalizes for display on
+  // its own, and the submit sites normalize against the backend actually
+  // chosen. Collapsing it early is lossy: 'ask' normalized for a backend with
+  // no ask mode becomes 'auto', so a submit-time rate-limit swap to a backend
+  // that *does* support ask would then send 'auto' instead of 'ask'.
+  const interactionMode =
+    draftInteractionMode ?? getDefaultInteractionMode({ project });
   const selectableBranchInfos = useMemo(
     () =>
       useExistingBranch
@@ -253,16 +264,16 @@ function NewTask() {
       thinkingEffort: nextThinkingEffort,
       backendModelPresetId: null,
       shouldAutoSelectBackendModelPreset: false,
-      interactionMode: normalizeInteractionModeForBackend({
+      interactionMode: renormalizeDraftInteractionMode({
+        draftMode: draftInteractionMode,
         backend: nextBackend,
-        mode: interactionMode,
       }),
     });
   }, [
+    draftInteractionMode,
     effectiveAgentBackend,
     effectiveDefaultModelPreference,
     effectiveThinkingEffort,
-    interactionMode,
     modelPreference,
     rateLimitSuggestion,
     setDraft,
@@ -306,17 +317,15 @@ function NewTask() {
         'default',
       backendModelPresetId: presetId,
       shouldAutoSelectBackendModelPreset: true,
-      interactionMode: normalizeInteractionModeForBackend({
-        backend: resolved,
-        mode: interactionMode,
-      }),
+      // interactionMode deliberately omitted: this effect only runs when the
+      // draft does not exist yet, so there is no explicit choice to preserve,
+      // and writing the resolved default here is what used to pin it.
     });
   }, [
     backendModelPresets,
     backendDefaultModelsSetting,
     backendsSetting,
     hasDraft,
-    interactionMode,
     project,
     quickSwitcherSetting?.enabled,
     rateLimitSuggestion?.swapped,
@@ -340,6 +349,10 @@ function NewTask() {
 
   async function handleCreateTask(shouldStart: boolean) {
     if (isWorktreeDataFetching) return;
+    // Not just a disabled button: until the project resolves, the interaction
+    // mode would fall back to 'ask' and ignore the project's auto-accept
+    // setting. Re-checked here so non-button submit paths cannot slip through.
+    if (isProjectLoading) return;
     if (!effectiveAgentBackend) return;
 
     // Pass null if name is empty - will trigger auto-generation when agent starts
@@ -590,9 +603,9 @@ function NewTask() {
                           'default',
                         capabilities: nextThinkingCapabilities,
                       }),
-                      interactionMode: normalizeInteractionModeForBackend({
+                      interactionMode: renormalizeDraftInteractionMode({
+                        draftMode: draftInteractionMode,
                         backend: selection.backend,
-                        mode: interactionMode,
                       }),
                     });
                   }}
@@ -622,9 +635,9 @@ function NewTask() {
                       shouldAutoSelectBackendModelPreset: false,
                       modelPreference: selection.model,
                       thinkingEffort: selection.thinkingEffort as ThinkingEffort,
-                      interactionMode: normalizeInteractionModeForBackend({
+                      interactionMode: renormalizeDraftInteractionMode({
+                        draftMode: draftInteractionMode,
                         backend: selection.backend,
-                        mode: interactionMode,
                       }),
                     });
                   }}
@@ -640,6 +653,7 @@ function NewTask() {
                 createTask.isPending ||
                 !prompt.trim() ||
                 isWorktreeDataFetching ||
+                isProjectLoading ||
                 !effectiveAgentBackend
               }
             >
@@ -654,6 +668,7 @@ function NewTask() {
                 createTask.isPending ||
                 !prompt.trim() ||
                 isWorktreeDataFetching ||
+                isProjectLoading ||
                 !effectiveAgentBackend
               }
             >

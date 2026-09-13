@@ -72,6 +72,7 @@ import { buildWorkItemSnippetContext } from '@/features/new-task/ui-prompt-compo
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
+import { getDefaultInteractionMode } from '@/lib/default-interaction-mode';
 import { getDefaultModelForBackend } from '@/lib/default-models';
 import { IconButton } from '@/common/ui/icon-button';
 import { Input } from '@/common/ui/input';
@@ -438,6 +439,11 @@ export function AddStepDialog({
 
   const [interactionMode, setInteractionMode] =
     useState<InteractionMode>('ask');
+  // Seeded once per open, from the project's auto-accept setting. Kept out of
+  // the on-open reset effect below because the project query may still be in
+  // flight when the dialog opens: re-running that whole effect on a late
+  // arrival would clobber the user's other in-progress selections.
+  const modeSeededRef = useRef(false);
   const [backend, setBackend] = useState<AgentBackendType>(defaultBackend);
   const [model, setModel] = useState<ModelPreference>(defaultModel);
   const [thinkingEffort, setThinkingEffort] = useState<ThinkingEffort>(
@@ -632,7 +638,6 @@ export function AddStepDialog({
     if (isOpen) {
       userTouchedSelectionRef.current = false;
       startTransition(() => setUserTouchedSelection(false));
-      startTransition(() => setInteractionMode('ask'));
       startTransition(() => setBackend(defaultBackend));
       startTransition(() => setModel(defaultModel));
       startTransition(() => setThinkingEffort(defaultThinkingEffort ?? 'default'));
@@ -648,6 +653,37 @@ export function AddStepDialog({
       startTransition(() => setReviewers(createDefaultReviewers(defaultBackend)));
     }
   }, [defaultBackend, defaultModel, defaultThinkingEffort, isOpen]);
+
+  // Re-arm the seed only when the dialog actually opens. Deliberately NOT part
+  // of the reset effect above: that effect also depends on defaultBackend /
+  // defaultModel / defaultThinkingEffort, so a settings query settling while
+  // the dialog is open would re-arm the seed and clobber the user's mode.
+  useEffect(() => {
+    if (!isOpen) return;
+
+    modeSeededRef.current = false;
+    // Reset to the safe mode immediately. The dialog is never unmounted
+    // (`if (!isOpen) return null` happens after the hooks), so without this the
+    // previous open's mode stays live — and submittable — for as long as the
+    // project query is in flight, which is exactly when the seed below bails.
+    startTransition(() => setInteractionMode('ask'));
+  }, [isOpen]);
+
+  // Seed the step's interaction mode from the project's auto-accept setting,
+  // once per open and only after the project query settles. The ref is also set
+  // by the mode selector's onChange, so an explicit pick always wins over a
+  // late-arriving project.
+  useEffect(() => {
+    if (!isOpen || modeSeededRef.current || isProjectLoading) return;
+
+    modeSeededRef.current = true;
+    // Not normalized against `backend`: this effect can run before the on-open
+    // reset's `setBackend` has committed, so `backend` may still hold the
+    // previous open's value — and normalizing 'ask' for a backend without an
+    // ask mode yields 'auto'. ModeSelector normalizes for display and submit
+    // normalizes against the real backend, so the raw default is correct here.
+    setInteractionMode(getDefaultInteractionMode({ project: stepProject }));
+  }, [isOpen, isProjectLoading, stepProject]);
 
   useEffect(() => {
     if (
@@ -1017,7 +1053,12 @@ export function AddStepDialog({
           <div className="flex flex-wrap items-center gap-3">
             <ModeSelector
               value={interactionMode}
-              onChange={setInteractionMode}
+              onChange={(mode) => {
+                // Count an explicit pick as "seeded" so a project query that
+                // settles afterwards cannot overwrite the user's choice.
+                modeSeededRef.current = true;
+                setInteractionMode(mode);
+              }}
               backend={backend}
               shortcut="cmd+i"
               side="top"
