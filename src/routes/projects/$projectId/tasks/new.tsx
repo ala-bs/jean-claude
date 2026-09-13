@@ -39,7 +39,6 @@ import {
   useProject,
   useProjectBranches,
   useProjectFeatureMap,
-  useProjectIsGitRepository,
 } from '@/hooks/use-projects';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { BranchSelect } from '@/common/ui/branch-select';
@@ -57,6 +56,7 @@ import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useCreateTaskWithWorktree } from '@/hooks/use-tasks';
 import { useNewTaskFormStore } from '@/stores/new-task-form';
+import { useProjectCanCreateWorktree } from '@/hooks/use-project-git';
 import { useProjectSkills } from '@/hooks/use-skills';
 import { WorkItemsBrowser } from '@/features/agent/ui-work-items-browser';
 
@@ -72,9 +72,10 @@ function NewTask() {
   const createTask = useCreateTaskWithWorktree();
   const { data: project, isLoading: isProjectLoading } = useProject(projectId);
   const { data: featureMap = null } = useProjectFeatureMap(projectId);
-  const { data: isGitRepository = false, isFetching: isGitRepositoryFetching } =
-    useProjectIsGitRepository(projectId);
-  const canUseWorktree = isGitRepository;
+  // Not just "is a git repo": a repo with no commits has nothing to branch
+  // from, so `git worktree add` would fail after the task was already created.
+  const { data: canUseWorktree = false, isFetching: isGitRepositoryFetching } =
+    useProjectCanCreateWorktree(projectId);
   const {
     data: branchInfos = [],
     isLoading: branchesLoading,

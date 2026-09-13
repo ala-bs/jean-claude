@@ -110,6 +110,12 @@ export function invalidateProjectGit(
     queryClient.invalidateQueries({
       queryKey: ['project-working-tree-files', projectId],
     }),
+    // Creating the first commit flips this from false to true, and the new-task
+    // forms cache it for 30s — without this their worktree toggle stays
+    // disabled long after the panel has caught up.
+    queryClient.invalidateQueries({
+      queryKey: projectCanCreateWorktreeKey(projectId),
+    }),
   ]).then(() => undefined);
 }
 
@@ -127,6 +133,40 @@ export function useProjectGitStatus(projectId: string | null) {
     // is what actually updates the remote-tracking refs.
     refetchInterval: PROJECT_GIT_AUTO_FETCH_INTERVAL_MS,
   });
+}
+
+/**
+ * Whether a task in this project can be given its own worktree.
+ *
+ * Deliberately stricter than "is this a git repository": `git worktree add`
+ * needs a commit to branch from, so a freshly `git init`-ed project with an
+ * unborn HEAD must answer false here even though it has a `.git` directory.
+ */
+export function useProjectCanCreateWorktree(projectId: string | null) {
+  return useQuery({
+    queryKey: projectCanCreateWorktreeKey(projectId),
+    queryFn: async () => {
+      if (!projectId) return false;
+      try {
+        const status = await api.projects.git.getStatus(projectId);
+        return status.isGitRepository && status.hasCommits;
+      } catch {
+        // `getStatus` throws where the old `isGitRepository` check returned
+        // false (stale index.lock, corrupt repo). Letting it reject would put
+        // the query into retry-with-backoff, and the new-task forms block
+        // submit while this is fetching — a stuck button instead of a
+        // disabled worktree toggle. "Cannot create a worktree" is the honest
+        // answer for a repo we cannot even read.
+        return false;
+      }
+    },
+    enabled: !!projectId,
+    staleTime: 30_000,
+  });
+}
+
+export function projectCanCreateWorktreeKey(projectId: string | null) {
+  return ['project-can-create-worktree', projectId];
 }
 
 /**

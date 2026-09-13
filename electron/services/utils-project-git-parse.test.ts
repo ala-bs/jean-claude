@@ -72,6 +72,26 @@ describe('parseStatus', () => {
     expect(result.behind).toBeNull();
   });
 
+  it('reads the unborn-HEAD signal off branch.oid', () => {
+    // git prints the literal `(initial)` instead of a sha when the repo has no
+    // commit yet. This is what spares getProjectGitStatus a second subprocess.
+    expect(
+      parseStatus(['# branch.oid (initial)', '# branch.head main'].join('\n'))
+        .hasCommits,
+    ).toBe(false);
+
+    expect(
+      parseStatus(['# branch.oid 0b11b37a', '# branch.head main'].join('\n'))
+        .hasCommits,
+    ).toBe(true);
+  });
+
+  it('assumes commits exist when the branch.oid header is absent', () => {
+    // The commit-less case must be positively identified: defaulting the other
+    // way would hide the history of any repo whose status output we mis-read.
+    expect(parseStatus('# branch.head main').hasCommits).toBe(true);
+  });
+
   it('detects a detached HEAD', () => {
     expect(parseStatus('# branch.head (detached)').isDetached).toBe(true);
   });

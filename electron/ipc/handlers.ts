@@ -338,6 +338,7 @@ import {
   getProjectGitGraph,
   getProjectGitStatus,
   getProjectWorkingTreeFiles,
+  initProjectRepository,
   pullProject,
   pushProject,
 } from '../services/project-git-service';
@@ -1775,6 +1776,9 @@ export function registerIpcHandlers() {
       });
     },
   );
+  ipcMain.handle('projects:git:init', async (_, projectId: string) => {
+    return initProjectRepository(await requireProjectPath(projectId));
+  });
   ipcMain.handle('projects:git:push', async (_, projectId: string) => {
     return pushProject(await requireProjectPath(projectId));
   });

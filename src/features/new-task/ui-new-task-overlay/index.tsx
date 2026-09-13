@@ -106,7 +106,6 @@ import {
   useActiveProjects,
   useProjectBranches,
   useProjectFeatureMap,
-  useProjectIsGitRepository,
   useReorderProjects,
 } from '@/hooks/use-projects';
 import {
@@ -147,6 +146,7 @@ import { useBackendModels } from '@/hooks/use-backend-models';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
+import { useProjectCanCreateWorktree } from '@/hooks/use-project-git';
 import { useProjectSkills } from '@/hooks/use-skills';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 
@@ -666,9 +666,12 @@ export function NewTaskOverlay({
     },
   });
 
-  const { data: isGitRepository = false, isFetching: isGitRepositoryFetching } =
-    useProjectIsGitRepository(selectedProjectId);
-  const canCreateWorktree = isGitRepository;
+  // Not just "is a git repo": a repo with no commits has nothing to branch
+  // from, so `git worktree add` would fail after the task was already created.
+  const {
+    data: canCreateWorktree = false,
+    isFetching: isGitRepositoryFetching,
+  } = useProjectCanCreateWorktree(selectedProjectId);
 
   // Fetch branches for the selected project
   const { data: branchInfos = [], isFetching: branchesFetching } =

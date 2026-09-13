@@ -11,6 +11,7 @@ import {
 import { getEditorLabel, useEditorSetting } from '@/hooks/use-settings';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
+import { Button } from '@/common/ui/button';
 import clsx from 'clsx';
 import { useNavigate } from '@tanstack/react-router';
 
@@ -63,6 +64,62 @@ function shortRemote(remoteUrl: string): string {
 /** Only http(s) remotes are openable; `git@…` is not a URL a browser can take. */
 function remoteHref(remoteUrl: string): string | null {
   return /^https?:\/\//.test(remoteUrl) ? remoteUrl : null;
+}
+
+/**
+ * Shown instead of the commit history when there is nothing to show. Three
+ * situations land here and all three are resolved by the same action, so they
+ * share one card and differ only in what they explain:
+ *
+ *   not a repo          → `git init` plus a first commit
+ *   repo, never used    → a first commit
+ *   orphan branch       → a first commit *on this branch*; history lives on
+ *                         other branches and is not lost
+ */
+function EmptyRepositoryState({
+  isGitRepository,
+  hasCommitsElsewhere,
+  branch,
+  onInitialize,
+}: {
+  isGitRepository: boolean;
+  hasCommitsElsewhere: boolean;
+  branch: string;
+  onInitialize: () => Promise<void>;
+}) {
+  const isOrphanBranch = isGitRepository && hasCommitsElsewhere;
+
+  const title = !isGitRepository
+    ? 'Not a git repository'
+    : isOrphanBranch
+      ? `${branch || 'This branch'} has no commits yet`
+      : 'No commits yet';
+
+  const detail = !isGitRepository
+    ? 'Git status, branches and history are unavailable for this project.'
+    : isOrphanBranch
+      ? 'This is an orphan branch, so it starts from an empty history. Other branches keep their commits — switch to one to see them.'
+      : 'This repository has no commits, so there is no history to show and tasks cannot create worktrees yet.';
+
+  return (
+    <div className="flex min-w-0 flex-1 items-center justify-center p-5">
+      <div className="border-line-soft text-ink-3 flex max-w-sm flex-col items-center gap-2 rounded-lg border px-4 py-8 text-center text-sm">
+        <FolderGit2 className="text-ink-3 h-5 w-5" />
+        <p className="text-ink-1">{title}</p>
+        <p className="text-xs">{detail}</p>
+        <Button
+          className="mt-2"
+          variant="primary"
+          size="sm"
+          icon={<GitBranch size={14} />}
+          onClick={onInitialize}
+        >
+          {isGitRepository ? 'Create initial commit' : 'Initialize repository'}
+        </Button>
+        <p className="text-ink-3 text-[11px]">Adds a README.md and commits it.</p>
+      </div>
+    </div>
+  );
 }
 
 function ProjectHeader({
@@ -248,6 +305,24 @@ export function ProjectPanel({
       });
     });
   }, [addToast, refresh]);
+
+  // `git init` + first commit, for a project folder that is not a repo yet or
+  // is one with an unborn HEAD. Worktrees cannot branch from a commit-less
+  // repo, so this is what unblocks task creation for a brand new project.
+  const initializeRepository = useCallback(async () => {
+    try {
+      await api.projects.git.init(projectId);
+    } catch (error) {
+      addToast({
+        message: `Could not initialize repository: ${cleanIpcError(error)}`,
+        type: 'error',
+      });
+      return;
+    }
+    // `refresh` also clears the new-task forms' cached worktree eligibility,
+    // which this commit just flipped from false to true.
+    await refresh();
+  }, [addToast, projectId, refresh]);
 
   const { data: status } = useProjectGitStatus(projectId);
   const { data: branches } = useProjectBranches(projectId);
@@ -501,6 +576,12 @@ export function ProjectPanel({
   }
 
   const isGitRepository = status?.isGitRepository ?? true;
+  // Optimistic until the first status lands, so the panel does not flash the
+  // "initialize this repository" card at every project with history.
+  const hasCommits = status?.hasCommits ?? true;
+  // True whenever any ref holds a commit, so it is also true in the ordinary
+  // case; only a never-committed repo makes it false.
+  const hasCommitsElsewhere = status?.hasCommitsElsewhere ?? true;
 
   return (
     <div className="bg-bg-0 flex h-full min-h-0 flex-1 flex-col">
@@ -537,12 +618,21 @@ export function ProjectPanel({
         <ProjectLogoBackground project={project} showColorFallback />
       </ProjectHeader>
 
-      {isGitRepository && status && (
+      {/* Hidden only for a repo with no commits anywhere: an unborn HEAD has
+          nothing to push and no upstream, so Fetch/Pull/Push would produce raw
+          git errors ("src refspec does not match any") directly above a card
+          saying there are no commits yet.
+
+          Deliberately keyed on `hasCommitsElsewhere` rather than `hasCommits`,
+          which is weaker. The bar holds the panel's only branch selector, so
+          hiding it on an orphan branch would strand the user there with no way
+          back to the branch that has the history. */}
+      {isGitRepository && hasCommitsElsewhere && status && (
         <SyncBar projectId={projectId} status={status} />
       )}
 
       <div className="flex min-h-0 flex-1">
-        {isGitRepository ? (
+        {isGitRepository && hasCommits ? (
           <CommitHistory
             commits={commits}
             branch={status?.branch ?? ''}
@@ -580,16 +670,15 @@ export function ProjectPanel({
             }}
           />
         ) : (
-          <div className="flex min-w-0 flex-1 items-center justify-center p-5">
-            <div className="border-line-soft text-ink-3 flex flex-col items-center gap-2 rounded-lg border px-4 py-8 text-center text-sm">
-              <FolderGit2 className="text-ink-3 h-5 w-5" />
-              <p className="text-ink-1">Not a git repository</p>
-              <p className="text-xs">
-                Git status, branches and history are unavailable for this
-                project.
-              </p>
-            </div>
-          </div>
+          <EmptyRepositoryState
+            isGitRepository={isGitRepository}
+            hasCommitsElsewhere={status?.hasCommitsElsewhere ?? false}
+            /* `?? false` above, not the optimistic default: while status is
+               loading this card is not rendered at all, and if it ever were,
+               "fresh repo" is the safer story to tell than "orphan branch". */
+            branch={status?.branch ?? ''}
+            onInitialize={initializeRepository}
+          />
         )}
 
         {/* One right-hand column, four occupants. The commit history beside it

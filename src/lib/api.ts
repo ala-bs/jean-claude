@@ -685,6 +685,11 @@ export interface Api {
       push: (projectId: string) => Promise<void>;
       pull: (projectId: string) => Promise<void>;
       checkoutBranch: (projectId: string, branchName: string) => Promise<void>;
+      /**
+       * `git init` when needed, then seed a README and make the first commit.
+       * Safe to call on a repo that already has commits — it is a no-op there.
+       */
+      init: (projectId: string) => Promise<void>;
     };
     getCommitIgnore: (projectId: string) => Promise<string>;
     updateCommitIgnore: (projectId: string, content: string) => Promise<void>;
@@ -2377,6 +2382,8 @@ export const api: Api = hasWindowApi
         git: {
           getStatus: async () => ({
             isGitRepository: false,
+            hasCommits: false,
+            hasCommitsElsewhere: false,
             branch: '',
             isDetached: false,
             upstream: null,
@@ -2401,6 +2408,7 @@ export const api: Api = hasWindowApi
           push: async () => {},
           pull: async () => {},
           checkoutBranch: async () => {},
+          init: async () => {},
         },
         getCommitIgnore: async () => '',
         updateCommitIgnore: async () => {},

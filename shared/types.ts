@@ -322,6 +322,19 @@ export interface BranchInfo {
  */
 export interface ProjectGitStatus {
   isGitRepository: boolean;
+  /**
+   * False for a freshly `git init`-ed repo whose HEAD is still unborn. The
+   * panel offers to create the first commit in that state, so it needs to tell
+   * "no commits yet" apart from "not a repo at all".
+   */
+  hasCommits: boolean;
+  /**
+   * True when some ref in the repo holds a commit even though the checked-out
+   * branch has none — an orphan branch. Lets the panel tell "brand new
+   * project" apart from "repo with history, sitting on an orphan branch",
+   * which are the same unborn HEAD but very different situations to explain.
+   */
+  hasCommitsElsewhere: boolean;
   branch: string;
   isDetached: boolean;
   upstream: string | null;

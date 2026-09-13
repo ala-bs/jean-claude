@@ -1,5 +1,8 @@
+import { basename, join } from 'path';
 import { execFile } from 'child_process';
+import { existsSync } from 'fs';
 import { promisify } from 'util';
+import { writeFile } from 'fs/promises';
 
 import type {
   ProjectCommitDetail,
@@ -101,12 +104,123 @@ async function getRemoteUrl(
   }
 }
 
+/**
+ * True once the repo has at least one commit. A freshly `git init`-ed repo has
+ * an unborn HEAD, which makes `rev-parse` exit non-zero rather than print a
+ * hash — that failure is the signal, not an error.
+ *
+ * Only for callers with no `git status` output at hand; `getProjectGitStatus`
+ * reads the same fact off the `# branch.oid` header it already parses.
+ */
+async function hasCommits(repoPath: string): Promise<boolean> {
+  try {
+    await git(repoPath, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when any ref in the repo holds a commit, even if the checked-out branch
+ * does not. Distinguishes a never-committed repo from an orphan branch
+ * (`git checkout --orphan`), which also reports an unborn HEAD but sits on top
+ * of a repo with real history.
+ */
+async function hasAnyCommit(repoPath: string): Promise<boolean> {
+  try {
+    const { stdout } = await git(repoPath, [
+      'rev-list',
+      '--all',
+      '--max-count=1',
+    ]);
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Bring a project to a usable git state: initialize the repo when the folder
+ * is not one yet, then create the first commit so worktrees (which need a
+ * commit to branch from) become possible.
+ *
+ * Seeds a `README.md` because git cannot commit an empty tree without
+ * `--allow-empty`, and an empty-but-real first commit is more confusing than a
+ * one-line readme. An existing README is left untouched and simply committed.
+ */
+export async function initProjectRepository(repoPath: string): Promise<void> {
+  if (!existsSync(repoPath)) {
+    // A project row outliving its folder is ordinary (moved or deleted on
+    // disk). Spawning git with a non-existent cwd fails with an ENOENT that
+    // names node's spawn call rather than the missing directory.
+    throw new Error(`Project folder no longer exists: ${repoPath}`);
+  }
+
+  if (!(await isGitRepository(repoPath))) {
+    await gitWrite(repoPath, ['init']);
+  }
+
+  if (await hasCommits(repoPath)) {
+    // Somebody else got there first (a second click, or a terminal). The
+    // caller's goal is already satisfied, so this is success, not a conflict.
+    return;
+  }
+
+  const readmePath = join(repoPath, 'README.md');
+  if (!existsSync(readmePath)) {
+    await writeFile(readmePath, `# ${basename(repoPath)}\n`, 'utf-8');
+  }
+
+  // A `.gitignore` that excludes README.md makes `git add` refuse the path.
+  // Forcing it would override a choice the user wrote down, so fall back to an
+  // empty commit: the point is to give worktrees something to branch from, and
+  // that works with or without a file in it.
+  let staged = true;
+  try {
+    await gitWrite(repoPath, ['add', '--', 'README.md']);
+  } catch (error) {
+    if (!/ignored by one of your .gitignore/i.test(getExecErrorMessage(error))) {
+      throw error;
+    }
+    staged = false;
+  }
+
+  // Both forms are deliberately scoped to what this function created.
+  // `git checkout --orphan` also produces an unborn HEAD but leaves the
+  // previous branch's whole tree staged, and an unscoped commit there would
+  // sweep every one of those files into a commit the button describes as
+  // "adds a README.md and commits it". `--only` with no paths commits nothing;
+  // a pathspec commits only the README.
+  const commitArgs = staged
+    ? ['commit', '-m', 'Initial commit', '--', 'README.md']
+    : ['commit', '--allow-empty', '--only', '-m', 'Initial commit'];
+
+  try {
+    await gitWrite(repoPath, commitArgs);
+  } catch (error) {
+    const message = getExecErrorMessage(error);
+    // git's own wording here is a wall of setup instructions wrapped around the
+    // one fact that matters. Everything else propagates unchanged.
+    if (/tell me who you are|empty ident name|unable to auto-detect/i.test(message)) {
+      throw new Error(
+        'git needs an identity before it can commit. Set one with: ' +
+          'git config --global user.name "Your Name" and ' +
+          'git config --global user.email "you@example.com", then try again.',
+      );
+    }
+    throw error;
+  }
+}
+
 export async function getProjectGitStatus(
   repoPath: string,
 ): Promise<ProjectGitStatus> {
   if (!(await isGitRepository(repoPath))) {
     return {
       isGitRepository: false,
+      hasCommits: false,
+      hasCommitsElsewhere: false,
       branch: '',
       isDetached: false,
       upstream: null,
@@ -147,7 +261,18 @@ export async function getProjectGitStatus(
     remoteFromUpstream(parsed.upstream) ?? 'origin',
   );
 
-  return { isGitRepository: true, ...parsed, remoteUrl };
+  // `hasCommits` rides along in `parsed`: it comes from the `# branch.oid`
+  // header of the status output above, so it costs no extra subprocess.
+  return {
+    isGitRepository: true,
+    ...parsed,
+    // Only asked when HEAD is unborn, which is rare — so the common path keeps
+    // costing exactly one `git status`.
+    hasCommitsElsewhere: parsed.hasCommits
+      ? true
+      : await hasAnyCommit(repoPath),
+    remoteUrl,
+  };
 }
 
 /** Enough to inspect a messy tree without rendering an unbounded list. */

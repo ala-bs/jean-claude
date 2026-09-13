@@ -230,6 +230,8 @@ contextBridge.exposeInMainWorld('api', {
         ipcRenderer.invoke('projects:git:pull', projectId),
       checkoutBranch: (projectId: string, branchName: string) =>
         ipcRenderer.invoke('projects:git:checkoutBranch', projectId, branchName),
+      init: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:init', projectId),
     },
     getCommitIgnore: (projectId: string) =>
       ipcRenderer.invoke('projects:getCommitIgnore', projectId),
