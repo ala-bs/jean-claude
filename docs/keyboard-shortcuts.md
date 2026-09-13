@@ -91,19 +91,19 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `down` | work-item-list-nav | Navigate Down | `src/features/work-item/ui-work-item-list/index.tsx:157` |
 | `enter` | question-options | Activate Question Option | `src/features/agent/ui-question-options/index.tsx:868` |
 | `enter` | — | Execute Selected Command | `src/features/command-palette/ui-command-palette-overlay/index.tsx:96` |
-| `enter` | — | Toggle Work Item Selection | `src/features/new-task/ui-new-task-overlay/index.tsx:1859` |
+| `enter` | — | Toggle Work Item Selection | `src/features/new-task/ui-new-task-overlay/index.tsx:1863` |
 | `enter` | — | Open Todo Actions | `src/features/project/ui-backlog-overlay/index.tsx:469` |
 | `enter` | — | Select Highlighted Project Option | `src/features/project/ui-project-overlay/index.tsx:200` |
 | `escape` | — | Close Background Jobs Overlay | `src/features/background-jobs/ui-background-jobs-overlay/index.tsx:53` |
 | `escape` | — | Close Command Palette | `src/features/command-palette/ui-command-palette-overlay/index.tsx:88` |
 | `escape` | — | Close Mobile Preview | `src/features/mobile-preview/ui-mobile-preview-workspace/index.tsx:164` |
-| `escape` | — | Close or Go Back | `src/features/new-task/ui-new-task-overlay/index.tsx:1795` |
+| `escape` | — | Close or Go Back | `src/features/new-task/ui-new-task-overlay/index.tsx:1799` |
 | `escape` | — | Close Backlog | `src/features/project/ui-backlog-overlay/index.tsx:457` |
 | `escape` | — | Close Project Overlay | `src/features/project/ui-project-overlay/index.tsx:160` |
-| `escape` | — | Close Commit Diff | `src/features/project/ui-project-panel/index.tsx:396` |
-| `escape` | — | Close Command Logs | `src/features/project/ui-project-panel/index.tsx:405` |
-| `escape` | — | Close Terminal | `src/features/project/ui-project-panel/index.tsx:451` |
-| `escape` | — | Back to Task | `src/features/project/ui-project-panel/index.tsx:470` |
+| `escape` | — | Close Commit Diff | `src/features/project/ui-project-panel/index.tsx:471` |
+| `escape` | — | Close Command Logs | `src/features/project/ui-project-panel/index.tsx:480` |
+| `escape` | — | Close Terminal | `src/features/project/ui-project-panel/index.tsx:526` |
+| `escape` | — | Back to Task | `src/features/project/ui-project-panel/index.tsx:545` |
 | `escape` | — | Close Resources Overlay | `src/features/resources/ui-resources-overlay/index.tsx:460` |
 | `escape` | — | Close Running Commands Overlay | `src/features/run-commands/ui-running-commands-overlay/index.tsx:766` |
 | `escape` | — | Close Usage Overlay | `src/features/usage/ui-usage-overlay/index.tsx:801` |
@@ -139,7 +139,7 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+7` | feed-list-navigation | Go to Feed Item 7 | `src/features/feed/ui-feed-list/index.tsx:1440` |
 | `cmd+8` | feed-list-navigation | Go to Feed Item 8 | `src/features/feed/ui-feed-list/index.tsx:1446` |
 | `cmd+9` | feed-list-navigation | Go to Feed Item 9 | `src/features/feed/ui-feed-list/index.tsx:1452` |
-| `cmd+b` | — | Toggle Worktree | `src/features/new-task/ui-new-task-overlay/index.tsx:1808` |
+| `cmd+b` | — | Toggle Worktree | `src/features/new-task/ui-new-task-overlay/index.tsx:1812` |
 | `cmd+b` | — | Open Backlog | `src/routes/__root.tsx:336` |
 | `cmd+backspace` | — | Confirm Delete Command | `src/features/project/ui-run-commands-config/delete-command-dialog.tsx:30` |
 | `cmd+backspace` | — | Stop Selected Command | `src/features/run-commands/ui-running-commands-overlay/index.tsx:779` |
@@ -147,14 +147,14 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+d` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2336` |
 | `cmd+down` | — | Select Last Command | `src/features/command-palette/ui-command-palette-overlay/index.tsx:129` |
 | `cmd+down` | feed-list-navigation | Go to Next Feed Item | `src/features/feed/ui-feed-list/index.tsx:1464` |
-| `cmd+down` | — | Navigate to Next Project Grid Item | `src/features/new-task/ui-new-task-overlay/index.tsx:1851` |
-| `cmd+e` | — | Toggle File Explorer | `src/features/new-task/ui-new-task-overlay/index.tsx:1816` |
+| `cmd+down` | — | Navigate to Next Project Grid Item | `src/features/new-task/ui-new-task-overlay/index.tsx:1855` |
+| `cmd+e` | — | Toggle File Explorer | `src/features/new-task/ui-new-task-overlay/index.tsx:1820` |
 | `cmd+e` | task-panel | Open Review Files | `src/features/task/ui-task-panel/index.tsx:2300` |
 | `cmd+enter` | question-options | Submit Question Answers | `src/features/agent/ui-question-options/index.tsx:875` |
 | `cmd+enter` | — | Commit | `src/features/agent/ui-worktree-actions/commit-modal.tsx:89` |
 | `cmd+enter` | — | Merge | `src/features/agent/ui-worktree-actions/merge-confirm-dialog.tsx:189` |
 | `cmd+enter` | — | Commit And Push | `src/features/agent/ui-worktree-actions/push-confirm-dialog.tsx:44` |
-| `cmd+enter` | — | Next / Submit | `src/features/new-task/ui-new-task-overlay/index.tsx:1823` |
+| `cmd+enter` | — | Next / Submit | `src/features/new-task/ui-new-task-overlay/index.tsx:1827` |
 | `cmd+enter` | — | — | `src/features/project/ui-backlog-overlay/index.tsx:508` |
 | `cmd+enter` | — | Confirm Delete Command | `src/features/project/ui-run-commands-config/delete-command-dialog.tsx:30` |
 | `cmd+enter` | — | Confirm Change Worktree Path | `src/features/task/ui-task-panel/change-worktree-path-dialog.tsx:49` |
@@ -162,32 +162,32 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+enter` | — | Confirm Delete | `src/features/task/ui-task-panel/delete-task-dialog.tsx:50` |
 | `cmd+enter` | work-items-editor | Save Work Items | `src/features/task/ui-task-panel/index.tsx:1501` |
 | `cmd+enter` | pr-creation-form | Submit PR | `src/features/task/ui-task-pr-view/pr-creation-form.tsx:915` |
-| `cmd+f` | — | Search Commits | `src/features/project/ui-project-panel/index.tsx:375` |
-| `cmd+i` | — | — | `src/features/new-task/ui-new-task-overlay/index.tsx:2050` |
+| `cmd+f` | — | Search Commits | `src/features/project/ui-project-panel/index.tsx:450` |
+| `cmd+i` | — | — | `src/features/new-task/ui-new-task-overlay/index.tsx:2054` |
 | `cmd+i` | — | — | `src/features/task/ui-task-panel/add-step-dialog.tsx:1063` |
 | `cmd+j` | — | — | `src/features/settings/ui-skills-settings/create-with-agent-dialog.tsx:170` |
 | `cmd+j` | — | Activity Center | `src/routes/__root.tsx:209` |
 | `cmd+k` | — | Clear Selected Command Logs | `src/features/run-commands/ui-running-commands-overlay/index.tsx:785` |
-| `cmd+l` | — | Toggle Command Logs | `src/features/project/ui-project-panel/index.tsx:433` |
+| `cmd+l` | — | Toggle Command Logs | `src/features/project/ui-project-panel/index.tsx:508` |
 | `cmd+l` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2324` |
-| `cmd+left` | — | Navigate to Previous Project Tab | `src/features/new-task/ui-new-task-overlay/index.tsx:1837` |
-| `cmd+m` | — | Toggle Input Mode | `src/features/new-task/ui-new-task-overlay/index.tsx:1866` |
+| `cmd+left` | — | Navigate to Previous Project Tab | `src/features/new-task/ui-new-task-overlay/index.tsx:1841` |
+| `cmd+m` | — | Toggle Input Mode | `src/features/new-task/ui-new-task-overlay/index.tsx:1870` |
 | `cmd+m` | task-panel | Task Menu | `src/features/task/ui-task-panel/index.tsx:2284` |
-| `cmd+n` | — | Close New Task Overlay | `src/features/new-task/ui-new-task-overlay/index.tsx:1788` |
+| `cmd+n` | — | Close New Task Overlay | `src/features/new-task/ui-new-task-overlay/index.tsx:1792` |
 | `cmd+n` | — | New Task | `src/routes/__root.tsx:166` |
 | `cmd+o` | — | Open Project Overlay | `src/routes/__root.tsx:187` |
 | `cmd+p` | — | Close Command Palette | `src/features/command-palette/ui-command-palette-overlay/index.tsx:88` |
 | `cmd+p` | — | Switch Backlog Project | `src/features/project/ui-backlog-overlay/index.tsx:531` |
 | `cmd+p` | — | Open Command Palette | `src/routes/__root.tsx:102` |
-| `cmd+right` | — | Navigate to Next Project Tab | `src/features/new-task/ui-new-task-overlay/index.tsx:1830` |
+| `cmd+right` | — | Navigate to Next Project Tab | `src/features/new-task/ui-new-task-overlay/index.tsx:1834` |
 | `cmd+t` | — | — | `src/features/task/ui-task-panel/add-step-dialog.tsx:891` |
-| `cmd+u` | — | Run Command | `src/features/project/ui-project-panel/index.tsx:427` |
+| `cmd+u` | — | Run Command | `src/features/project/ui-project-panel/index.tsx:502` |
 | `cmd+u` | task-panel | Run Command | `src/features/task/ui-task-panel/index.tsx:2292` |
 | `cmd+up` | — | Select First Command | `src/features/command-palette/ui-command-palette-overlay/index.tsx:121` |
 | `cmd+up` | feed-list-navigation | Go to Previous Feed Item | `src/features/feed/ui-feed-list/index.tsx:1458` |
-| `cmd+up` | — | Navigate to Previous Project Grid Item | `src/features/new-task/ui-new-task-overlay/index.tsx:1844` |
+| `cmd+up` | — | Navigate to Previous Project Grid Item | `src/features/new-task/ui-new-task-overlay/index.tsx:1848` |
 | `cmd+w` | task-panel | Open Worktree in Editor | `src/features/task/ui-task-panel/index.tsx:2430` |
-| `ctrl+`` | — | Toggle Terminal | `src/features/project/ui-project-panel/index.tsx:442` |
+| `ctrl+`` | — | Toggle Terminal | `src/features/project/ui-project-panel/index.tsx:517` |
 | `shift+[` | pr-detail-tab-navigation | Previous PR Detail Tab | `src/features/pull-request/ui-pr-detail/index.tsx:203` |
 | `shift+]` | pr-detail-tab-navigation | Next PR Detail Tab | `src/features/pull-request/ui-pr-detail/index.tsx:197` |
 | `shift+enter` | — | Edit Selected Item | `src/features/project/ui-backlog-overlay/index.tsx:488` |
@@ -199,9 +199,9 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+shift+b` | skills-settings | Browse Skills Registry | `src/features/settings/ui-skills-settings/index.tsx:60` |
 | `cmd+shift+d` | feed-list-navigation | Dismiss Selected Feed Item | `src/features/feed/ui-feed-list/index.tsx:1470` |
 | `cmd+shift+d` | task-panel | Cycle Diff Mode | `src/features/task/ui-task-panel/index.tsx:2377` |
-| `cmd+shift+e` | — | Open Project in Editor | `src/features/project/ui-project-panel/index.tsx:419` |
+| `cmd+shift+e` | — | Open Project in Editor | `src/features/project/ui-project-panel/index.tsx:494` |
 | `cmd+shift+e` | task-panel | Open Project in Editor | `src/features/task/ui-task-panel/index.tsx:2422` |
-| `cmd+shift+escape` | — | Discard Draft and Close | `src/features/new-task/ui-new-task-overlay/index.tsx:1800` |
+| `cmd+shift+escape` | — | Discard Draft and Close | `src/features/new-task/ui-new-task-overlay/index.tsx:1804` |
 | `cmd+shift+f` | review-files-search | Focus File Search | `src/features/agent/ui-worktree-review-view/review-files-tree.tsx:223` |
 | `cmd+shift+f` | — | — | `src/features/project/ui-backlog-overlay/index.tsx:541` |
 | `cmd+shift+g` | task-panel | Toggle Pull Request | `src/features/task/ui-task-panel/index.tsx:2361` |
@@ -210,7 +210,7 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+shift+m` | worktree-actions | Merge Worktree | `src/features/agent/ui-worktree-actions/index.tsx:331` |
 | `cmd+shift+n` | step-flow-bar | Add Step | `src/features/task/ui-step-flow-bar/index.tsx:820` |
 | `cmd+shift+o` | pr-detail-tab-navigation | Open PR in Azure DevOps | `src/features/pull-request/ui-pr-detail/index.tsx:234` |
-| `cmd+shift+o` | work-item-workspace | Open Work Item in Azure DevOps | `src/features/work-item/ui-work-item-workspace/index.tsx:740` |
+| `cmd+shift+o` | work-item-workspace | Open Work Item in Azure DevOps | `src/features/work-item/ui-work-item-workspace/index.tsx:743` |
 | `cmd+shift+p` | worktree-actions | Create Pull Request | `src/features/agent/ui-worktree-actions/index.tsx:341` |
 | `cmd+shift+p` | feed-list-navigation | Toggle Pin on Selected Feed Item | `src/features/feed/ui-feed-list/index.tsx:1486` |
 | `cmd+shift+r` | task-panel | Cycle Review Mode | `src/features/task/ui-task-panel/index.tsx:2392` |

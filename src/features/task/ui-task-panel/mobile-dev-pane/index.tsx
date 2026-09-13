@@ -7,9 +7,17 @@ import {
   Smartphone,
   Square,
   Star,
+  Trash2,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type MouseEvent as ReactMouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import clsx from 'clsx';
 
 import {
@@ -118,6 +126,7 @@ export function MobileDevPane({
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const addToast = useToastStore((state) => state.addToast);
   const activeDeviceKeyRef = useRef('');
+  const paneRef = useRef<HTMLDivElement>(null);
   const [bootError, setBootError] = useState<string | null>(null);
 
   const appPath = useMemo(
@@ -339,6 +348,58 @@ export function MobileDevPane({
         : undefined,
     ) ?? null;
 
+  // Bump the generation before the IPC call so late chunks from the old
+  // generation are dropped instead of repopulating the box after the clear.
+  const resetRunCommandLogs = useTaskMessagesStore(
+    (state) => state.resetRunCommandLogs,
+  );
+  const handleClearLogs = useCallback(() => {
+    const generation = resetRunCommandLogs(taskId, devServerCommandId);
+    void api.runCommands.resetLogs({
+      taskId,
+      runCommandId: devServerCommandId,
+      generation,
+    });
+  }, [devServerCommandId, resetRunCommandLogs, taskId]);
+
+  // Scoped to the pane: ⌘K is already bound elsewhere (command logs pane, run
+  // commands overlay), so this must only fire while focus is inside here.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
+        return;
+      }
+      if (event.key.toLowerCase() !== 'k') return;
+
+      const target = event.target;
+      if (!(target instanceof Node) || !paneRef.current?.contains(target)) {
+        return;
+      }
+
+      event.preventDefault();
+      handleClearLogs();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleClearLogs]);
+
+  // Without this the pane never holds focus (clicks land on body, and the only
+  // focusable child is the log box, which exists only while expanded), so the
+  // containment gate above would reject every ⌘K. Interactive targets are left
+  // alone so the device combobox keeps managing its own focus.
+  const focusPane = useCallback((event: ReactMouseEvent) => {
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      target.closest('input, textarea, select, button, [contenteditable]')
+    ) {
+      return;
+    }
+    paneRef.current?.focus();
+  }, []);
+
   const handleSelectDevice = useCallback(
     (deviceKey: string) => {
       setBootError(null);
@@ -502,6 +563,9 @@ export function MobileDevPane({
 
   return (
     <div
+      ref={paneRef}
+      tabIndex={-1}
+      onMouseDown={focusPane}
       style={{ width }}
       data-mobile-dev-pane
       className="panel-edge-shadow bg-bg-0 relative flex h-full flex-col"
@@ -763,21 +827,29 @@ export function MobileDevPane({
       <Separator />
 
       {/* Logs */}
-      <button
-        type="button"
-        onClick={() => setLogsExpanded(!logsExpanded)}
-        className="text-ink-2 hover:bg-bg-1 flex shrink-0 items-center gap-1.5 px-4 py-2 text-xs font-medium"
-        aria-expanded={logsExpanded}
-      >
-        <ChevronRight
-          aria-hidden
-          className={clsx(
-            'size-3.5 transition-transform',
-            logsExpanded && 'rotate-90',
-          )}
+      <div className="flex shrink-0 items-center justify-between pr-2">
+        <button
+          type="button"
+          onClick={() => setLogsExpanded(!logsExpanded)}
+          className="text-ink-2 hover:bg-bg-1 flex flex-1 items-center gap-1.5 px-4 py-2 text-xs font-medium"
+          aria-expanded={logsExpanded}
+        >
+          <ChevronRight
+            aria-hidden
+            className={clsx(
+              'size-3.5 transition-transform',
+              logsExpanded && 'rotate-90',
+            )}
+          />
+          Logs
+        </button>
+        <IconButton
+          onClick={handleClearLogs}
+          size="sm"
+          icon={<Trash2 />}
+          tooltip="Clear logs (⌘K)"
         />
-        Logs
-      </button>
+      </div>
 
       {logsExpanded && (
         <InteractiveLog
