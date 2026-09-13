@@ -1010,6 +1010,9 @@ const useStore = create<NavigationState>()(
             {
               rightPane: taskState.rightPane,
               activeView: taskState.activeView,
+              // Remember the last focused step so reopening a task restores it
+              // instead of falling back to the most recent step.
+              activeStepId: taskState.activeStepId,
               diffView: {
                 selectedFilePath: taskState.diffView.selectedFilePath,
                 // Serialize Set as array for JSON persistence

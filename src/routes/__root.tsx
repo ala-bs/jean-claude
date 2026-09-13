@@ -459,12 +459,14 @@ function useCleanupNonActiveTasks() {
       // Prune diff review state (reviewed files, tabs, groups)
       pruneOrphanedDiffReviewState(existingIds);
 
-      // Prune navigation task state
+      // Prune navigation task state. Keyed on existence, not activity: nav
+      // state holds the last focused step, and reopening a *completed* task to
+      // re-read a step is exactly when restoring that focus matters.
       // Note: clearTaskNavHistoryState also calls clearReviewCommentsForTask
       // internally, but pruneOrphanedReviewComments above already handled that.
       const navState = useNavigationStore.getState();
       for (const taskId of Object.keys(navState.taskState)) {
-        if (!activeIds.has(taskId)) {
+        if (!existingIds.has(taskId)) {
           navState.clearTaskNavHistoryState(taskId);
         }
       }

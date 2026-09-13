@@ -1575,7 +1575,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   // Auto-select an active step when none is selected
   useEffect(() => {
     if (!steps || steps.length === 0) return;
-    // If the currently selected step still exists, keep it
+    // If the currently selected step still exists, keep it. This selection is
+    // persisted, so on reopen the last focused step wins over the fallbacks
+    // below. Archived steps count: the flow bar lets you click one to read it.
     if (activeStepId && steps.some((s) => s.id === activeStepId)) return;
 
     // This effect also repairs a dangling selection (deleted step), so it must
