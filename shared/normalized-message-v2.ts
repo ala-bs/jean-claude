@@ -178,6 +178,52 @@ export type NormalizedToolUse = {
       };
     }
   | {
+      /**
+       * Synthetic entry describing how merge conflicts were resolved during a
+       * turn. Emitted separately from the turn summary because a `git merge`
+       * brings in far more files than the few the agent resolved by hand.
+       *
+       * Deliberately its own variant rather than a flavour of `edit`: the union
+       * discriminates on `name`, so every existing `edit` consumer stays correct
+       * without needing to know this entry exists.
+       */
+      name: 'merge-resolution';
+      input: {
+        /** Short sha of the branch merged into. */
+        oursSha: string;
+        /** Short sha of the incoming branch. */
+        theirsSha: string;
+        theirsLabel?: string;
+        /** The conflicted file list was capped. */
+        truncated?: boolean;
+        files: {
+          filePath: string;
+          /** The resolution removed the file. */
+          deleted?: boolean;
+          /**
+           * Sides that exist but were too large, too binary, or not a blob at
+           * all (a submodule pointer) to capture. Distinct from a side with
+           * genuinely no content, which would otherwise render as an empty diff
+           * or a false deletion. Per side, so one oversized side does not blank
+           * out a diff whose own two sides were captured.
+           */
+          unavailable?: ('base' | 'ours' | 'theirs' | 'resolved')[];
+          /** Common ancestor. Absent for an add/add conflict. */
+          base?: string;
+          /** The branch being merged into. */
+          ours?: string;
+          /** The incoming branch. */
+          theirs?: string;
+          /** What the agent committed. */
+          resolved?: string;
+          additions: number;
+          deletions: number;
+        }[];
+      };
+      /** Never set — synthetic entries have no backend result to report. */
+      result?: {};
+    }
+  | {
       name: 'exit-plan-mode';
       input: {
         plan: string;

@@ -1226,6 +1226,9 @@ export function getFileChangeToolEntries(
   const entries: NormalizedEntry[] = [];
   const promptMs = parseDateMs(promptEntry?.date);
 
+  // Merge-resolution entries are their own tool name, so `isFileChangeToolEntry`
+  // already excludes them from the turn's file stats — they describe files the
+  // turn summary reports, and counting both would double every line count.
   function addEntry(entry: NormalizedEntry) {
     if (!isFileChangeToolEntry(entry)) return;
 
