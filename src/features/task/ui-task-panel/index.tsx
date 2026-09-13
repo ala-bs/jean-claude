@@ -66,6 +66,12 @@ import { formatModelName, getModelFromEntry } from '@/hooks/use-model';
 import { ComposerCollapsedBar } from '@/features/agent/ui-composer-collapsed-bar';
 
 import {
+  type ConfiguredWorkItemProject,
+  CURRENT_ITERATION_DEFAULT_FILTERS,
+  WORK_ITEM_SELECTION_EXCLUDE_TYPES,
+  WorkItemWorkspace,
+} from '@/features/work-item/ui-work-item-workspace';
+import {
   getDefaultInteractionModeForBackend,
   getInteractionModeOptions,
   type InteractionMode,
@@ -189,15 +195,14 @@ import { useOverlaysStore } from '@/stores/overlays';
 import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
 import { usePrWorkspaceActions } from '@/hooks/use-pr-workspace-actions';
 import { usePullBranch } from '@/hooks/use-worktree-diff';
+import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { useSkills } from '@/hooks/use-skills';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useTaskRootPath } from '@/hooks/use-task-root-path';
 import { useToastStore } from '@/stores/toasts';
 import { useWorkItemById } from '@/hooks/use-work-items';
-import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
 import { WorkItemChip } from '@/common/ui/work-item-chip';
-import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 import { WorktreeReviewView } from '@/features/agent/ui-worktree-review-view';
 
 import {
@@ -1422,10 +1427,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const stepStartJobIdsRef = useRef<Map<string, string>>(new Map());
   const [showWorkItemsEditor, setShowWorkItemsEditor] = useState(false);
   const [workItemsFilter, setWorkItemsFilter] = useState('');
-  const {
-    iterationFilter: workItemsIterationFilter,
-    setIterationFilter: setWorkItemsIterationFilter,
-  } = useWorkItemPickerIterationFilter(projectId);
   // Buffered selection state for work items modal (applied on submit)
   const [draftWorkItemIds, setDraftWorkItemIds] = useState<string[]>([]);
   const [draftWorkItemUrls, setDraftWorkItemUrls] = useState<string[]>([]);
@@ -1454,6 +1455,34 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     setDraftWorkItemIds([]);
     setDraftWorkItemUrls([]);
   }, []);
+
+  // Set by WorkItemWorkspace. Escape pops its details pane stack before the
+  // modal closes, which would otherwise discard the buffered selection.
+  const workItemEscapeInterceptorRef = useRef<(() => boolean) | null>(null);
+  const closeWorkItemsEditor = useCallback(() => {
+    setShowWorkItemsEditor(false);
+  }, []);
+  useRegisterKeyboardBindings(
+    'task-panel-work-items-editor',
+    showWorkItemsEditor
+      ? {
+          escape: () => {
+            if (workItemEscapeInterceptorRef.current?.()) return true;
+            closeWorkItemsEditor();
+            return true;
+          },
+        }
+      : {},
+  );
+
+  const workItemsSelection = useMemo(
+    () => ({
+      selectedWorkItemIds: draftWorkItemIds,
+      onToggleSelect: handleWorkItemToggle,
+      onClearSelection: handleClearWorkItems,
+    }),
+    [draftWorkItemIds, handleWorkItemToggle, handleClearWorkItems],
+  );
 
   const handleSubmitWorkItems = useCallback(() => {
     updateTask.mutate({
@@ -2778,7 +2807,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             {hasWorkItemsLink && (
               <Modal
                 isOpen={showWorkItemsEditor}
-                onClose={() => setShowWorkItemsEditor(false)}
+                onClose={closeWorkItemsEditor}
+                closeOnEscape={false}
                 title="Linked Work Items"
                 size="xl"
               >
@@ -2795,19 +2825,17 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     />
                   </div>
 
-                  {/* Picker */}
-                  <div className="min-h-0 flex-1">
-                    <WorkItemPicker
-                      appProjectId={project.id}
-                      providerId={project.workItemProviderId!}
-                      projectId={project.workItemProjectId!}
-                      projectName={project.workItemProjectName!}
-                      selectedWorkItemIds={draftWorkItemIds}
-                      onToggleSelect={handleWorkItemToggle}
-                      onClearSelection={handleClearWorkItems}
-                      filter={workItemsFilter}
-                      iterationFilter={workItemsIterationFilter}
-                      onIterationFilterChange={setWorkItemsIterationFilter}
+                  {/* Board / list workspace */}
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <WorkItemWorkspace
+                      project={project as ConfiguredWorkItemProject}
+                      surface="task-panel"
+                      selection={workItemsSelection}
+                      escapeInterceptorRef={workItemEscapeInterceptorRef}
+                      search={workItemsFilter}
+                      onSearchChange={setWorkItemsFilter}
+                      defaultFilters={CURRENT_ITERATION_DEFAULT_FILTERS}
+                      excludeWorkItemTypes={WORK_ITEM_SELECTION_EXCLUDE_TYPES}
                     />
                   </div>
 

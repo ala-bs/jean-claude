@@ -5,7 +5,6 @@ export type DiffViewMode = 'inline' | 'side-by-side' | 'current-state';
 
 interface UISettings {
   sidebarCollapsed: boolean;
-  workItemsPanelWidth: number;
   diffViewMode: DiffViewMode;
   reactScanEnabled: boolean;
   prProjectOrder: string[];
@@ -13,7 +12,6 @@ interface UISettings {
 
 const UI_SETTINGS_DEFAULTS: UISettings = {
   sidebarCollapsed: false,
-  workItemsPanelWidth: 50,
   diffViewMode: 'inline',
   reactScanEnabled: false,
   prProjectOrder: [],
@@ -25,10 +23,6 @@ function validateSettings(settings: UISettings): UISettings {
     prProjectOrder: Array.isArray(settings.prProjectOrder)
       ? settings.prProjectOrder.filter((id) => typeof id === 'string')
       : [],
-    workItemsPanelWidth: Math.min(
-      80,
-      Math.max(20, settings.workItemsPanelWidth),
-    ),
   };
 }
 
@@ -45,8 +39,6 @@ function migrateLegacyKeys(raw: Record<string, unknown>): Partial<UISettings> {
   const legacy: Partial<UISettings> = {};
   if (typeof raw.sidebarCollapsed === 'boolean')
     legacy.sidebarCollapsed = raw.sidebarCollapsed;
-  if (typeof raw.workItemsPanelWidth === 'number')
-    legacy.workItemsPanelWidth = raw.workItemsPanelWidth;
   if (
     raw.diffViewMode === 'inline' ||
     raw.diffViewMode === 'side-by-side' ||

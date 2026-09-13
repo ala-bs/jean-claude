@@ -4,7 +4,7 @@ import {
   clampBoardWidth,
   createBoardResize,
   getKeyboardBoardWidth,
-} from '@/features/work-item/ui-azure-board-overlay/board-split-pane-utils';
+} from '@/features/work-item/ui-work-item-workspace/board-split-pane-utils';
 
 describe('board split pane sizing', () => {
   it('clamps calculated pointer widths to the board range', () => {

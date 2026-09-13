@@ -46,6 +46,12 @@ import {
   useComposerFileCommentsStore,
 } from '@/stores/composer-file-comments';
 import {
+  type ConfiguredWorkItemProject,
+  CURRENT_ITERATION_DEFAULT_FILTERS,
+  WORK_ITEM_SELECTION_EXCLUDE_TYPES,
+  WorkItemWorkspace,
+} from '@/features/work-item/ui-work-item-workspace';
+import {
   deleteAttachmentFiles,
   findMissingAttachmentPaths,
 } from '@/lib/prompt-attachment-cleanup';
@@ -71,7 +77,6 @@ import {
   type InputMode,
   useNewTaskDraftMetadata,
   useNewTaskDraftStore,
-  type WorkItemsViewMode,
 } from '@/stores/new-task-draft';
 import {
   KeyboardLayerProvider,
@@ -123,7 +128,6 @@ import {
   useWorkItemComments,
   useWorkItems,
 } from '@/hooks/use-work-items';
-import { useUISetting, useUIStore } from '@/stores/ui';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
@@ -145,8 +149,6 @@ import { useCommands } from '@/common/hooks/use-commands';
 import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
 import { useProjectSkills } from '@/hooks/use-skills';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
-import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
-import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 
 
 
@@ -172,6 +174,8 @@ function projectHasWorkItems(project: Project | null): boolean {
 }
 
 const EMPTY_PROMPT_FILES: PromptFilePart[] = [];
+/** Stable fallback so a fresh `[]` doesn't defeat the workspace's memoization. */
+const EMPTY_WORK_ITEM_IDS: string[] = [];
 
 const FinalPromptPreviewButton = memo(function FinalPromptPreviewButton({
   getPrompt,
@@ -582,14 +586,9 @@ export function NewTaskOverlay({
   const [highlightedWorkItemId, setHighlightedWorkItemId] = useState<
     string | null
   >(null);
+  // Set by WorkItemWorkspace so Escape pops its details pane stack first.
+  const workItemEscapeInterceptorRef = useRef<(() => boolean) | null>(null);
 
-  // Persisted panel width for work items picker
-  const workItemsPanelWidth = useUISetting('workItemsPanelWidth');
-  const setUISetting = useUIStore((s) => s.setSetting);
-  const handlePanelWidthChange = useCallback(
-    (width: number) => setUISetting('workItemsPanelWidth', width),
-    [setUISetting],
-  );
 
   const { triggerAnimation } = useShrinkToTarget({
     panelRef,
@@ -625,10 +624,6 @@ export function NewTaskOverlay({
         : null,
     [selectedProjectId, projects],
   );
-  const {
-    iterationFilter: workItemsIterationFilter,
-    setIterationFilter: setWorkItemsIterationFilter,
-  } = useWorkItemPickerIterationFilter(selectedProjectId);
   useEffect(() => {
     if (projectsLoading || selectedProjectId === null || selectedProject) {
       return;
@@ -1679,6 +1674,11 @@ export function NewTaskOverlay({
       return false;
     }
 
+    // The work item details pane steps back one level before the overlay closes.
+    if (workItemEscapeInterceptorRef.current?.()) {
+      return true;
+    }
+
     if (inputMode === 'search' && searchStep === 'compose') {
       // In compose step, go back to select
       backToSelect();
@@ -1686,6 +1686,7 @@ export function NewTaskOverlay({
       // Otherwise close overlay
       onClose();
     }
+    return true;
   }, [isPromptAutocompleteOpen, inputMode, searchStep, backToSelect, onClose]);
 
   // Show search input only in select step
@@ -1992,18 +1993,11 @@ export function NewTaskOverlay({
                 <SearchModeContent
                   project={selectedProject}
                   draftKey={draftKey}
-                  selectedWorkItemIds={draft?.workItemIds ?? []}
-                  viewMode={draft?.workItemsViewMode ?? 'board'}
-                  onViewModeChange={(mode: WorkItemsViewMode) =>
-                    updateDraft({ workItemsViewMode: mode })
-                  }
-                  iterationFilter={workItemsIterationFilter}
-                  onIterationFilterChange={setWorkItemsIterationFilter}
+                  selectedWorkItemIds={draft?.workItemIds ?? EMPTY_WORK_ITEM_IDS}
                   onWorkItemToggle={handleWorkItemToggle}
                   onClearSelectedWorkItems={handleClearSelectedWorkItems}
                   onHighlightChange={setHighlightedWorkItemId}
-                  panelWidth={workItemsPanelWidth}
-                  onPanelWidthChange={handlePanelWidthChange}
+                  escapeInterceptorRef={workItemEscapeInterceptorRef}
                   onAdvanceToCompose={advanceToCompose}
                   canAdvance={canAdvanceToCompose}
                 />
@@ -2606,30 +2600,20 @@ function SearchModeContent({
   project,
   draftKey,
   selectedWorkItemIds,
-  viewMode,
-  onViewModeChange,
-  iterationFilter,
-  onIterationFilterChange,
   onWorkItemToggle,
   onClearSelectedWorkItems,
   onHighlightChange,
-  panelWidth,
-  onPanelWidthChange,
+  escapeInterceptorRef,
   onAdvanceToCompose,
   canAdvance,
 }: {
   project: Project | null;
   draftKey: string;
   selectedWorkItemIds: string[];
-  viewMode: WorkItemsViewMode;
-  onViewModeChange: (mode: WorkItemsViewMode) => void;
-  iterationFilter: string;
-  onIterationFilterChange: (iterationFilter: string) => void;
   onWorkItemToggle: (workItem: AzureDevOpsWorkItem) => void;
   onClearSelectedWorkItems: () => void;
   onHighlightChange?: (workItemId: string | null) => void;
-  panelWidth?: number;
-  onPanelWidthChange?: (width: number) => void;
+  escapeInterceptorRef: React.RefObject<(() => boolean) | null>;
   onAdvanceToCompose: () => void;
   canAdvance: boolean;
 }) {
@@ -2640,6 +2624,19 @@ function SearchModeContent({
   // select" land on the previously highlighted item.
   const filter = useNewTaskDraftStore(
     (state) => state.drafts[draftKey]?.workItemsFilter ?? '',
+  );
+  const setDraft = useNewTaskDraftStore((state) => state.setDraft);
+  const handleSearchChange = useCallback(
+    (workItemsFilter: string) => setDraft(draftKey, { workItemsFilter }),
+    [draftKey, setDraft],
+  );
+  const selection = useMemo(
+    () => ({
+      selectedWorkItemIds,
+      onToggleSelect: onWorkItemToggle,
+      onClearSelection: onClearSelectedWorkItems,
+    }),
+    [selectedWorkItemIds, onWorkItemToggle, onClearSelectedWorkItems],
   );
 
   if (!project) {
@@ -2666,23 +2663,18 @@ function SearchModeContent({
   }
 
   return (
-    <WorkItemPicker
-      appProjectId={project.id}
-      providerId={project.workItemProviderId!}
-      projectId={project.workItemProjectId!}
-      projectName={project.workItemProjectName!}
-      selectedWorkItemIds={selectedWorkItemIds}
-      onToggleSelect={onWorkItemToggle}
-      onClearSelection={onClearSelectedWorkItems}
+    <WorkItemWorkspace
+      key={project.id}
+      project={project as ConfiguredWorkItemProject}
+      surface="new-task"
+      selection={selection}
       onHighlightChange={onHighlightChange}
-      filter={filter}
-      viewMode={viewMode}
-      onViewModeChange={onViewModeChange}
-      iterationFilter={iterationFilter}
-      onIterationFilterChange={onIterationFilterChange}
-      panelWidth={panelWidth}
-      onPanelWidthChange={onPanelWidthChange}
-      headerRight={
+      escapeInterceptorRef={escapeInterceptorRef}
+      search={filter}
+      onSearchChange={handleSearchChange}
+      defaultFilters={CURRENT_ITERATION_DEFAULT_FILTERS}
+      excludeWorkItemTypes={WORK_ITEM_SELECTION_EXCLUDE_TYPES}
+      headerActions={
         canAdvance ? (
           <Button variant="primary" size="sm" onClick={onAdvanceToCompose}>
             Next

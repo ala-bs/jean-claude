@@ -8,7 +8,7 @@ import { flushSync } from 'react-dom';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { useToastStore } from '@/stores/toasts';
 
-import { AzureWorkItemActions } from './project-content';
+import { AzureWorkItemActions } from './index';
 
 const workItem = {
   id: 123,

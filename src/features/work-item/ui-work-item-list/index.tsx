@@ -79,6 +79,7 @@ export function WorkItemList({
   search,
   onToggleSelect,
   onHighlight,
+  showSelection = true,
 }: {
   workItems: AzureDevOpsWorkItem[];
   highlightedWorkItemId: string | null;
@@ -86,8 +87,10 @@ export function WorkItemList({
   selectedWorkItemIds: string[];
   providerId?: string;
   search: string;
-  onToggleSelect: (workItem: AzureDevOpsWorkItem) => void;
+  onToggleSelect?: (workItem: AzureDevOpsWorkItem) => void;
   onHighlight: (workItem: AzureDevOpsWorkItem) => void;
+  /** Browse-only surfaces hide the checkbox, mirroring `WorkItemBoard`. */
+  showSelection?: boolean;
 }) {
   const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
@@ -233,19 +236,21 @@ export function WorkItemList({
             )}
           >
             {/* Selection checkbox */}
-            <button
-              type="button"
-              aria-label={`${isSelected ? 'Deselect' : 'Select'} work item #${workItem.id}`}
-              aria-checked={isSelected}
-              role="checkbox"
-              onClick={(event) => {
-                event.stopPropagation();
-                onToggleSelect(workItem);
-              }}
-              className="rounded"
-            >
-              <SelectionCheckbox checked={isSelected} />
-            </button>
+            {showSelection && onToggleSelect && (
+              <button
+                type="button"
+                aria-label={`${isSelected ? 'Deselect' : 'Select'} work item #${workItem.id}`}
+                aria-checked={isSelected}
+                role="checkbox"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleSelect(workItem);
+                }}
+                className="rounded"
+              >
+                <SelectionCheckbox checked={isSelected} />
+              </button>
+            )}
 
             {/* Type icon */}
             <WorkItemTypeIcon type={workItem.fields.workItemType} />
