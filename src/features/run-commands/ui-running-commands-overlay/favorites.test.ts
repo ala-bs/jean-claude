@@ -467,6 +467,192 @@ describe('running commands overlay favorites', () => {
     expect(startFavoriteGroup).toHaveBeenCalledTimes(1);
   });
 
+  it('does not restart a fully running group when its row is clicked again', async () => {
+    storedGroups = [{ ...group, isFavorite: true }];
+    const startFavoriteGroup = vi.spyOn(api.runCommands, 'startFavoriteGroup');
+    useTaskMessagesStore.setState({
+      runCommandRunning: {
+        'project-root:project-1': {
+          isRunning: true,
+          commands: [
+            {
+              id: 'command-1',
+              name: 'Web server',
+              command: 'pnpm dev',
+              status: 'running',
+            },
+            {
+              id: 'command-2',
+              name: 'Worker',
+              command: 'pnpm worker',
+              status: 'running',
+            },
+          ],
+        },
+      },
+    });
+
+    render();
+    await flushUpdates();
+
+    click(button('Dev stack'));
+    await flushUpdates();
+
+    // Re-clicking a running group must not stop it: `startFavoriteGroup`
+    // retires the in-flight run before starting a new one.
+    expect(startFavoriteGroup).not.toHaveBeenCalled();
+  });
+
+  it('does not restart a running group whose waitForExit step has finished', async () => {
+    // `command-2` is a build step: it is *meant* to be stopped while the dev
+    // server (`command-1`) keeps running.
+    storedGroups = [
+      {
+        ...group,
+        isFavorite: true,
+        stages: [
+          {
+            id: 'stage-1',
+            delayMs: 0,
+            entries: [{ commandId: 'command-2', waitForExit: true }],
+          },
+          {
+            id: 'stage-2',
+            delayMs: 0,
+            entries: [{ commandId: 'command-1', waitForExit: false }],
+          },
+        ],
+      },
+    ];
+    const startFavoriteGroup = vi.spyOn(api.runCommands, 'startFavoriteGroup');
+    useTaskMessagesStore.setState({
+      runCommandRunning: {
+        'project-root:project-1': {
+          isRunning: true,
+          commands: [
+            {
+              id: 'command-1',
+              name: 'Web server',
+              command: 'pnpm dev',
+              status: 'running',
+            },
+            {
+              id: 'command-2',
+              name: 'Worker',
+              command: 'pnpm worker',
+              status: 'stopped',
+            },
+          ],
+        },
+      },
+    });
+
+    render();
+    await flushUpdates();
+
+    click(button('Dev stack'));
+    await flushUpdates();
+
+    expect(startFavoriteGroup).not.toHaveBeenCalled();
+  });
+
+  it('reruns a group whose waitForExit step errored', async () => {
+    storedGroups = [
+      {
+        ...group,
+        isFavorite: true,
+        stages: [
+          {
+            id: 'stage-1',
+            delayMs: 0,
+            entries: [{ commandId: 'command-2', waitForExit: true }],
+          },
+          {
+            id: 'stage-2',
+            delayMs: 0,
+            entries: [{ commandId: 'command-1', waitForExit: false }],
+          },
+        ],
+      },
+    ];
+    const startFavoriteGroup = vi
+      .spyOn(api.runCommands, 'startFavoriteGroup')
+      .mockResolvedValue(startedStatus);
+    useTaskMessagesStore.setState({
+      runCommandRunning: {
+        'project-root:project-1': {
+          isRunning: true,
+          commands: [
+            {
+              id: 'command-1',
+              name: 'Web server',
+              command: 'pnpm dev',
+              status: 'running',
+            },
+            {
+              id: 'command-2',
+              name: 'Worker',
+              command: 'pnpm worker',
+              status: 'errored',
+            },
+          ],
+        },
+      },
+    });
+
+    render();
+    await flushUpdates();
+
+    click(button('Dev stack'));
+    await flushUpdates();
+
+    // A failed build step is not "finished on purpose" — the click must rerun.
+    expect(startFavoriteGroup).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      groupId: 'group-1',
+    });
+  });
+
+  it('starts a partially running group when its row is clicked', async () => {
+    storedGroups = [{ ...group, isFavorite: true }];
+    const startFavoriteGroup = vi
+      .spyOn(api.runCommands, 'startFavoriteGroup')
+      .mockResolvedValue(startedStatus);
+    useTaskMessagesStore.setState({
+      runCommandRunning: {
+        'project-root:project-1': {
+          isRunning: true,
+          commands: [
+            {
+              id: 'command-1',
+              name: 'Web server',
+              command: 'pnpm dev',
+              status: 'running',
+            },
+            {
+              id: 'command-2',
+              name: 'Worker',
+              command: 'pnpm worker',
+              status: 'stopped',
+            },
+          ],
+        },
+      },
+    });
+
+    render();
+    await flushUpdates();
+
+    click(button('Dev stack'));
+    await flushUpdates();
+
+    // One member is down, so the click still has work to do.
+    expect(startFavoriteGroup).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      groupId: 'group-1',
+    });
+  });
+
   it('unfavorites a group from the favorites list', async () => {
     storedGroups = [{ ...group, isFavorite: true }];
 
