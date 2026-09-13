@@ -1,7 +1,6 @@
 // electron/services/azure-devops-service.ts
 
 import { createHash } from 'crypto';
-import { spawn } from 'child_process';
 
 
 import type {
@@ -35,9 +34,9 @@ import {
 
 import { createDebug, dbg } from '../lib/debug';
 import { azureHtmlToMarkdown } from './azure-html-to-markdown';
+import { cloneFromUrl } from './git-clone-service';
 import { logPrImageEventSync } from '../lib/pr-image-log';
 import { ProviderRepository } from '../database/repositories/providers';
-import { sendGlobalPromptToWindow } from './global-prompt-service';
 import { TokenRepository } from '../database/repositories/tokens';
 
 export { azureHtmlToMarkdown } from './azure-html-to-markdown';
@@ -2163,10 +2162,6 @@ export interface CloneRepositoryResult {
   error?: string;
 }
 
-// Regex patterns to detect SSH host authenticity prompt
-const SSH_AUTHENTICITY_PATTERN = /The authenticity of host '([^']+)'/;
-const FINGERPRINT_PATTERN = /(\w+) key fingerprint is ([^\s.]+)/;
-
 export async function cloneRepository(
   params: CloneRepositoryParams,
 ): Promise<CloneRepositoryResult> {
@@ -2176,77 +2171,9 @@ export async function cloneRepository(
   // Format: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
   const sshUrl = `git@ssh.dev.azure.com:v3/${orgName}/${encodeURIComponent(projectName)}/${encodeURIComponent(repoName)}`;
 
-  return new Promise((resolve) => {
-    const gitProcess = spawn('git', ['clone', sshUrl, targetPath], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    let stderr = '';
-    let promptHandled = false;
-
-    gitProcess.stderr.on('data', async (data: Buffer) => {
-      stderr += data.toString();
-
-      // Check for SSH host authenticity prompt
-      if (!promptHandled && SSH_AUTHENTICITY_PATTERN.test(stderr)) {
-        promptHandled = true;
-
-        const hostMatch = stderr.match(SSH_AUTHENTICITY_PATTERN);
-        const fingerprintMatch = stderr.match(FINGERPRINT_PATTERN);
-
-        const host = hostMatch?.[1] ?? 'unknown';
-        const keyType = fingerprintMatch?.[1] ?? 'Unknown';
-        const fingerprint = fingerprintMatch?.[2] ?? 'unknown';
-
-        const accepted = await sendGlobalPromptToWindow({
-          title: 'Unknown SSH Host',
-          message: `The authenticity of host '${host}' can't be established.`,
-          details: `${keyType} key fingerprint:\n${fingerprint}`,
-          acceptLabel: 'Trust & Connect',
-          rejectLabel: 'Cancel',
-        });
-
-        if (gitProcess.stdin) {
-          gitProcess.stdin.write(accepted ? 'yes\n' : 'no\n');
-        }
-      }
-    });
-
-    gitProcess.on('close', (code) => {
-      if (code === 0) {
-        resolve({ success: true });
-      } else {
-        // Parse common git clone errors for user-friendly messages
-        let errorMessage = stderr.trim();
-
-        if (
-          stderr.includes('Permission denied') ||
-          stderr.includes('Could not read from remote repository')
-        ) {
-          errorMessage =
-            'SSH key not configured or permission denied. Please ensure your SSH key is set up for Azure DevOps.';
-        } else if (
-          stderr.includes('already exists and is not an empty directory')
-        ) {
-          errorMessage = 'Target directory already exists and is not empty.';
-        } else if (stderr.includes('Repository not found')) {
-          errorMessage =
-            'Repository not found. Please check if the repository exists.';
-        } else if (stderr.includes('Host key verification failed')) {
-          errorMessage = 'SSH host verification was rejected.';
-        }
-
-        resolve({ success: false, error: errorMessage });
-      }
-    });
-
-    gitProcess.on('error', (err) => {
-      resolve({
-        success: false,
-        error: `Failed to run git: ${err.message}`,
-      });
-    });
-  });
+  // Delegates to the shared clone service so this flow and the clone-from-URL
+  // flow share host-key prompting, timeout handling, and error mapping.
+  return cloneFromUrl({ cloneUrl: sshUrl, targetPath, protocol: 'ssh' });
 }
 
 // Helper to get auth header and org name from provider

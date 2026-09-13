@@ -244,6 +244,7 @@ import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-ver
 import type { DebugLogEntry } from '@shared/debug-log-types';
 import type { DetectedAzureRemote } from '@shared/azure-remote-utils';
 import type { FoldRange } from '@shared/fold-types';
+import type { GitCloneProtocol } from '@shared/git-url-utils';
 import type { UpcomingMeeting } from '@shared/calendar-types';
 
 
@@ -1319,6 +1320,13 @@ export interface Api {
       repoId: string;
       pullRequestId: number;
     }) => Promise<void>;
+  };
+  git: {
+    cloneFromUrl: (params: {
+      url: string;
+      protocol: GitCloneProtocol;
+      targetPath: string;
+    }) => Promise<{ success: boolean; error?: string; path?: string }>;
   };
   dialog: {
     openDirectory: () => Promise<string | null>;
@@ -2715,6 +2723,12 @@ export const api: Api = hasWindowApi
         markPullRequestDraft: async () => {
           throw new Error('API not available');
         },
+      },
+      git: {
+        cloneFromUrl: async () => ({
+          success: false,
+          error: 'API not available',
+        }),
       },
       dialog: {
         openDirectory: async () => null,

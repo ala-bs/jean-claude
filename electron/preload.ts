@@ -874,6 +874,13 @@ contextBridge.exposeInMainWorld('api', {
       pullRequestId: number;
     }) => ipcRenderer.invoke('azureDevOps:markPullRequestDraft', params),
   },
+  git: {
+    cloneFromUrl: (params: {
+      url: string;
+      protocol: 'ssh' | 'https';
+      targetPath: string;
+    }) => ipcRenderer.invoke('git:cloneFromUrl', params),
+  },
   dialog: {
     openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
     openImageFile: () => ipcRenderer.invoke('dialog:openImageFile'),

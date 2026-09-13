@@ -464,6 +464,11 @@ import {
   recordBootGuardBlocked,
 } from '../lib/localstorage-diagnostics';
 import {
+  type GitCloneProtocol,
+  parseGitUrl,
+  toCloneUrl,
+} from '@shared/git-url-utils';
+import {
   listOpenAiBaseImageOptions,
   removeOpenAiBaseImage,
   saveOpenAiBaseImage,
@@ -569,6 +574,7 @@ import {
   validateTaskBranchRename,
   validateTaskSourceBranchChange,
 } from './task-source-branch-validation';
+import { cloneFromUrl } from '../services/git-clone-service';
 import { registerPrWorkspaceIpcHandlers } from './pr-workspace-ipc';
 
 function redactAiGenerationSetting(
@@ -4591,6 +4597,43 @@ export function registerIpcHandlers() {
       }
 
       return { id: pr.id, url: pr.url, editorCloseWarning };
+    },
+  );
+
+  // Git clone from an arbitrary URL
+  ipcMain.handle(
+    'git:cloneFromUrl',
+    async (
+      _,
+      params: { url: string; protocol: GitCloneProtocol; targetPath: string },
+    ): Promise<{ success: boolean; error?: string; path?: string }> => {
+      const { url, protocol, targetPath } = params;
+
+      const parsed = parseGitUrl(url);
+      if (!parsed) {
+        return { success: false, error: 'Could not parse that git URL.' };
+      }
+
+      // Logged from the parsed parts, never the raw input: a pasted
+      // `https://x-access-token:<token>@host/...` would otherwise put the
+      // credential into the debug stream that is broadcast to the renderer.
+      dbg.ipc(
+        'git:cloneFromUrl %s/%s (%s) -> %s',
+        parsed.host,
+        parsed.repoPath,
+        protocol,
+        targetPath,
+      );
+
+      const result = await cloneFromUrl({
+        cloneUrl: toCloneUrl(parsed, protocol),
+        targetPath,
+        protocol,
+      });
+
+      return result.success
+        ? { success: true, path: targetPath }
+        : { success: false, error: result.error };
     },
   );
 
