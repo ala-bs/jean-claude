@@ -23,9 +23,87 @@
  * `expo start`. That identity is what lets `waitForMetroClient` distinguish a
  * newly attached app from one that was already there.
  */
+import { get as httpGet } from 'node:http';
+import { connect as netConnect } from 'node:net';
+
 import { dbg } from '../lib/debug';
 
 const DEV_COMMAND_TIMEOUT_MS = 4_000;
+
+/** Budget for each leg of the out-of-band port diagnosis. Local only. */
+const PORT_PROBE_TIMEOUT_MS = 1_000;
+
+/**
+ * How long a zero peer count is given to turn out to be a dev client that is
+ * merely between sockets. Measured against the drop/rebuild cycle: delivery is
+ * still possible up to ~200ms, and the rebuild lands well inside 1s.
+ */
+const DEV_CLIENT_RECONNECT_GRACE_MS = 1_000;
+
+/**
+ * Answers "why could we not reach Metro here?" for a user-facing message.
+ *
+ * The websocket error event is useless for this (see `socket.onerror`), so the
+ * state of the port is established directly. The three answers need three
+ * different user actions, which is the whole point of distinguishing them:
+ * start the dev server, fix the port, or retry.
+ *
+ * `/status` is Metro's own liveness endpoint -- it answers the literal string
+ * `packager-status:running` (verified against a live `expo start`), which is
+ * what separates "a server, but not Metro" from "Metro, but it refused the
+ * socket".
+ */
+async function describeMetroPort(metroPort: number): Promise<string> {
+  const probeHost = (host: string) =>
+    new Promise<boolean>((resolve) => {
+      const socket = netConnect({ host, port: metroPort });
+      const finish = (value: boolean) => {
+        socket.destroy();
+        resolve(value);
+      };
+      socket.setTimeout(PORT_PROBE_TIMEOUT_MS, () => finish(false));
+      socket.once('connect', () => finish(true));
+      socket.once('error', () => finish(false));
+    });
+
+  // Mirrors the socket path's host list for the same reason: Metro may bind
+  // the IPv6 wildcard only, and probing IPv4 alone would report "nothing is
+  // listening" for a server that is listening on ::1.
+  const statusHost = (await probeHost('127.0.0.1'))
+    ? '127.0.0.1'
+    : (await probeHost('localhost'))
+      ? 'localhost'
+      : null;
+
+  if (!statusHost) {
+    return `nothing is listening on :${metroPort} — the Metro dev server is not running on that port`;
+  }
+
+  const isMetro = await new Promise<boolean>((resolve) => {
+    const request = httpGet(
+      { host: statusHost, port: metroPort, path: '/status' },
+      (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk: string) => {
+          // The reply is one short line; cap it so a large body cannot be
+          // accumulated from a server that is not Metro.
+          if (body.length < 200) body += chunk;
+        });
+        response.on('end', () => resolve(body.includes('packager-status:running')));
+      },
+    );
+    request.setTimeout(PORT_PROBE_TIMEOUT_MS, () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.once('error', () => resolve(false));
+  });
+
+  return isMetro
+    ? `Metro is running on :${metroPort} but refused the dev-command socket`
+    : `something is listening on :${metroPort}, but it is not a Metro dev server`;
+}
 
 function log(format: string, ...args: unknown[]): void {
   dbg.mobilePreview(format, ...args);
@@ -92,8 +170,13 @@ function withMetroSocket<T>(
     }, DEV_COMMAND_TIMEOUT_MS);
     timer.unref?.();
 
+    // The event carries no usable cause: measured in Electron 42's undici,
+    // a refused connection, a non-101 upgrade and a DNS failure all dispatch
+    // an ErrorEvent with `message === ''` and a message-less TypeError, and
+    // `onclose` is an equally empty 1006. Mining it yields an empty string, so
+    // the cause has to be established out-of-band -- see `describeMetroPort`.
     socket.onerror = () => {
-      settle(new Error('Could not reach Metro dev server'));
+      settle(new Error(`Could not reach Metro dev server at ${host}:${metroPort}`));
     };
     run({
       socket,
@@ -162,12 +245,32 @@ async function onEitherLoopbackHost<T>(
   }
   throw lastError instanceof Error
     ? lastError
-    : new Error('Could not reach Metro dev server');
+    : new Error(`Could not reach Metro dev server on :${metroPort}`);
 }
 
 const GETPEERS_REQUEST_ID = 'jean-claude-getpeers';
 
-function sendMetroMessage(
+async function sendMetroMessage(
+  metroPort: number,
+  payload: Record<string, unknown>,
+  description: string,
+): Promise<void> {
+  try {
+    await sendMetroMessageOnce(metroPort, payload, description);
+  } catch (error) {
+    // Only the user-initiated broadcasts pay for the diagnosis: it is what the
+    // toast shows. The peer-query path polls (up to 240 times in one restart
+    // wait) and swallows its errors, so probing there would be pure cost.
+    if (!(error instanceof Error) || !/Could not reach/.test(error.message)) {
+      throw error;
+    }
+    throw new Error(
+      `Could not reach the Metro dev server: ${await describeMetroPort(metroPort)}`,
+    );
+  }
+}
+
+function sendMetroMessageOnce(
   metroPort: number,
   payload: Record<string, unknown>,
   description: string,
@@ -328,8 +431,29 @@ export async function sendMetroReloadCommand(
   // "no app connected" for a reload that worked. Before the broadcast the app
   // is still attached, which is exactly the state the user asks about.
   let connectedClients = -1;
+  log('reload requested on metro :%d', metroPort);
   try {
     connectedClients = await countMetroClients(metroPort);
+    if (connectedClients === 0) {
+      // A single sample cannot tell "no app is running" from "the app is
+      // between sockets". expo-dev-launcher tears its /message socket down and
+      // rebuilds it after *every* reload, so a second reload -- or one issued
+      // shortly after a Fast Refresh -- samples the gap and reports zero for a
+      // perfectly live app.
+      //
+      // Waiting here fixes both halves of that: the count becomes truthful,
+      // and the broadcast below now lands on the rebuilt socket instead of
+      // being fired into the gap and silently lost.
+      log('no peers on :%d — waiting out the dev client reconnect', metroPort);
+      if (
+        await waitForMetroClient({
+          metroPort,
+          timeoutMs: DEV_CLIENT_RECONNECT_GRACE_MS,
+        })
+      ) {
+        connectedClients = await countMetroClients(metroPort);
+      }
+    }
   } catch (error) {
     // Report "unknown" rather than failing: the reload below may still work.
     log('could not count Metro clients before reload — %o', error);

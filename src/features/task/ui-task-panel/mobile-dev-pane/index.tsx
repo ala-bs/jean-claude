@@ -514,14 +514,22 @@ export function MobileDevPane({
       }
       setActionNotice('Reload sent to Metro.');
     } catch (error) {
+      // The port itself is already named by the main-process message, so this
+      // adds only what the renderer alone knows: where that port came from.
+      // A port learned from the running command drifts from the configured one
+      // whenever Metro fell back to another port, and the two cases are fixed
+      // in different places.
+      const portSource = hasLiveDevServerPort
+        ? 'port reported by the running dev server command'
+        : "port from this project's mobile preview settings";
       addToast({
-        message: summarizeDeviceActionError(error),
+        message: `Reload failed (${portSource}): ${summarizeDeviceActionError(error)}`,
         type: 'error',
       });
     } finally {
       setIsReloading(false);
     }
-  }, [addToast, effectiveDevServerPort]);
+  }, [addToast, effectiveDevServerPort, hasLiveDevServerPort]);
 
   const handleRestartApp = useCallback(async () => {
     // Mirrors `handleBootDevice`'s re-entrancy guard: the button disables

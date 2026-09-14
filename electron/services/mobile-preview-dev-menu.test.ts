@@ -1,3 +1,7 @@
+import type { AddressInfo } from 'node:net';
+
+import { createServer } from 'node:http';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 
@@ -64,20 +68,31 @@ async function startFakeMetro() {
   return {
     port,
     received,
-    connectApp: async ({ dropSocketOnReload = false } = {}) => {
-      const app = new WebSocket(`ws://127.0.0.1:${port}/message`);
+    connectApp: async ({
+      dropSocketOnReload = false,
+      reconnectAfterMs = null,
+    }: {
+      dropSocketOnReload?: boolean;
+      reconnectAfterMs?: number | null;
+    } = {}) => {
       const messages: string[] = [];
-      app.onmessage = (event) => {
-        const data = String(event.data);
-        messages.push(data);
-        // expo-dev-launcher tears the packager socket down and rebuilds it
-        // shortly after every reload, so a peer count taken after the
-        // broadcast races the client's own reconnect.
-        if (dropSocketOnReload && data.includes('"reload"')) app.close();
+      const open = async () => {
+        const app = new WebSocket(`ws://127.0.0.1:${port}/message`);
+        app.onmessage = (event) => {
+          const data = String(event.data);
+          messages.push(data);
+          // expo-dev-launcher tears the packager socket down and rebuilds it
+          // shortly after every reload, so a peer count taken after the
+          // broadcast races the client's own reconnect.
+          if (!data.includes('"reload"')) return;
+          if (dropSocketOnReload || reconnectAfterMs !== null) app.close();
+          if (reconnectAfterMs !== null) setTimeout(() => void open(), reconnectAfterMs);
+        };
+        await new Promise((resolve) => {
+          app.onopen = resolve;
+        });
       };
-      await new Promise((resolve) => {
-        app.onopen = resolve;
-      });
+      await open();
       return { messages };
     },
     close: () =>
@@ -239,5 +254,66 @@ describe('metro dev commands', () => {
     });
     setTimeout(() => void metro?.connectApp(), 150);
     expect(await pending).toBe(true);
+  });
+
+  it('does not report zero for a dev client that is between sockets', async () => {
+    // The reported symptom: the toast says "no app is connected, nothing to
+    // reload" while the app visibly reloads. A second reload (or one issued
+    // after a Fast Refresh) samples the gap in the dev client's own
+    // drop-and-rebuild cycle, so the instantaneous count is 0 for a live app.
+    metro = await startFakeMetro();
+    const app = await metro.connectApp({ reconnectAfterMs: 200 });
+
+    await sendMetroReloadCommand(metro.port);
+    const beforeSecond = app.messages.length;
+    const second = await sendMetroReloadCommand(metro.port);
+
+    expect(second.connectedClients).toBe(1);
+    // The wait is not cosmetic: without it the broadcast is fired into the gap
+    // and never reaches the app at all.
+    await vi.waitFor(() => expect(app.messages.length).toBeGreaterThan(beforeSecond));
+  });
+
+  it('reports an empty port as "nothing is listening"', async () => {
+    // Bind-then-close rather than a hardcoded number: the OS guarantees the
+    // port was free, so the test cannot be stolen by a squatter in the
+    // ephemeral range.
+    const closed = await startFakeMetro();
+    const deadPort = closed.port;
+    await closed.close();
+
+    const error = await sendMetroReloadCommand(deadPort).then(
+      () => null,
+      (reason: unknown) => reason as Error,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain(`nothing is listening on :${deadPort}`);
+    // The websocket ErrorEvent carries no cause, so an earlier version of this
+    // rendered a dangling "()". Pin that it never comes back.
+    expect(error?.message).not.toContain('()');
+  });
+
+  it('distinguishes a live non-Metro server from a missing one', async () => {
+    // Same "could not reach" websocket failure, opposite user action: the port
+    // is wrong rather than the dev server being down.
+    const server = createServer((_request, response) => {
+      response.writeHead(200);
+      response.end('not metro');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const error = await sendMetroReloadCommand(port).then(
+        () => null,
+        (reason: unknown) => reason as Error,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(error?.message).toContain(
+        `something is listening on :${port}, but it is not a Metro dev server`,
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

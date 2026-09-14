@@ -117,7 +117,7 @@ export async function restartAppOnDevice({
   // Swallowing errors for the same reason as `launchExpo` below: the native app
   // has already restarted, so an IPC failure here must not be reported as a
   // failed restart.
-  await api
+  const cameBackOnThisMetro = await api
     .waitForMetroClient({
       metroPort: reattach.metroPort,
       timeoutMs: RESTART_REATTACH_WAIT_MS,
@@ -125,6 +125,24 @@ export async function restartAppOnDevice({
     })
     .catch(() => false);
 
+  if (cameBackOnThisMetro) {
+    // Nothing to rebind: the app is already on this Metro, which is the only
+    // thing the deeplink would have achieved.
+    //
+    // Sending it anyway is actively harmful. A peer appears as soon as the dev
+    // client opens its packager connection, which is early in startup and long
+    // before the bundle has finished loading -- so "attached" is not "ready".
+    // Switching the bundle URL at that moment tears the JS runtime down while
+    // the first one is still running, and the process dies with a SIGSEGV in
+    // `jsi::Object::~Object` about two seconds after launch (two live
+    // `com.facebook.react.runtime.JavaScript` threads in the crash report, one
+    // destructing under the other).
+    return { label, reattachedPort: reattach.metroPort, reattachError: null };
+  }
+
+  // Timed out: the app never appeared on this Metro, so it is pinned to a
+  // stale bundle URL -- exactly the case the deeplink exists to repair. By now
+  // the full wait has elapsed, so it is no longer mid-startup either.
   try {
     await api.launchExpo({
       requestId: createRestartLaunchRequestId(),

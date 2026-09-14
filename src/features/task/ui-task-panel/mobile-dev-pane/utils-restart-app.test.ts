@@ -84,10 +84,11 @@ describe('restartAppOnDevice', () => {
     ).rejects.toThrow('device offline');
   });
 
-  it('re-deeplinks the restarted app at the live Metro port', async () => {
+  it('re-deeplinks an app that did not come back on the live Metro port', async () => {
     // The whole point of the re-attach: a relaunched dev client otherwise
     // reconnects to the port it remembered, not the port Metro actually took.
     const api = makeApi();
+    api.waitForMetroClient = vi.fn(async () => false);
 
     const result = await restartAppOnDevice({
       api,
@@ -115,6 +116,7 @@ describe('restartAppOnDevice', () => {
     // A reused id lets the first launch's teardown clear the second launch's
     // claim, which then fails with "request superseded".
     const api = makeApi();
+    api.waitForMetroClient = vi.fn(async () => false);
     const reattach = { metroPort: 8082, appScheme: null };
     const device = { id: 'sim-1', platform: 'ios' } as const;
 
@@ -140,21 +142,16 @@ describe('restartAppOnDevice', () => {
     expect(result.reattachedPort).toBeNull();
   });
 
-  it('waits for the app to attach to Metro before deeplinking it', async () => {
-    // Deeplinking an app that is still booting tears its bridge down and the
-    // process dies moments after the window appears.
+  it('does not deeplink an app that came back on this Metro by itself', async () => {
+    // A peer appears when the dev client opens its packager connection, which
+    // is early in startup -- not when the bundle has finished loading. The app
+    // is already on the right Metro, so the deeplink has nothing to rebind and
+    // would only switch the bundle URL mid-load, killing the process with a
+    // SIGSEGV in `jsi::Object::~Object` ~2s after launch.
     const api = makeApi();
-    const order: string[] = [];
-    api.waitForMetroClient = vi.fn(async () => {
-      order.push('wait');
-      return true;
-    });
-    api.launchExpo = vi.fn(async () => {
-      order.push('launch');
-      return { url: 'exp://127.0.0.1:8082' };
-    });
+    api.waitForMetroClient = vi.fn(async () => true);
 
-    await restartAppOnDevice({
+    const result = await restartAppOnDevice({
       api,
       device: { id: 'sim-1', platform: 'ios' },
       ...COMMON,
@@ -164,7 +161,10 @@ describe('restartAppOnDevice', () => {
     expect(api.waitForMetroClient).toHaveBeenCalledWith(
       expect.objectContaining({ metroPort: 8082 }),
     );
-    expect(order).toEqual(['wait', 'launch']);
+    expect(api.launchExpo).not.toHaveBeenCalled();
+    // Still reported as re-attached: it is on the right Metro.
+    expect(result.reattachedPort).toBe(8082);
+    expect(result.reattachError).toBeNull();
   });
 
   it('still deeplinks when the app never attaches', async () => {
@@ -253,6 +253,7 @@ describe('restartAppOnDevice', () => {
     // The native app really did restart; surfacing this as "restart failed"
     // would send the user looking in the wrong place.
     const api = makeApi();
+    api.waitForMetroClient = vi.fn(async () => false);
     api.launchExpo = vi.fn(async () => {
       throw new Error('Mobile dev server is not running');
     });
