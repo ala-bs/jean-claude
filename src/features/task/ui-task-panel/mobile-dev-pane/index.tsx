@@ -229,6 +229,17 @@ export function MobileDevPane({
     activeDeviceKeyRef.current = activeDeviceKey;
   }, [activeDeviceKey]);
 
+  // "Did the user move to a *different* device while this slow action ran?"
+  // Slow-action results are discarded when they did, so the outcome is never
+  // reported against the wrong device. An empty selection (Metro stopped, which
+  // clears it) is not a different device, so results still surface.
+  const isDeviceSelectionSwitched = useCallback(
+    (startedDeviceKey: string) =>
+      activeDeviceKeyRef.current !== '' &&
+      activeDeviceKeyRef.current !== startedDeviceKey,
+    [],
+  );
+
   // Unavailable devices stay in the list so their reason stays readable; the
   // Boot button is what refuses them.
   // Grouping uses a snapshot taken when the menu opens; the star's filled state
@@ -435,16 +446,33 @@ export function MobileDevPane({
     } catch (error) {
       // Boots are slow; the user may have picked a different device meanwhile.
       // Reporting a stale failure against the new selection would be wrong.
-      if (activeDeviceKeyRef.current !== bootedDeviceKey) return;
+      // An *empty* selection is not a switch though -- stopping Metro clears it,
+      // and there is no other device to misattribute the failure to, so the
+      // error must still surface instead of vanishing with the spinner.
+      if (isDeviceSelectionSwitched(bootedDeviceKey)) return;
       setBootError(cleanIpcError(error));
     } finally {
       setBootingDeviceKey(null);
     }
-  }, [activeDevice, activeDeviceKey, isBooting, refetchDevices]);
+  }, [
+    activeDevice,
+    activeDeviceKey,
+    isBooting,
+    isDeviceSelectionSwitched,
+    refetchDevices,
+  ]);
 
   const handleToggleDevServer = useCallback(() => {
     if (devServerRunning) {
-      void runCommands.stopCommand(devServerCommandId);
+      // The feed list badge reads `deviceByTaskId` directly, so a selection that
+      // outlives Metro would keep advertising a device this task no longer runs
+      // on. Clearing here is what makes the badge disappear -- but only once the
+      // stop actually succeeded. `stopCommand` rethrows, and the status stays
+      // 'running' on failure, so clearing up front would drop the selection
+      // (disabling Boot/Restart) while Metro is still very much alive.
+      void runCommands
+        .stopCommand(devServerCommandId)
+        .then(() => selectDevice(null));
       return;
     }
     void runCommands.startAdHocCommand({
@@ -462,6 +490,7 @@ export function MobileDevPane({
     devServerCommandId,
     devServerRunning,
     runCommands,
+    selectDevice,
   ]);
 
   // Reload = swap the JS bundle in the already-running app, via Metro's own
@@ -526,7 +555,7 @@ export function MobileDevPane({
       );
       // Restarts are slow; the user may have picked a different device. A
       // success notice would otherwise claim the NEW device's app restarted.
-      if (activeDeviceKeyRef.current !== restartedDeviceKey) return;
+      if (isDeviceSelectionSwitched(restartedDeviceKey)) return;
       // The app did restart even when the re-attach failed, so this is a
       // warning about the Metro connection, not a failed restart.
       if (reattachError) {
@@ -542,7 +571,7 @@ export function MobileDevPane({
           : `${label} restarted.`,
       );
     } catch (error) {
-      if (activeDeviceKeyRef.current !== restartedDeviceKey) return;
+      if (isDeviceSelectionSwitched(restartedDeviceKey)) return;
       addToast({
         message: summarizeDeviceActionError(error),
         type: 'error',
@@ -559,6 +588,7 @@ export function MobileDevPane({
     appScheme,
     effectiveDevServerPort,
     hasLiveDevServerPort,
+    isDeviceSelectionSwitched,
     isExpoApp,
     projectId,
     restartingDeviceKey,
