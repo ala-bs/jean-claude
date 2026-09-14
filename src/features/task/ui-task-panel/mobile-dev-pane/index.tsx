@@ -471,7 +471,18 @@ export function MobileDevPane({
     setActionNotice(null);
     setIsReloading(true);
     try {
-      await api.mobilePreview.reloadExpo({ metroPort: effectiveDevServerPort });
+      const { connectedClients } = await api.mobilePreview.reloadExpo({
+        metroPort: effectiveDevServerPort,
+      });
+      // Metro accepts the broadcast whether or not an app is listening, so
+      // "sent" alone was indistinguishable from the button doing nothing.
+      if (connectedClients === 0) {
+        addToast({
+          message: `No app is connected to Metro on :${effectiveDevServerPort}, so there was nothing to reload. Open the app on the device (Restart, or Build & Run) and try again.`,
+          type: 'error',
+        });
+        return;
+      }
       setActionNotice('Reload sent to Metro.');
     } catch (error) {
       addToast({

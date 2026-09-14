@@ -91,6 +91,7 @@ import {
 } from './mobile-preview-ios-framebuffer';
 import {
   isAppNotRunningError,
+  isUnsupportedTerminateRunningProcessError,
   parseSimctlInstalledApps,
   resolveIosApp,
   resolveTrustedIosAppRoot,
@@ -452,25 +453,51 @@ export const iosIdbAdapter = {
         return { bundleId, restartedAt: new Date().toISOString() };
       }
 
+      // One atomic `launch --terminate-running-process` instead of
+      // `terminate` + `launch`: simctl's terminate returns as soon as SIGKILL
+      // is delivered, not once the process is reaped, so a separate launch
+      // races the dying instance and the freshly spawned app gets torn down
+      // with it — the app appears to open and then immediately dies.
       try {
         await runCommand('xcrun', [
           'simctl',
-          'terminate',
+          'launch',
+          '--terminate-running-process',
           params.deviceId,
           bundleId,
         ], { signal: abortController.signal });
       } catch (error) {
-        if (abortController.signal.aborted || !isAppNotRunningError(error)) {
+        // Older simulator runtimes reject the flag; fall back to the
+        // sequential form for those.
+        if (
+          abortController.signal.aborted ||
+          !isUnsupportedTerminateRunningProcessError(error)
+        ) {
           throw error;
         }
+        try {
+          await runCommand('xcrun', [
+            'simctl',
+            'terminate',
+            params.deviceId,
+            bundleId,
+          ], { signal: abortController.signal });
+        } catch (terminateError) {
+          if (
+            abortController.signal.aborted ||
+            !isAppNotRunningError(terminateError)
+          ) {
+            throw terminateError;
+          }
+        }
+        abortController.signal.throwIfAborted();
+        await runCommand('xcrun', [
+          'simctl',
+          'launch',
+          params.deviceId,
+          bundleId,
+        ], { signal: abortController.signal });
       }
-      abortController.signal.throwIfAborted();
-      await runCommand('xcrun', [
-        'simctl',
-        'launch',
-        params.deviceId,
-        bundleId,
-      ], { signal: abortController.signal });
       return { bundleId, restartedAt: new Date().toISOString() };
     })().finally(() => activeIosAppRestarts.delete(entry));
     entry = { abortController, promise };

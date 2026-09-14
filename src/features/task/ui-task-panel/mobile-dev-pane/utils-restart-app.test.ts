@@ -16,6 +16,8 @@ function makeApi() {
       void params;
       return { url: 'exp://127.0.0.1:8082' };
     }),
+    waitForMetroClient: vi.fn(async () => true),
+    listMetroPeers: vi.fn(async () => ['socket#1']),
   };
 }
 
@@ -136,6 +138,115 @@ describe('restartAppOnDevice', () => {
 
     expect(api.launchExpo).not.toHaveBeenCalled();
     expect(result.reattachedPort).toBeNull();
+  });
+
+  it('waits for the app to attach to Metro before deeplinking it', async () => {
+    // Deeplinking an app that is still booting tears its bridge down and the
+    // process dies moments after the window appears.
+    const api = makeApi();
+    const order: string[] = [];
+    api.waitForMetroClient = vi.fn(async () => {
+      order.push('wait');
+      return true;
+    });
+    api.launchExpo = vi.fn(async () => {
+      order.push('launch');
+      return { url: 'exp://127.0.0.1:8082' };
+    });
+
+    await restartAppOnDevice({
+      api,
+      device: { id: 'sim-1', platform: 'ios' },
+      ...COMMON,
+      reattach: { metroPort: 8082, appScheme: null },
+    });
+
+    expect(api.waitForMetroClient).toHaveBeenCalledWith(
+      expect.objectContaining({ metroPort: 8082 }),
+    );
+    expect(order).toEqual(['wait', 'launch']);
+  });
+
+  it('still deeplinks when the app never attaches', async () => {
+    // The common cause is an app pinned to a stale port -- exactly what the
+    // deeplink is there to repair, so a timeout must not skip it.
+    const api = makeApi();
+    api.waitForMetroClient = vi.fn(async () => false);
+
+    const result = await restartAppOnDevice({
+      api,
+      device: { id: 'sim-1', platform: 'ios' },
+      ...COMMON,
+      reattach: { metroPort: 8082, appScheme: null },
+    });
+
+    expect(api.launchExpo).toHaveBeenCalled();
+    expect(result.reattachedPort).toBe(8082);
+  });
+
+  it('does not wait for Metro when there is nothing to attach to', async () => {
+    const api = makeApi();
+
+    await restartAppOnDevice({
+      api,
+      device: { id: 'sim-1', platform: 'ios' },
+      ...COMMON,
+      reattach: null,
+    });
+
+    expect(api.waitForMetroClient).not.toHaveBeenCalled();
+    expect(api.listMetroPeers).not.toHaveBeenCalled();
+  });
+
+  it('ignores peers that were already attached before the restart', async () => {
+    // Another device on the same Metro would otherwise satisfy the wait
+    // instantly, and the deeplink would hit an app that is still booting.
+    const api = makeApi();
+    const order: string[] = [];
+    api.listMetroPeers = vi.fn(async () => {
+      order.push('snapshot');
+      return ['socket#3', 'socket#4'];
+    });
+    api.restartIosApp = vi.fn(async () => {
+      order.push('restart');
+      return { bundleId: 'com.example.app', restartedAt: '' };
+    });
+
+    await restartAppOnDevice({
+      api,
+      device: { id: 'sim-1', platform: 'ios' },
+      ...COMMON,
+      reattach: { metroPort: 8082, appScheme: null },
+    });
+
+    // The snapshot is only meaningful if it is taken before the app is killed.
+    expect(order).toEqual(['snapshot', 'restart']);
+    expect(api.waitForMetroClient).toHaveBeenCalledWith(
+      expect.objectContaining({ ignorePeerIds: ['socket#3', 'socket#4'] }),
+    );
+  });
+
+  it('restarts anyway when the peer snapshot or the wait fails', async () => {
+    // The native app has already restarted by then; an IPC failure in the
+    // readiness check must not be reported as a failed restart.
+    const api = makeApi();
+    api.listMetroPeers = vi.fn(async () => {
+      throw new Error('no such channel');
+    });
+    api.waitForMetroClient = vi.fn(async () => {
+      throw new Error('main process blew up');
+    });
+
+    const result = await restartAppOnDevice({
+      api,
+      device: { id: 'sim-1', platform: 'ios' },
+      ...COMMON,
+      reattach: { metroPort: 8082, appScheme: null },
+    });
+
+    expect(result.label).toBe('com.example.app');
+    expect(api.launchExpo).toHaveBeenCalled();
+    expect(result.reattachedPort).toBe(8082);
   });
 
   it('reports a failed re-attach without failing the restart', async () => {

@@ -88,6 +88,7 @@ import type {
   MobilePreviewIosAppStatusRequestParams,
   MobilePreviewIosCreateDeviceParams,
   MobilePreviewIosRenameDeviceParams,
+  MobilePreviewListMetroPeersParams,
   MobilePreviewListSessionsParams,
   MobilePreviewNativeLogStartParams,
   MobilePreviewOpenDeeplinkParams,
@@ -95,6 +96,7 @@ import type {
   MobilePreviewReloadExpoParams,
   MobilePreviewSetTextSizeParams,
   MobilePreviewStartParams,
+  MobilePreviewWaitForMetroClientParams,
   MobileRotationDirection,
   ReactNativeDevToolsEmbeddedBoundsParams,
   ReactNativeDevToolsEmbeddedCloseParams,
@@ -5984,6 +5986,16 @@ export function registerIpcHandlers() {
     'mobilePreview:reloadExpo',
     (_, params: MobilePreviewReloadExpoParams) =>
       mobilePreviewService.reloadExpo(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:waitForMetroClient',
+    (_, params: MobilePreviewWaitForMetroClientParams) =>
+      mobilePreviewService.waitForMetroClient(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:listMetroPeers',
+    (_, params: MobilePreviewListMetroPeersParams) =>
+      mobilePreviewService.listMetroPeers(params),
   );
   ipcMain.handle(
     'mobilePreview:bootDevice',

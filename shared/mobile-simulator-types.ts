@@ -239,6 +239,30 @@ export type MobilePreviewReloadExpoParams = {
   metroPort: number;
 };
 
+export type MobilePreviewReloadExpoResult = {
+  /**
+   * Apps attached to Metro's message socket when the reload went out. `0`
+   * means the broadcast reached nobody (the visible symptom is "Reload does
+   * nothing"), `-1` means the count could not be determined.
+   */
+  connectedClients: number;
+};
+
+export type MobilePreviewWaitForMetroClientParams = {
+  metroPort: number;
+  timeoutMs: number;
+  /**
+   * Peers already attached before the operation the caller is waiting on.
+   * Without it, another device's app already on this Metro satisfies the wait
+   * instantly and the wait becomes a no-op.
+   */
+  ignorePeerIds?: readonly string[];
+};
+
+export type MobilePreviewListMetroPeersParams = {
+  metroPort: number;
+};
+
 /**
  * Boot-only request used by the lightweight mobile dev pane. Unlike `start` it
  * opens no stream and installs nothing: it just brings the simulator/emulator

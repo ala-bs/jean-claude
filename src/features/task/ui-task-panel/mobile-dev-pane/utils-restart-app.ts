@@ -5,6 +5,13 @@ import type { api as realApi } from '@/lib/api';
 let nextRestartLaunchId = 0;
 
 /**
+ * How long to let the relaunched app attach to Metro before deeplinking it
+ * anyway. Cold starts of a dev build are a couple of seconds; the deeplink is
+ * still sent afterwards, so overshooting only costs latency.
+ */
+const RESTART_REATTACH_WAIT_MS = 8_000;
+
+/**
  * `launchExpo` keys in-flight work by `requestId` and deletes the owner entry
  * in its `finally` when the id still matches. Reusing an id across two restarts
  * of the same device therefore lets the first launch's teardown clear the
@@ -42,7 +49,11 @@ export async function restartAppOnDevice({
 }: {
   api: Pick<
     typeof realApi.mobilePreview,
-    'restartIosApp' | 'restartAndroidApp' | 'launchExpo'
+    | 'restartIosApp'
+    | 'restartAndroidApp'
+    | 'launchExpo'
+    | 'waitForMetroClient'
+    | 'listMetroPeers'
   >;
   device: Pick<MobilePreviewDevice, 'id' | 'platform'>;
   projectId: string;
@@ -64,6 +75,18 @@ export async function restartAppOnDevice({
    */
   reattachError: unknown | null;
 }> {
+  // Snapshot taken BEFORE the restart: the app about to be killed is attached
+  // right now, and so is every other device sharing this Metro. Waiting for
+  // "any peer" afterwards would be satisfied by those and the wait below would
+  // do nothing. Peer ids are unique per connection, so the relaunched app
+  // always shows up as an id outside this set.
+  // Failure is not fatal -- an empty snapshot only makes the wait less precise.
+  const peersBeforeRestart = reattach
+    ? await api
+        .listMetroPeers({ metroPort: reattach.metroPort })
+        .catch(() => [] as string[])
+    : [];
+
   let label: string;
   if (device.platform === 'ios') {
     const result = await api.restartIosApp({
@@ -84,6 +107,23 @@ export async function restartAppOnDevice({
   }
 
   if (!reattach) return { label, reattachedPort: null, reattachError: null };
+
+  // Deeplinking into an app that is still starting up kills it: the dev client
+  // tears the bridge down to switch bundle URL while the first bundle is still
+  // loading, and the process dies moments after its window appears. Waiting
+  // until it has attached to Metro means the deeplink lands on a live app.
+  // A timeout is not fatal -- the app may be pinned to a stale port, which is
+  // exactly the case the deeplink is meant to repair.
+  // Swallowing errors for the same reason as `launchExpo` below: the native app
+  // has already restarted, so an IPC failure here must not be reported as a
+  // failed restart.
+  await api
+    .waitForMetroClient({
+      metroPort: reattach.metroPort,
+      timeoutMs: RESTART_REATTACH_WAIT_MS,
+      ignorePeerIds: peersBeforeRestart,
+    })
+    .catch(() => false);
 
   try {
     await api.launchExpo({

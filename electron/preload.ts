@@ -45,6 +45,7 @@ import type {
   MobilePreviewIosAppStatusRequestParams,
   MobilePreviewIosCreateDeviceParams,
   MobilePreviewIosRenameDeviceParams,
+  MobilePreviewListMetroPeersParams,
   MobilePreviewListSessionsParams,
   MobilePreviewNativeLogEvent,
   MobilePreviewNativeLogSessionEvent,
@@ -55,6 +56,7 @@ import type {
   MobilePreviewSessionEvent,
   MobilePreviewSetTextSizeParams,
   MobilePreviewStartParams,
+  MobilePreviewWaitForMetroClientParams,
   MobileRotationDirection,
   ReactNativeDevToolsEmbeddedBoundsParams,
   ReactNativeDevToolsEmbeddedCloseParams,
@@ -1203,6 +1205,10 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('mobilePreview:openDevMenu', params),
     reloadExpo: (params: MobilePreviewReloadExpoParams) =>
       ipcRenderer.invoke('mobilePreview:reloadExpo', params),
+    waitForMetroClient: (params: MobilePreviewWaitForMetroClientParams) =>
+      ipcRenderer.invoke('mobilePreview:waitForMetroClient', params),
+    listMetroPeers: (params: MobilePreviewListMetroPeersParams) =>
+      ipcRenderer.invoke('mobilePreview:listMetroPeers', params),
     bootDevice: (params: MobilePreviewBootDeviceParams) =>
       ipcRenderer.invoke('mobilePreview:bootDevice', params),
     forwardPort: (params: MobilePreviewForwardPortParams) =>

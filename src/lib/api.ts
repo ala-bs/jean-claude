@@ -161,6 +161,7 @@ import type {
   MobilePreviewIosRenameDeviceParams,
   MobilePreviewIosRuntime,
   MobilePreviewIosToolStatus,
+  MobilePreviewListMetroPeersParams,
   MobilePreviewListSessionsParams,
   MobilePreviewNativeLogEvent,
   MobilePreviewNativeLogSession,
@@ -169,10 +170,12 @@ import type {
   MobilePreviewOpenDeeplinkParams,
   MobilePreviewOpenDevMenuParams,
   MobilePreviewReloadExpoParams,
+  MobilePreviewReloadExpoResult,
   MobilePreviewSession,
   MobilePreviewSessionEvent,
   MobilePreviewSetTextSizeParams,
   MobilePreviewStartParams,
+  MobilePreviewWaitForMetroClientParams,
   MobileRotationDirection,
   ReactNativeDevToolsEmbeddedBoundsParams,
   ReactNativeDevToolsEmbeddedCloseParams,
@@ -1611,7 +1614,17 @@ export interface Api {
     ) => Promise<void>;
     openDeeplink: (params: MobilePreviewOpenDeeplinkParams) => Promise<void>;
     openDevMenu: (params: MobilePreviewOpenDevMenuParams) => Promise<void>;
-    reloadExpo: (params: MobilePreviewReloadExpoParams) => Promise<void>;
+    reloadExpo: (
+      params: MobilePreviewReloadExpoParams,
+    ) => Promise<MobilePreviewReloadExpoResult>;
+    /** Resolves `false` when no new app attached before the timeout. */
+    waitForMetroClient: (
+      params: MobilePreviewWaitForMetroClientParams,
+    ) => Promise<boolean>;
+    /** Metro socket ids of the apps currently attached to the dev server. */
+    listMetroPeers: (
+      params: MobilePreviewListMetroPeersParams,
+    ) => Promise<string[]>;
     bootDevice: (
       params: MobilePreviewBootDeviceParams,
     ) => Promise<MobilePreviewBootDeviceResult>;
@@ -2906,7 +2919,9 @@ export const api: Api = hasWindowApi
         sendInput: async () => {},
         openDeeplink: async () => {},
         openDevMenu: async () => {},
-        reloadExpo: async () => {},
+        reloadExpo: async () => ({ connectedClients: -1 }),
+        waitForMetroClient: async () => false,
+        listMetroPeers: async () => [],
         bootDevice: async () => ({ deviceId: '' }),
         forwardPort: async () => {},
         ensureMetroReverse: async () => ({
