@@ -770,7 +770,7 @@ export function PrDetail({
 
   if (isPrLoading) {
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="flex h-full w-full min-w-0 flex-1 items-center justify-center">
         <Loader2 className="text-ink-3 h-6 w-6 animate-spin" />
       </div>
     );
@@ -778,7 +778,7 @@ export function PrDetail({
 
   if (!pr) {
     return (
-      <div className="text-ink-3 flex h-full items-center justify-center">
+      <div className="text-ink-3 flex h-full w-full min-w-0 flex-1 items-center justify-center">
         Pull request not found
       </div>
     );
