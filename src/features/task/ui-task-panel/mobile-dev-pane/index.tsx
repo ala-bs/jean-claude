@@ -1,5 +1,6 @@
 import {
   ChevronRight,
+  Hammer,
   Play,
   RefreshCw,
   RotateCcw,
@@ -59,6 +60,7 @@ import { resolveActiveDevice } from './utils-active-device';
 import { resolveAndroidProjectPath } from './utils-android-project-path';
 import { resolveDeviceListStatus } from './utils-device-list-status';
 import { resolveMobileDevAppPath } from './utils-app-path';
+import { resolveMobileDevBuildCommand } from './utils-build-command';
 import { resolveMobileDevDetectedApp } from './utils-detected-app';
 import { resolveRestartReattach } from './utils-restart-reattach';
 import { restartAppOnDevice } from './utils-restart-app';
@@ -147,6 +149,23 @@ export function MobileDevPane({
   const activeDeviceKeyRef = useRef('');
   const paneRef = useRef<HTMLDivElement>(null);
   const [bootError, setBootError] = useState<string | null>(null);
+  // The pane has two log streams (Metro and the build); one box shows the
+  // selected one. Starting a build switches here so its output is not silently
+  // written to a stream nobody is looking at.
+  //
+  // Holds the *command id* being watched rather than a bare 'build' flag,
+  // because build ids are device-scoped: with a flag, switching device (or
+  // stopping Metro, which clears the selection) silently re-points the box at a
+  // never-started stream and makes Clear act on it, while the running build's
+  // output keeps accumulating out of reach.
+  //
+  // Tagged with its task (logs are task-keyed) and compared during render
+  // rather than reset in an effect, which would cascade renders -- the same
+  // shape as `useRunCommands`'s own `statusTaskId` guard.
+  const [watchedBuild, setWatchedBuild] = useState<{
+    taskId: string;
+    commandId: string;
+  } | null>(null);
 
   const appPath = useMemo(
     () => resolveMobileDevAppPath(mobilePreviewConfig),
@@ -369,13 +388,90 @@ export function MobileDevPane({
     [favoriteDevices, findDeviceByKey, handleToggleFavoriteByKey],
   );
 
+  // Build targets exactly the selected device, so everything about it (command
+  // id, status, logs) is scoped to `activeDevice` and changes when it changes.
+  const build = useMemo(
+    () =>
+      resolveMobileDevBuildCommand({
+        config: mobilePreviewConfig,
+        appPath,
+        device: activeDevice,
+      }),
+    [activeDevice, appPath, mobilePreviewConfig],
+  );
+  const buildCommandId = build.commandId;
+  const buildStatus = buildCommandId
+    ? runCommands.statusByCommandId[buildCommandId]
+    : undefined;
+  const buildStarting = buildCommandId
+    ? runCommands.isCommandStarting(buildCommandId)
+    : false;
+  const buildStopping = buildCommandId
+    ? runCommands.isCommandStopping(buildCommandId)
+    : false;
+  const buildRunning = buildStatus?.status === 'running';
+  // The runner only reports 'running' | 'stopped' | 'errored', and exit 0 maps
+  // to 'stopped' -- the same value as a command that never ran (which has no
+  // entry at all). Without this, a finished build and an unbuilt device render
+  // the identical grey dot, so the outcome has to be spelled out.
+  const buildOutcome: 'building' | 'built' | 'failed' | 'none' = buildStarting
+    ? 'building'
+    : buildRunning
+      ? 'building'
+      : buildStatus?.status === 'errored'
+        ? 'failed'
+        : buildStatus
+          ? 'built'
+          : 'none';
+
+  const handleToggleBuild = useCallback(() => {
+    // A build always targets exactly one device; with none selected there is
+    // nothing to build onto and no command id to scope the run to.
+    if (!activeDevice || !buildCommandId) return;
+    if (buildRunning) {
+      setWatchedBuild({ taskId, commandId: buildCommandId });
+      setLogsExpanded(true);
+      void runCommands.stopCommand(buildCommandId);
+      return;
+    }
+    // Guards run before any UI state changes, so a click that cannot start a
+    // build does not yank the log box onto an empty stream.
+    if (!build.command || !activeDevice) return;
+    setWatchedBuild({ taskId, commandId: buildCommandId });
+    setLogsExpanded(true);
+    void runCommands.startAdHocCommand({
+      runCommandId: buildCommandId,
+      // Matches the preview pane's labels for the same command id.
+      name: activeDevice.platform === 'ios' ? 'iOS build' : 'Android build',
+      command: build.command,
+      ports: [],
+    });
+  }, [
+    activeDevice,
+    build.command,
+    buildCommandId,
+    buildRunning,
+    runCommands,
+    setLogsExpanded,
+    taskId,
+  ]);
+
+  // Sticky to the build actually being watched: switching device (or stopping
+  // Metro, which clears the selection) must not silently re-point the box at a
+  // different -- possibly never-started -- stream.
+  const watchedBuildCommandId =
+    watchedBuild?.taskId === taskId ? watchedBuild.commandId : null;
+  const showingBuildLog = watchedBuildCommandId !== null;
+  const logCommandId = watchedBuildCommandId ?? devServerCommandId;
+  const watchedBuildRunning =
+    watchedBuildCommandId !== null &&
+    runCommands.statusByCommandId[watchedBuildCommandId]?.status === 'running';
+
   // Subscribing only while the log section is expanded keeps Metro's very
   // chatty output from re-rendering a collapsed pane.
-  const devServerLog =
+  const activeLog =
     useTaskMessagesStore((state) =>
-      logsExpanded
-        ? state.runCommandLogs[taskId]?.[devServerCommandId]
-        : undefined,
+      logsExpanded ? state.runCommandLogs[taskId]?.[logCommandId] : undefined,
     ) ?? null;
 
   // Bump the generation before the IPC call so late chunks from the old
@@ -384,13 +480,13 @@ export function MobileDevPane({
     (state) => state.resetRunCommandLogs,
   );
   const handleClearLogs = useCallback(() => {
-    const generation = resetRunCommandLogs(taskId, devServerCommandId);
+    const generation = resetRunCommandLogs(taskId, logCommandId);
     void api.runCommands.resetLogs({
       taskId,
-      runCommandId: devServerCommandId,
+      runCommandId: logCommandId,
       generation,
     });
-  }, [devServerCommandId, resetRunCommandLogs, taskId]);
+  }, [logCommandId, resetRunCommandLogs, taskId]);
 
   // Scoped to the pane: ⌘K is already bound elsewhere (command logs pane, run
   // commands overlay), so this must only fire while focus is inside here.
@@ -990,6 +1086,75 @@ export function MobileDevPane({
           {bootError && (
             <p className="text-xs break-words text-red-500">{bootError}</p>
           )}
+
+          {/* Build & run onto the selected device. The command comes from
+              project settings (or detection) and, where the CLI is recognized,
+              is pointed at this exact device rather than the tool's own default
+              simulator. When it cannot be targeted, `build.notice` says so. */}
+          <div className="flex items-center gap-2">
+            <StatusDot
+              tone={
+                buildOutcome === 'failed'
+                  ? 'errored'
+                  : buildOutcome === 'building'
+                    ? 'running'
+                    : 'stopped'
+              }
+              pulse={buildStarting || buildStopping}
+            />
+            <span className="text-ink-1 text-xs font-medium">Build</span>
+            {buildOutcome !== 'none' && (
+              <span
+                className={clsx(
+                  'text-[11px]',
+                  buildOutcome === 'failed' ? 'text-red-500' : 'text-ink-3',
+                )}
+              >
+                {buildOutcome === 'building'
+                  ? 'Building…'
+                  : buildOutcome === 'failed'
+                    ? 'Failed'
+                    : 'Built'}
+              </span>
+            )}
+            <Button
+              onClick={handleToggleBuild}
+              size="sm"
+              variant="secondary"
+              className="ml-auto"
+              loading={buildStarting || buildStopping}
+              // No device selected means no build, full stop -- a build always
+              // targets one device, and the command id is keyed by it. Stated
+              // ahead of the `buildRunning` escape hatch so it cannot be
+              // reached: without a device there is no command id to be running.
+              disabled={
+                !activeDeviceKey || (!buildRunning && !build.command)
+              }
+              icon={buildRunning ? <Square /> : <Hammer />}
+              title={
+                buildRunning
+                  ? 'Stop the running build'
+                  : (build.unavailableReason ??
+                    `Build and run on ${activeDevice?.name ?? 'the selected device'}`)
+              }
+            >
+              {buildRunning ? 'Stop' : 'Build'}
+            </Button>
+          </div>
+          {build.command ? (
+            <p className="text-ink-3 truncate font-mono text-[11px]">
+              {build.command}
+            </p>
+          ) : (
+            build.unavailableReason && (
+              <p className="text-ink-3 text-xs break-words">
+                {build.unavailableReason}
+              </p>
+            )
+          )}
+          {build.notice && (
+            <p className="text-ink-3 text-xs break-words">{build.notice}</p>
+          )}
         </div>
 
         <Separator />
@@ -1109,6 +1274,47 @@ export function MobileDevPane({
           />
           Logs
         </button>
+        {/* Two streams share one box; the tabs say which one is shown. The
+            Build tab stays available while a watched build has output, even
+            after the device selection moved on. */}
+        <div className="flex items-center gap-1 pr-1">
+          <button
+            type="button"
+            onClick={() => {
+              setWatchedBuild(null);
+              setLogsExpanded(true);
+            }}
+            aria-pressed={!showingBuildLog}
+            className={clsx(
+              'rounded px-1.5 py-0.5 text-[11px] transition-colors',
+              !showingBuildLog
+                ? 'bg-acc/15 text-ink-1'
+                : 'text-ink-3 hover:bg-bg-1',
+            )}
+          >
+            Metro
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              // Falls back to the selected device's build when nothing is being
+              // watched yet; disabled when there is neither.
+              const commandId = watchedBuildCommandId ?? buildCommandId;
+              if (commandId) setWatchedBuild({ taskId, commandId });
+              setLogsExpanded(true);
+            }}
+            aria-pressed={showingBuildLog}
+            disabled={!watchedBuildCommandId && !buildCommandId}
+            className={clsx(
+              'rounded px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-40',
+              showingBuildLog
+                ? 'bg-acc/15 text-ink-1'
+                : 'text-ink-3 hover:bg-bg-1',
+            )}
+          >
+            Build
+          </button>
+        </div>
         <IconButton
           onClick={handleClearLogs}
           size="sm"
@@ -1119,13 +1325,17 @@ export function MobileDevPane({
 
       {logsExpanded && (
         <InteractiveLog
-          log={devServerLog}
+          log={activeLog}
           taskId={taskId}
-          runCommandId={devServerCommandId}
-          isRunning={devServerRunning}
+          runCommandId={logCommandId}
+          isRunning={showingBuildLog ? watchedBuildRunning : devServerRunning}
           workingDir={workingDir}
           ignoreBrowserShortcuts
-          emptyText="Start Metro to see output."
+          emptyText={
+            showingBuildLog
+              ? 'Run Build to see output.'
+              : 'Start Metro to see output.'
+          }
           // The floor matters because the logs box has flex-basis 0: without it
           // flexbox hands every pixel of a squeeze to the controls block above
           // and the log silently renders at zero height.
