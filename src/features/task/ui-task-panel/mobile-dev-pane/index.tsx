@@ -35,6 +35,7 @@ import { Button } from '@/common/ui/button';
 import { cleanIpcError } from '@/lib/ipc-error';
 import { Combobox } from '@/common/ui/combobox';
 import { createMobileDevServerCommandId } from '@/lib/mobile-preview-runtime';
+import { DeeplinkButton } from './ui-deeplink-button';
 import { IconButton } from '@/common/ui/icon-button';
 import { InteractiveLog } from '@/features/common/interactive-log';
 import { Separator } from '@/common/ui/separator';
@@ -737,6 +738,32 @@ export function MobileDevPane({
     taskId,
   ]);
 
+  const handleOpenDeeplink = useCallback(
+    async (url: string) => {
+      if (!activeDevice) throw new Error('Select a device first.');
+      // Mirrors `handleReload`'s internal guard: the trigger disables itself
+      // during a restart, but the dropdown may already be open when the
+      // restart starts, and the open menu is not gated by the trigger.
+      if (isReloading || restartingDeviceKey !== null) {
+        throw new Error('Wait for the restart to finish.');
+      }
+      setActionNotice(null);
+      try {
+        await api.mobilePreview.openDeeplink({
+          platform: activeDevice.platform,
+          deviceId: activeDevice.id,
+          url,
+        });
+      } catch (error) {
+        // Rethrown so the dropdown keeps the URL and shows the failure inline
+        // instead of clearing the input and looking like it worked.
+        throw new Error(summarizeDeviceActionError(error));
+      }
+      setActionNotice(`Opened ${url} on ${activeDevice.name}.`);
+    },
+    [activeDevice, isReloading, restartingDeviceKey],
+  );
+
   const handleRestartApp = useCallback(async () => {
     // Mirrors `handleBootDevice`'s re-entrancy guard: the button disables
     // itself, but switching device mid-restart re-enables it and would start a
@@ -1247,6 +1274,29 @@ export function MobileDevPane({
             >
               Restart
             </Button>
+            <DeeplinkButton
+              // Same hazard as Reload: a restart in flight means the app is
+              // mid-relaunch, and deeplinking into a still-booting dev client
+              // tears down its JS runtime (SIGSEGV). See `handleReload`.
+              disabled={
+                !activeDeviceKey ||
+                !isActiveDeviceBooted ||
+                isReloading ||
+                restartingDeviceKey !== null
+              }
+              disabledReason={
+                !activeDeviceKey
+                  ? 'Select a device to open a deeplink'
+                  : !isActiveDeviceBooted
+                    ? 'Boot the device to open a deeplink'
+                    : isReloading
+                      ? 'Wait for the reload to finish'
+                      : restartingDeviceKey !== null
+                        ? 'Wait for the restart to finish'
+                        : undefined
+              }
+              onOpenDeeplink={handleOpenDeeplink}
+            />
           </div>
 
           {actionNotice && (
