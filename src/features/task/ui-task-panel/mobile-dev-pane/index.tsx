@@ -50,6 +50,7 @@ import {
   isFavoriteDevice,
   PLATFORM_LABELS,
 } from './utils-device-options';
+import { reloadAppOnMetro } from './utils-reload-app';
 import { resolveActiveDevice } from './utils-active-device';
 import { resolveAndroidProjectPath } from './utils-android-project-path';
 import { resolveDeviceListStatus } from './utils-device-list-status';
@@ -497,22 +498,80 @@ export function MobileDevPane({
   // reload command. Restart = relaunch the native app process on the device.
   // Same split (and wording) as the full preview pane.
   const handleReload = useCallback(async () => {
+    // Reload can now deeplink (see `reloadAppOnMetro`), and a restart in flight
+    // means the app is mid-relaunch: it has been killed and has not attached
+    // yet, so the peer count is legitimately 0 and the repair would fire an
+    // `exp://` deeplink into a still-booting app. That is the exact case
+    // `restartAppOnDevice` documents as fatal -- the dev client tears the JS
+    // runtime down while the first bundle is still loading and the process
+    // dies with a SIGSEGV. The button is disabled for this too; the guard is
+    // what makes it safe, since the restart re-enables the button the moment
+    // the user switches device.
+    if (isReloading || restartingDeviceKey !== null) return;
+    // Captured before the await: the selection can change while the deeplink
+    // is in flight.
+    const reloadedDeviceName = activeDevice?.name ?? 'this device';
     setActionNotice(null);
     setIsReloading(true);
     try {
-      const { connectedClients } = await api.mobilePreview.reloadExpo({
+      const outcome = await reloadAppOnMetro({
+        api: api.mobilePreview,
         metroPort: effectiveDevServerPort,
+        projectId,
+        taskId,
+        appPath,
+        device: activeDevice,
+        // Same gate as the restart path, for the same reason: `launchExpo`
+        // rejects outright when the app cannot be deeplinked, and asking anyway
+        // would turn a "nothing attached" notice into a spurious error.
+        //
+        // `isActiveDeviceBooted` is checked here rather than inside
+        // `resolveRestartReattach` because the restart path gets it from its
+        // button (`disabled={!activeDeviceKey || !isActiveDeviceBooted}`) while
+        // Reload's button only gates on the dev server. Without it, a selected
+        // but shut-down simulator reaches `xcrun simctl openurl` and the user
+        // gets "Unable to lookup in current state: Shutdown" instead of the
+        // no-client message that actually tells them what to do.
+        reattach: activeDevice && isActiveDeviceBooted
+          ? resolveRestartReattach({
+              isExpoApp,
+              hasLiveDevServerPort,
+              device: activeDevice,
+              metroPort: effectiveDevServerPort,
+              appScheme,
+            })
+          : null,
       });
       // Metro accepts the broadcast whether or not an app is listening, so
       // "sent" alone was indistinguishable from the button doing nothing.
-      if (connectedClients === 0) {
+      if (outcome.status === 'no-client') {
         addToast({
           message: `No app is connected to Metro on :${effectiveDevServerPort}, so there was nothing to reload. Open the app on the device (Restart, or Build & Run) and try again.`,
           type: 'error',
         });
         return;
       }
-      setActionNotice('Reload sent to Metro.');
+      if (outcome.status === 'reattach-failed') {
+        // Names the device instead of saying "this device": the deeplink is
+        // slow and the dropdown stays enabled, so by the time this lands the
+        // selection may have moved and a deictic pronoun would blame the wrong
+        // simulator.
+        addToast({
+          message: `No app was connected to Metro on :${effectiveDevServerPort}, and re-attaching ${reloadedDeviceName} failed: ${summarizeDeviceActionError(outcome.error)}`,
+          type: 'error',
+        });
+        return;
+      }
+      setActionNotice(
+        // Deliberately NOT "and reloaded": `launchExpo` resolves once
+        // `simctl openurl` / `am start` reports the OS accepted the URL, which
+        // proves nothing about the app coming up or a bundle loading. Claiming
+        // a reload here would be the same unverified-success bug bce4dd89 and
+        // ec578952 removed from the restart path.
+        outcome.status === 'reattached'
+          ? `Re-pointed the app at Metro on :${outcome.metroPort}.`
+          : 'Reload sent to Metro.',
+      );
     } catch (error) {
       // The port itself is already named by the main-process message, so this
       // adds only what the renderer alone knows: where that port came from.
@@ -529,7 +588,20 @@ export function MobileDevPane({
     } finally {
       setIsReloading(false);
     }
-  }, [addToast, effectiveDevServerPort, hasLiveDevServerPort]);
+  }, [
+    activeDevice,
+    addToast,
+    appPath,
+    appScheme,
+    effectiveDevServerPort,
+    hasLiveDevServerPort,
+    isActiveDeviceBooted,
+    isExpoApp,
+    isReloading,
+    projectId,
+    restartingDeviceKey,
+    taskId,
+  ]);
 
   const handleRestartApp = useCallback(async () => {
     // Mirrors `handleBootDevice`'s re-entrancy guard: the button disables
@@ -837,12 +909,17 @@ export function MobileDevPane({
               variant="secondary"
               className="flex-1"
               loading={isReloading}
-              disabled={!devServerRunning}
+              // Restart kills and relaunches the app; reloading during that
+              // window would deeplink into a still-booting process and crash
+              // it. See the guard in `handleReload`.
+              disabled={!devServerRunning || restartingDeviceKey !== null}
               icon={<RotateCw />}
               title={
-                devServerRunning
-                  ? 'Reload the JS bundle on the connected app (Metro reload)'
-                  : 'Start Metro to reload the app'
+                !devServerRunning
+                  ? 'Start Metro to reload the app'
+                  : restartingDeviceKey !== null
+                    ? 'Wait for the restart to finish'
+                    : 'Reload the JS bundle on the connected app (Metro reload)'
               }
             >
               Reload
@@ -853,14 +930,18 @@ export function MobileDevPane({
               variant="secondary"
               className="flex-1"
               loading={restartingDeviceKey === activeDeviceKey}
-              disabled={!activeDeviceKey || !isActiveDeviceBooted}
+              // Symmetric to Reload: a reload may have a deeplink in flight,
+              // and killing the app underneath it is the same hazard.
+              disabled={!activeDeviceKey || !isActiveDeviceBooted || isReloading}
               icon={<RotateCcw />}
               title={
                 !activeDeviceKey
                   ? 'Select a device to restart its app'
                   : !isActiveDeviceBooted
                     ? 'Boot the device to restart its app'
-                    : 'Restart the native app on the device'
+                    : isReloading
+                      ? 'Wait for the reload to finish'
+                      : 'Restart the native app on the device'
               }
             >
               Restart
