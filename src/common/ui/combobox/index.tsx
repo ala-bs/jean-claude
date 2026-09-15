@@ -29,6 +29,11 @@ export interface ComboboxOption {
    * user would reasonably type that are not in the label or description.
    */
   keywords?: string[];
+  /**
+   * Marks the option as live/running. Renders a green dot before the label in
+   * the list and on the trigger when selected.
+   */
+  indicator?: 'active';
 }
 
 export function Combobox({
@@ -178,6 +183,12 @@ export function Combobox({
           className,
         )}
       >
+        {selectedOption?.indicator === 'active' && (
+          <span
+            aria-hidden
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)]"
+          />
+        )}
         <span
           className={clsx(
             'truncate',
@@ -303,13 +314,19 @@ export function Combobox({
                       <div className="min-w-0 flex-1">
                         <span
                           className={clsx(
-                            'block truncate',
+                            'flex min-w-0 items-center gap-1.5',
                             option.value === value
                               ? 'text-ink-1 font-medium'
                               : 'text-ink-1',
                           )}
                         >
-                          {option.label}
+                          {option.indicator === 'active' && (
+                            <span
+                              aria-hidden
+                              className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)]"
+                            />
+                          )}
+                          <span className="truncate">{option.label}</span>
                         </span>
                         {option.description && (
                           <span className="text-ink-3 block truncate text-xs">

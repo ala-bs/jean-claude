@@ -65,6 +65,13 @@ export function getFavoriteDevices({
  * header above every row is noise. Favorites rows carry their platform in the
  * description instead, since their header can't convey it for a mixed list.
  */
+/** In-place stable partition: booted devices first, everything else after. */
+function bootedFirst(devices: MobilePreviewDevice[]): void {
+  const booted = devices.filter((device) => device.state === 'booted');
+  const rest = devices.filter((device) => device.state !== 'booted');
+  devices.splice(0, devices.length, ...booted, ...rest);
+}
+
 export function buildDeviceOptions({
   devices,
   favoriteDevices,
@@ -77,6 +84,7 @@ export function buildDeviceOptions({
   description?: string;
   group?: string;
   keywords?: string[];
+  indicator?: 'active';
 }[] {
   const favorites: MobilePreviewDevice[] = [];
   const byPlatform: Record<MobilePlatform, MobilePreviewDevice[]> = {
@@ -97,6 +105,13 @@ export function buildDeviceOptions({
       byPlatform[device.platform]?.push(device);
     }
   });
+
+  // Booted devices float to the top of every group -- they are the ones you can
+  // act on immediately. Stable within each bucket so the underlying device-list
+  // order is preserved otherwise.
+  bootedFirst(favorites);
+  bootedFirst(byPlatform.ios);
+  bootedFirst(byPlatform.android);
 
   const nonEmptyGroupCount =
     (favorites.length > 0 ? 1 : 0) +
@@ -136,6 +151,7 @@ export function buildDeviceOptions({
       device.id,
       device.state === 'booted' ? 'booted' : 'shutdown',
     ],
+    ...(device.state === 'booted' ? { indicator: 'active' as const } : {}),
     ...(group ? { group } : {}),
   });
 

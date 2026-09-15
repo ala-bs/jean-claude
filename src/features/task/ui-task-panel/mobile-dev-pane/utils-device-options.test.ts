@@ -45,13 +45,42 @@ describe('buildDeviceOptions', () => {
 
     expect(options.map((option) => option.value)).toEqual([
       'android:Nexus_5',
-      'ios:sim-se',
+      // Booted first inside the iOS group.
       'ios:sim-pro',
+      'ios:sim-se',
       'android:Pixel_8',
     ]);
     expect(options[0].group).toBe(FAVORITES_GROUP_LABEL);
     expect(options[1].group).toBe(PLATFORM_LABELS.ios);
     expect(options[3].group).toBe(PLATFORM_LABELS.android);
+  });
+
+  it('floats booted devices to the top of each group and marks them active', () => {
+    const bootedPixel = device({
+      id: 'Pixel_9',
+      name: 'Pixel 9',
+      platform: 'android',
+      state: 'booted',
+    });
+    const bootedNexus = { ...NEXUS, state: 'booted' as const };
+
+    const options = buildDeviceOptions({
+      devices: [SE, PRO, PIXEL, bootedPixel, bootedNexus],
+      favoriteDevices: favorites(NEXUS, SE),
+    });
+
+    expect(options.map((option) => option.value)).toEqual([
+      'android:Nexus_5',
+      'ios:sim-se',
+      'ios:sim-pro',
+      'android:Pixel_9',
+      'android:Pixel_8',
+    ]);
+    expect(
+      options
+        .filter((option) => option.indicator === 'active')
+        .map((option) => option.value),
+    ).toEqual(['android:Nexus_5', 'ios:sim-pro', 'android:Pixel_9']);
   });
 
   it('keys options by platform and id so ids can collide across platforms', () => {
