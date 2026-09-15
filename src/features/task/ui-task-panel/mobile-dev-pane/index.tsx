@@ -50,6 +50,10 @@ import {
   isFavoriteDevice,
   PLATFORM_LABELS,
 } from './utils-device-options';
+import {
+  createStartLaunchRequestId,
+  resolveStartLaunchDecision,
+} from './utils-start-launch';
 import { reloadAppOnMetro } from './utils-reload-app';
 import { resolveActiveDevice } from './utils-active-device';
 import { resolveAndroidProjectPath } from './utils-android-project-path';
@@ -122,6 +126,20 @@ export function MobileDevPane({
   const [restartingDeviceKey, setRestartingDeviceKey] = useState<string | null>(
     null,
   );
+  // Set when the user presses Start; consumed by the effect that deeplinks the
+  // app once Metro reports a live port. See `resolveStartLaunchDecision`.
+  // A ref, not state: the effect both reads and clears it, and clearing state
+  // inside an effect body is exactly the cascading-render pattern the React
+  // compiler rejects. The effect already re-runs on the value it waits for
+  // (`hasLiveDevServerPort`), so no render is needed to re-check it.
+  const isStartLaunchPendingRef = useRef(false);
+  // The device whose app Start is currently deeplinking. Reload and Restart
+  // gate on this for the same reason they gate on each other: killing or
+  // re-pointing an app while another deeplink is in flight is the documented
+  // SIGSEGV in `restartAppOnDevice`.
+  const [startLaunchingDeviceKey, setStartLaunchingDeviceKey] = useState<
+    string | null
+  >(null);
   // Only success/progress copy lives inline; failures go to a toast because
   // device errors (devicectl dumps) are far too long for this narrow pane.
   const [actionNotice, setActionNotice] = useState<string | null>(null);
@@ -471,20 +489,40 @@ export function MobileDevPane({
       // stop actually succeeded. `stopCommand` rethrows, and the status stays
       // 'running' on failure, so clearing up front would drop the selection
       // (disabling Boot/Restart) while Metro is still very much alive.
+      // A stop cancels any deeplink the previous Start was still waiting to
+      // fire, otherwise it would land on the next run's port.
+      isStartLaunchPendingRef.current = false;
       void runCommands
         .stopCommand(devServerCommandId)
         .then(() => selectDevice(null));
       return;
     }
-    void runCommands.startAdHocCommand({
-      runCommandId: devServerCommandId,
-      // Must match the preview pane, which starts this same runCommandId --
-      // otherwise the shared command's label flips depending on who started it.
-      name: 'Mobile dev server',
-      command: devServerCommand,
-      ports: [configuredDevServerPort],
-      availablePort: { provider: 'args' },
-    });
+    // Start means "run the app", not just "run Metro": the deeplink is what
+    // points the dev client at this server.
+    isStartLaunchPendingRef.current = true;
+    void runCommands
+      .startAdHocCommand({
+        runCommandId: devServerCommandId,
+        // Must match the preview pane, which starts this same runCommandId --
+        // otherwise the shared command's label flips depending on who started it.
+        name: 'Mobile dev server',
+        command: devServerCommand,
+        ports: [configuredDevServerPort],
+        availablePort: { provider: 'args' },
+      })
+      .then(({ started }) => {
+        // `runStart` RESOLVES with `started: false` on a ports-in-use conflict
+        // and when a newer operation supersedes this one -- it only rejects on
+        // a hard error. Leaving the flag set there would arm a deeplink that
+        // fires much later, when this shared run command (the preview pane
+        // starts the same `devServerCommandId`) next reports a live port.
+        if (!started) isStartLaunchPendingRef.current = false;
+      })
+      .catch(() => {
+        // Metro never came up, so there is nothing to attach to. The run
+        // command surfaces its own failure.
+        isStartLaunchPendingRef.current = false;
+      });
   }, [
     configuredDevServerPort,
     devServerCommand,
@@ -674,6 +712,91 @@ export function MobileDevPane({
     restartingDeviceKey,
     taskId,
   ]);
+
+  // Start = start Metro AND open the app on the selected device. Deferred to an
+  // effect because the port to deeplink is only known once the run command
+  // reports it (see `resolveStartLaunchDecision`).
+  useEffect(() => {
+    const decision = resolveStartLaunchDecision({
+      isPending: isStartLaunchPendingRef.current,
+      hasLiveDevServerPort,
+      isLoadingDevices,
+      device: activeDevice,
+      isDeviceBooted: isActiveDeviceBooted,
+      isExpoApp,
+      metroPort: effectiveDevServerPort,
+      appScheme,
+    });
+    if (decision.status === 'idle' || decision.status === 'waiting') return;
+    // Cleared before the await so a slow deeplink cannot be fired twice by a
+    // re-render, and so Stop is not needed to escape a stuck pending state.
+    isStartLaunchPendingRef.current = false;
+    // `activeDevice` is non-null for a 'launch' decision; re-checked for the
+    // type narrowing.
+    if (decision.status === 'skip' || !activeDevice) return;
+
+    const launchedDeviceKey = activeDeviceKey;
+    const launchedDeviceName = activeDevice.name;
+    // Queued rather than called inline: a synchronous setState in an effect
+    // body is the cascading-render pattern the React compiler rejects. Same
+    // workaround as `useMobilePreviewExpoLaunch`. The gap is one microtask, so
+    // no click can land inside it.
+    queueMicrotask(() => setStartLaunchingDeviceKey(launchedDeviceKey));
+    void api.mobilePreview
+      .launchExpo({
+        requestId: createStartLaunchRequestId(),
+        taskId,
+        projectId,
+        appPath,
+        platform: activeDevice.platform,
+        deviceId: activeDevice.id,
+        metroPort: decision.metroPort,
+        appScheme: decision.appScheme,
+      })
+      .then(() => {
+        if (isDeviceSelectionSwitched(launchedDeviceKey)) return;
+        // Not "and opened": `launchExpo` resolves once the OS accepted the URL,
+        // which proves nothing about the app finishing its boot.
+        setActionNotice(
+          `Opened ${launchedDeviceName} on Metro :${decision.metroPort}.`,
+        );
+      })
+      .catch((error: unknown) => {
+        if (isDeviceSelectionSwitched(launchedDeviceKey)) return;
+        // Metro did start, so this is a warning about the app, not a failed
+        // Start.
+        addToast({
+          message: `Metro started, but opening the app on ${launchedDeviceName} failed: ${summarizeDeviceActionError(error)}`,
+          type: 'error',
+        });
+      })
+      .finally(() => {
+        // Keyed by device so a launch that resolves after the user switched
+        // device does not unblock (or keep blocked) the wrong selection.
+        setStartLaunchingDeviceKey((current) =>
+          current === launchedDeviceKey ? null : current,
+        );
+      });
+  }, [
+    activeDevice,
+    activeDeviceKey,
+    addToast,
+    appPath,
+    appScheme,
+    effectiveDevServerPort,
+    hasLiveDevServerPort,
+    isActiveDeviceBooted,
+    isDeviceSelectionSwitched,
+    isExpoApp,
+    isLoadingDevices,
+    projectId,
+    taskId,
+  ]);
+
+  // True while Start's deeplink is in flight for the selected device.
+  const isStartLaunchingActiveDevice =
+    startLaunchingDeviceKey !== null &&
+    startLaunchingDeviceKey === activeDeviceKey;
 
   const devServerTone: 'running' | 'stopped' | 'errored' =
     devServerStatus?.status === 'errored'
@@ -912,14 +1035,20 @@ export function MobileDevPane({
               // Restart kills and relaunches the app; reloading during that
               // window would deeplink into a still-booting process and crash
               // it. See the guard in `handleReload`.
-              disabled={!devServerRunning || restartingDeviceKey !== null}
+              disabled={
+                !devServerRunning ||
+                restartingDeviceKey !== null ||
+                isStartLaunchingActiveDevice
+              }
               icon={<RotateCw />}
               title={
                 !devServerRunning
                   ? 'Start Metro to reload the app'
                   : restartingDeviceKey !== null
                     ? 'Wait for the restart to finish'
-                    : 'Reload the JS bundle on the connected app (Metro reload)'
+                    : isStartLaunchingActiveDevice
+                      ? 'Wait for the app to open'
+                      : 'Reload the JS bundle on the connected app (Metro reload)'
               }
             >
               Reload
@@ -932,7 +1061,12 @@ export function MobileDevPane({
               loading={restartingDeviceKey === activeDeviceKey}
               // Symmetric to Reload: a reload may have a deeplink in flight,
               // and killing the app underneath it is the same hazard.
-              disabled={!activeDeviceKey || !isActiveDeviceBooted || isReloading}
+              disabled={
+                !activeDeviceKey ||
+                !isActiveDeviceBooted ||
+                isReloading ||
+                isStartLaunchingActiveDevice
+              }
               icon={<RotateCcw />}
               title={
                 !activeDeviceKey
@@ -941,7 +1075,9 @@ export function MobileDevPane({
                     ? 'Boot the device to restart its app'
                     : isReloading
                       ? 'Wait for the reload to finish'
-                      : 'Restart the native app on the device'
+                      : isStartLaunchingActiveDevice
+                        ? 'Wait for the app to open'
+                        : 'Restart the native app on the device'
               }
             >
               Restart
