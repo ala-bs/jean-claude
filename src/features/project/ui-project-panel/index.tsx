@@ -584,7 +584,11 @@ export function ProjectPanel({
   const hasCommitsElsewhere = status?.hasCommitsElsewhere ?? true;
 
   return (
-    <div className="bg-bg-0 flex h-full min-h-0 flex-1 flex-col">
+    // `min-w-0`: as a flex child the panel would otherwise be sized by its
+    // min-content width (the sync bar's non-wrapping actions, the header's
+    // buttons), growing wider than the viewport and getting clipped by
+    // `main`'s `overflow-hidden` — the Push button was cut in half.
+    <div className="bg-bg-0 flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
       <ProjectHeader
         name={project.name}
         path={project.path}
