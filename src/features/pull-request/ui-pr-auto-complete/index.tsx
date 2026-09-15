@@ -36,6 +36,10 @@ import { useToastStore } from '@/stores/toasts';
 
 import { getCurrentIdentityId } from '../utils-pr-current-user';
 
+// [qac-debug] temporary: last value each project's rows observed, so the
+// per-row instrumentation logs transitions instead of one line per row.
+const qacLastObserved = new Map<string, boolean | 'no-project'>();
+
 export function PrAutoComplete({
   pr,
   projectId,
@@ -83,6 +87,21 @@ export function PrAutoComplete({
 
   const { data: project } = useProject(projectId);
   const isQueueEnabled = !!project?.queuePrAutoComplete;
+
+  // [qac-debug] temporary instrumentation for the queue-auto-complete toggle.
+  // This component mounts once per PR feed row, so logging every render would
+  // emit one line per row per project change and bury the two lines that
+  // actually matter. Log only when the observed value transitions.
+  useEffect(() => {
+    const observed = project ? !!project.queuePrAutoComplete : 'no-project';
+    if (qacLastObserved.get(projectId) === observed) return;
+    qacLastObserved.set(projectId, observed);
+    console.warn('[qac-row] PrAutoComplete observed new value', {
+      projectId,
+      firstSeenOnPr: pr.id,
+      queuePrAutoComplete: observed,
+    });
+  }, [pr.id, project, projectId]);
   const enqueue = usePrCompletionQueueStore((state) => state.enqueue);
   const queued = usePrCompletionQueueEntry(projectId, pr.id);
   const leaveQueue = useLeavePrCompletionQueue();

@@ -1021,6 +1021,8 @@ export function ProjectSettings({
   }, [projectId]);
 
   const saveProjectSettings = useCallback((save: ProjectSettingsSave) => {
+    // [qac-debug] temporary instrumentation for the queue-auto-complete toggle.
+    console.warn('[qac] project settings save', save.data);
     void saveQueueRef.current?.enqueue(save);
   }, []);
   const latestSaveProjectSettingsRef = useRef(saveProjectSettings);

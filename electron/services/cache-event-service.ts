@@ -64,6 +64,30 @@ export function emitCacheEvent(event: CacheEvent): CacheEvent {
   for (const win of windows) {
     const subscriptions = subscriptionsByWebContentsId.get(win.webContents.id);
 
+    // [qac-debug] temporary instrumentation for the queue-auto-complete toggle.
+    if (event.type === 'project.upsert' || event.type === 'project.patch') {
+      // `willSend` must account for the liveness guard below, not just the
+      // subscription match — otherwise a closing window logs `willSend=true`
+      // while nothing is sent, which is the exact false lead this hunts.
+      const isAlive = !win.isDestroyed() && !win.webContents.isDestroyed();
+      console.warn(
+        '[qac] emit %s wc=%d alive=%s subs=%d willSend=%s payload=%o',
+        event.type,
+        win.webContents.id,
+        isAlive,
+        subscriptions?.length ?? -1,
+        subscriptions
+          ? isAlive && shouldSendCacheEvent(subscriptions, event)
+          : 'no-subs',
+        event.type === 'project.upsert'
+          ? {
+              id: event.project.id,
+              queuePrAutoComplete: event.project.queuePrAutoComplete,
+            }
+          : { id: event.projectId, patch: Object.keys(event.patch) },
+      );
+    }
+
     if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
       if (subscriptions && shouldSendCacheEvent(subscriptions, event)) {
         try {

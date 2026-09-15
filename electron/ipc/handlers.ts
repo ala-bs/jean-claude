@@ -1138,6 +1138,23 @@ function toCacheSubscriptionUpdate(
       ? value.revision
       : 0;
 
+  // [qac-debug] temporary: prove/disprove that the renderer's subscription list
+  // is being truncated (which would silently drop project:* cache events).
+  if (
+    Array.isArray(value.subscriptions) &&
+    value.subscriptions.length > MAX_CACHE_SUBSCRIPTIONS
+  ) {
+    const dropped = value.subscriptions.slice(MAX_CACHE_SUBSCRIPTIONS);
+    console.warn(
+      '[qac] cache subscriptions truncated: total=%d dropped=%d droppedProjectKeys=%o',
+      value.subscriptions.length,
+      dropped.length,
+      dropped
+        .map((subscription) => subscription?.resourceKey)
+        .filter((key) => typeof key === 'string' && key.startsWith('project')),
+    );
+  }
+
   const subscriptions = Array.isArray(value.subscriptions)
     ? value.subscriptions
         .slice(0, MAX_CACHE_SUBSCRIPTIONS)
