@@ -39,6 +39,34 @@ export const POLL_INTERVAL_MS = 15_000;
  */
 export const UNARMED_READS_BEFORE_TRUSTED = 4;
 
+/**
+ * How many consecutive fetched PR reads must report a blocking `mergeStatus`
+ * before we treat it as real.
+ *
+ * Merging the head PR moves the target branch, which makes Azure recompute the
+ * merge of every other PR that targets it. During that window a PR can read
+ * back as `conflicts`/`failure` even though it merges cleanly moments later —
+ * and the read sitting in the shared query cache when an entry is promoted can
+ * predate the merge entirely. Acting on the first such read dropped the rest of
+ * the queue one entry per promotion, in seconds. One confirming re-read
+ * (`POLL_INTERVAL_MS` later, so after the recompute) is enough to tell a real
+ * conflict from that transient.
+ */
+export const MERGE_BLOCKED_READS_BEFORE_TRUSTED = 2;
+
+/**
+ * Minimum `dataUpdatedAt` gap between two reads that both count toward the
+ * thresholds above.
+ *
+ * The PR query key is shared with every other PR mutation, and each one writes
+ * through `setQueryData` on success — a reviewer's vote re-stamps the cache with
+ * whatever `mergeStatus` was already there. Without a time floor those writes
+ * count as confirming reads, and a threshold of N is satisfied by one real poll
+ * plus N-1 unrelated clicks. Slightly under `POLL_INTERVAL_MS`, so a poll that
+ * fires a touch early still counts.
+ */
+export const MIN_COUNTED_READ_GAP_MS = POLL_INTERVAL_MS * 0.8;
+
 type Settlement = {
   outcome: 'succeeded' | 'failed';
   reason: string;
@@ -54,6 +82,7 @@ export function resolveArmedPrSettlement({
   pr,
   hasRejectedBlockingPolicy,
   hasObservedArmed,
+  hasConfirmedMergeBlocked,
 }: {
   pr: AzureDevOpsPullRequestDetails;
   hasRejectedBlockingPolicy: boolean;
@@ -63,6 +92,12 @@ export function resolveArmedPrSettlement({
    * on the shared query cache after our PATCH and masquerading as a cancel.
    */
   hasObservedArmed: boolean;
+  /**
+   * Whether the blocking `mergeStatus` has been seen on enough consecutive
+   * reads to be trusted. A single one is not evidence: it can be a pre-arm read
+   * or Azure's transient recompute right after the previous PR merged.
+   */
+  hasConfirmedMergeBlocked: boolean;
 }): Settlement | null {
   if (pr.status === 'completed') {
     return { outcome: 'succeeded', reason: 'merged' };
@@ -70,10 +105,10 @@ export function resolveArmedPrSettlement({
   if (pr.status === 'abandoned') {
     return { outcome: 'failed', reason: 'PR was abandoned' };
   }
-  if (pr.mergeStatus === 'conflicts') {
+  if (hasConfirmedMergeBlocked && pr.mergeStatus === 'conflicts') {
     return { outcome: 'failed', reason: 'merge conflicts with the target branch' };
   }
-  if (pr.mergeStatus === 'failure') {
+  if (hasConfirmedMergeBlocked && pr.mergeStatus === 'failure') {
     return { outcome: 'failed', reason: 'Azure DevOps could not merge the PR' };
   }
   // Azure clears `autoCompleteSetBy` when it gives up on the PR (rejected vote,
@@ -143,7 +178,16 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
   const autoCompleteMutation = useSetAutoComplete(projectId, prId, repoInfo);
   const isArmed = entry.status === 'armed';
 
-  const { data: pr } = usePullRequest(projectId, prId, repoInfo);
+  // `dataUpdatedAt` — not the object identity — is what marks a fetch as new.
+  // React Query's structural sharing (on by default) hands back the PREVIOUS
+  // object whenever the refetched PR is deeply equal, which is the normal case
+  // for a PR sitting in a steady state. Counting identities alone would freeze
+  // every read counter at 1 and wedge the entry forever.
+  const { data: pr, dataUpdatedAt: prFetchedAt } = usePullRequest(
+    projectId,
+    prId,
+    repoInfo,
+  );
   const { data: evaluations = [] } = usePullRequestPolicyEvaluations(
     projectId,
     prId,
@@ -362,23 +406,48 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
   // Watch the armed PR for a terminal state.
   const hasObservedArmedRef = useRef(false);
   const unarmedReadsRef = useRef(0);
+  const mergeBlockedReadsRef = useRef(0);
   const lastCountedPrRef = useRef<AzureDevOpsPullRequestDetails | undefined>(
     undefined,
   );
+  const lastCountedFetchedAtRef = useRef(0);
   useEffect(() => {
     if (!isArmed || !pr) return;
 
-    // Count distinct fetched PRs, NOT effect runs. `settle` depends on the
-    // mutation object, whose identity changes every render, so this effect
-    // re-runs constantly — counting runs would blow through the threshold in
-    // milliseconds and reinstate the false-cancellation bug it guards against.
-    if (pr !== lastCountedPrRef.current) {
+    // Count POLLS, not effect runs and not cache writes. Two traps here:
+    //
+    // 1. `settle` depends on the mutation object, whose identity changes every
+    //    render, so this effect re-runs constantly. Counting runs would blow
+    //    through the thresholds in milliseconds.
+    // 2. Object identity is wrong in BOTH directions. Structural sharing hands
+    //    back the previous object for a deeply-equal refetch (so a PR resting in
+    //    a steady state would never count a second read and could never settle),
+    //    while every sibling mutation sharing this query key — a reviewer's vote,
+    //    publish, draft toggle — writes a NEW object through `setQueryData`
+    //    carrying the same stale `mergeStatus` it had before.
+    //
+    // So a read only counts once a poll interval has elapsed since the last
+    // counted one. That is the only thing an incidental cache write cannot fake,
+    // and the poll timer guarantees it always eventually arrives.
+    const isFirstRead = lastCountedPrRef.current === undefined;
+    const isNewPoll = isFirstRead
+      ? true
+      : prFetchedAt > 0
+        ? prFetchedAt - lastCountedFetchedAtRef.current >= MIN_COUNTED_READ_GAP_MS
+        : pr !== lastCountedPrRef.current;
+    if (isNewPoll) {
       lastCountedPrRef.current = pr;
+      lastCountedFetchedAtRef.current = prFetchedAt;
       if (pr.autoCompleteSetBy) {
         hasObservedArmedRef.current = true;
         unarmedReadsRef.current = 0;
       } else {
         unarmedReadsRef.current += 1;
+      }
+      if (pr.mergeStatus === 'conflicts' || pr.mergeStatus === 'failure') {
+        mergeBlockedReadsRef.current += 1;
+      } else {
+        mergeBlockedReadsRef.current = 0;
       }
     }
     // The "wait until we've seen it armed" guard absorbs a stale pre-arm read,
@@ -401,9 +470,11 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
       pr,
       hasRejectedBlockingPolicy,
       hasObservedArmed: trustMissingAutoComplete,
+      hasConfirmedMergeBlocked:
+        mergeBlockedReadsRef.current >= MERGE_BLOCKED_READS_BEFORE_TRUSTED,
     });
     if (settlement) settle(settlement);
-  }, [evaluations, isArmed, pr, settle]);
+  }, [evaluations, isArmed, pr, prFetchedAt, settle]);
 
   return null;
 }

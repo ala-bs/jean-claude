@@ -31,6 +31,7 @@ describe('resolveArmedPrSettlement', () => {
         pr: makePr(),
         hasRejectedBlockingPolicy: false,
         hasObservedArmed: true,
+        hasConfirmedMergeBlocked: true,
       }),
     ).toBeNull();
   });
@@ -41,6 +42,7 @@ describe('resolveArmedPrSettlement', () => {
         pr: makePr({ status: 'completed' }),
         hasRejectedBlockingPolicy: false,
         hasObservedArmed: true,
+        hasConfirmedMergeBlocked: true,
       }),
     ).toEqual({ outcome: 'succeeded', reason: 'merged' });
   });
@@ -51,6 +53,7 @@ describe('resolveArmedPrSettlement', () => {
         pr: makePr({ status: 'completed' }),
         hasRejectedBlockingPolicy: true,
         hasObservedArmed: true,
+        hasConfirmedMergeBlocked: true,
       })?.outcome,
     ).toBe('succeeded');
   });
@@ -61,6 +64,7 @@ describe('resolveArmedPrSettlement', () => {
         pr: makePr({ status: 'abandoned' }),
         hasRejectedBlockingPolicy: false,
         hasObservedArmed: true,
+        hasConfirmedMergeBlocked: true,
       })?.outcome,
     ).toBe('failed');
     expect(
@@ -68,6 +72,7 @@ describe('resolveArmedPrSettlement', () => {
         pr: makePr({ mergeStatus: 'conflicts' }),
         hasRejectedBlockingPolicy: false,
         hasObservedArmed: true,
+        hasConfirmedMergeBlocked: true,
       })?.outcome,
     ).toBe('failed');
     expect(
@@ -75,8 +80,32 @@ describe('resolveArmedPrSettlement', () => {
         pr: makePr({ mergeStatus: 'failure' }),
         hasRejectedBlockingPolicy: false,
         hasObservedArmed: true,
+        hasConfirmedMergeBlocked: true,
       })?.outcome,
     ).toBe('failed');
+  });
+
+  it('ignores an unconfirmed blocking mergeStatus', () => {
+    // One conflicted read can be a pre-arm read, or Azure recomputing the merge
+    // right after the previous queued PR moved the target branch. Acting on it
+    // dropped every remaining entry, one per promotion.
+    expect(
+      resolveArmedPrSettlement({
+        pr: makePr({ mergeStatus: 'conflicts' }),
+        hasRejectedBlockingPolicy: false,
+        hasObservedArmed: true,
+        hasConfirmedMergeBlocked: false,
+      }),
+    ).toBeNull();
+    // Same guard on the sibling branch, so the two cannot drift apart.
+    expect(
+      resolveArmedPrSettlement({
+        pr: makePr({ mergeStatus: 'failure' }),
+        hasRejectedBlockingPolicy: false,
+        hasObservedArmed: true,
+        hasConfirmedMergeBlocked: false,
+      }),
+    ).toBeNull();
   });
 
   it('ignores a missing autoCompleteSetBy until the armed value was seen once', () => {
@@ -88,6 +117,7 @@ describe('resolveArmedPrSettlement', () => {
         pr: makePr({ autoCompleteSetBy: undefined }),
         hasRejectedBlockingPolicy: false,
         hasObservedArmed: false,
+        hasConfirmedMergeBlocked: true,
       }),
     ).toBeNull();
   });
@@ -98,6 +128,7 @@ describe('resolveArmedPrSettlement', () => {
         pr: makePr({ autoCompleteSetBy: undefined }),
         hasRejectedBlockingPolicy: false,
         hasObservedArmed: true,
+        hasConfirmedMergeBlocked: true,
       }),
     ).toEqual({ outcome: 'failed', reason: 'auto-complete was cancelled' });
   });
@@ -108,6 +139,7 @@ describe('resolveArmedPrSettlement', () => {
         pr: makePr(),
         hasRejectedBlockingPolicy: true,
         hasObservedArmed: true,
+        hasConfirmedMergeBlocked: true,
       }),
     ).toEqual({ outcome: 'failed', reason: 'a required check failed' });
   });

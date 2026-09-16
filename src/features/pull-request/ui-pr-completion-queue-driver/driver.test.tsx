@@ -17,6 +17,49 @@ import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
 
 /** Mutable state the mocked hooks read from, keyed by PR id. */
 const prs = new Map<number, AzureDevOpsPullRequestDetails>();
+/**
+ * `dataUpdatedAt` per PR, as react-query reports it.
+ *
+ * Mirrors structural sharing: a refetch that returns deeply-equal data hands
+ * back the PREVIOUS object, so only this timestamp marks the read as new. Tests
+ * that want a fresh read must go through `setPr`, never `prs.set`.
+ */
+const prFetchedAt = new Map<number, number>();
+/**
+ * Wall clock the fake `dataUpdatedAt` stamps come from. Advanced by a full poll
+ * interval per fetch, because the driver only counts reads that are a poll
+ * apart — a test clock ticking by 1ms would count none of them.
+ */
+let fetchClock = 1_000_000;
+
+/** Record a poll of `pr`, bumping its `dataUpdatedAt` like react-query does. */
+function setPr(prId: number, pr: AzureDevOpsPullRequestDetails) {
+  fetchClock += POLL_INTERVAL_MS;
+  prs.set(prId, pr);
+  prFetchedAt.set(prId, fetchClock);
+}
+
+/**
+ * A cache write from a sibling mutation on the SAME query key — a reviewer's
+ * vote, a publish — which re-stamps `dataUpdatedAt` with a new object carrying
+ * the same PR state, without any poll having happened.
+ */
+function cacheWriteSamePr(prId: number, pr: AzureDevOpsPullRequestDetails) {
+  fetchClock += 50;
+  prs.set(prId, pr);
+  prFetchedAt.set(prId, fetchClock);
+}
+
+/**
+ * A refetch that returned deeply-equal data: react-query's structural sharing
+ * keeps the previous object, so ONLY `dataUpdatedAt` moves. This is the normal
+ * case for a PR resting in a steady state, and the shape that wedges any read
+ * counter keyed on object identity.
+ */
+function refetchSamePr(prId: number) {
+  fetchClock += POLL_INTERVAL_MS;
+  prFetchedAt.set(prId, fetchClock);
+}
 let queueEnabled = true;
 const setAutoComplete = vi.fn();
 const invalidatePr = vi.fn();
@@ -44,6 +87,7 @@ vi.mock('@/hooks/use-pull-requests', () => ({
   }),
   usePullRequest: (_projectId: string, prId: number) => ({
     data: prs.get(prId),
+    dataUpdatedAt: prFetchedAt.get(prId) ?? 0,
   }),
   usePullRequestPolicyEvaluations: () => ({ data: policyEvaluations }),
   useRequeuePolicyEvaluation: () => ({
@@ -133,8 +177,10 @@ describe('PrCompletionQueueDriver', () => {
 
   beforeEach(() => {
     prs.clear();
-    prs.set(101, makePr(101));
-    prs.set(102, makePr(102));
+    prFetchedAt.clear();
+    fetchClock = 1_000_000;
+    setPr(101, makePr(101));
+    setPr(102, makePr(102));
     queueEnabled = true;
     armDeferred = null;
     setAutoComplete.mockClear();
@@ -167,7 +213,7 @@ describe('PrCompletionQueueDriver', () => {
     const armed = makePr(prId, {
       autoCompleteSetBy: { id: 'u1', displayName: 'Dev' },
     });
-    prs.set(prId, armed);
+    setPr(prId, armed);
     await act(async () => {
       pending?.resolve(armed);
     });
@@ -192,7 +238,7 @@ describe('PrCompletionQueueDriver', () => {
     await acceptArm(101);
     expect(statusOf(101)).toBe('armed');
 
-    prs.set(
+    setPr(
       101,
       makePr(101, {
         status: 'completed',
@@ -213,7 +259,9 @@ describe('PrCompletionQueueDriver', () => {
     await render();
     await acceptArm(101);
 
-    prs.set(
+    // One conflicted read is not evidence — it may be Azure recomputing the
+    // merge after the previous PR moved the target branch.
+    setPr(
       101,
       makePr(101, {
         mergeStatus: 'conflicts',
@@ -221,10 +269,86 @@ describe('PrCompletionQueueDriver', () => {
       }),
     );
     await render();
+    // The confirming poll returns deeply-equal data, so react-query hands back
+    // the SAME object — the conflict must still be confirmed off that read.
+    refetchSamePr(101);
+    await render();
 
     // The conflicted PR keeps auto-complete at Azure unless we clear it, and a
     // second armed PR is exactly the pileup this queue exists to prevent.
     expect(setAutoComplete).toHaveBeenCalledWith({ prId: 101, enabled: false });
+    expect(queuedPrIds()).toEqual([102]);
+  });
+
+  it('does not drop an entry on a single transient conflicted read', async () => {
+    enqueue(101);
+    enqueue(102);
+    await render();
+    await acceptArm(101);
+
+    // Azure briefly reports conflicts while it recomputes the merge against the
+    // just-moved target branch, then settles back to a clean merge.
+    setPr(
+      101,
+      makePr(101, {
+        mergeStatus: 'conflicts',
+        autoCompleteSetBy: { id: 'u1', displayName: 'Dev' },
+      }),
+    );
+    await render();
+    expect(queuedPrIds()).toEqual([101, 102]);
+
+    setPr(
+      101,
+      makePr(101, {
+        mergeStatus: 'succeeded',
+        autoCompleteSetBy: { id: 'u1', displayName: 'Dev' },
+      }),
+    );
+    await render();
+    expect(queuedPrIds()).toEqual([101, 102]);
+    expect(setAutoComplete).not.toHaveBeenCalledWith({
+      prId: 101,
+      enabled: false,
+    });
+  });
+
+  it('does not let a sibling cache write stand in for a confirming poll', async () => {
+    enqueue(101);
+    enqueue(102);
+    await render();
+    await acceptArm(101);
+
+    const conflicted = makePr(101, {
+      mergeStatus: 'conflicts',
+      autoCompleteSetBy: { id: 'u1', displayName: 'Dev' },
+    });
+    setPr(101, conflicted);
+    await render();
+
+    // The author retitles the armed PR. `useUpdatePullRequest` writes the same
+    // query key through `setQueryData`, producing a fresh object that still
+    // carries the pre-poll `mergeStatus`. It re-stamps the cache, it does not
+    // re-check Azure — so it must not confirm the conflict.
+    cacheWriteSamePr(
+      101,
+      makePr(101, {
+        mergeStatus: 'conflicts',
+        autoCompleteSetBy: { id: 'u1', displayName: 'Dev' },
+        title: 'PR 101 (retitled by its author)',
+      }),
+    );
+    await render();
+
+    expect(queuedPrIds()).toEqual([101, 102]);
+    expect(setAutoComplete).not.toHaveBeenCalledWith({
+      prId: 101,
+      enabled: false,
+    });
+
+    // The next real poll still confirms it.
+    refetchSamePr(101);
+    await render();
     expect(queuedPrIds()).toEqual([102]);
   });
 
@@ -337,7 +461,7 @@ describe('PrCompletionQueueDriver', () => {
     await act(async () => {
       pending?.resolve(makePr(101, { autoCompleteSetBy: undefined }));
     });
-    prs.set(101, makePr(101, { autoCompleteSetBy: undefined }));
+    setPr(101, makePr(101, { autoCompleteSetBy: undefined }));
     await render();
 
     expect(queuedPrIds()).toEqual([101]);
@@ -384,7 +508,8 @@ describe('PrCompletionQueueDriver', () => {
     // cache artifact — the user cancelled in the Azure UI. Without a bound here
     // the entry would hold the head slot forever and block the whole project.
     for (let i = 0; i < UNARMED_READS_BEFORE_TRUSTED; i++) {
-      prs.set(101, makePr(101, { autoCompleteSetBy: undefined }));
+      // Deeply-equal refetches: identity never changes, only `dataUpdatedAt`.
+      refetchSamePr(101);
       await render();
     }
 
@@ -410,7 +535,7 @@ describe('PrCompletionQueueDriver', () => {
   it('skips a PR that was already merged while it waited in line', async () => {
     enqueue(101);
     enqueue(102);
-    prs.set(101, makePr(101, { status: 'completed' }));
+    setPr(101, makePr(101, { status: 'completed' }));
     await render();
 
     // Arming a completed PR would just make Azure error.
