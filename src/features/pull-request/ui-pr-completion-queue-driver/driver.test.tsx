@@ -66,6 +66,19 @@ const invalidatePr = vi.fn();
 const requeueCi = vi.fn();
 /** Policy evaluations the mocked hook serves to the armed entry's runner. */
 let policyEvaluations: unknown[] = [];
+/**
+ * `dataUpdatedAt` for the evaluations query. Left at 0 by tests that only care
+ * about the requeue effect; the rejected-policy tests drive it through
+ * `setPolicyEvaluations` so reads are a poll apart, like real polls.
+ */
+let policyFetchedAt = 0;
+
+/** Record a poll of the policy evaluations, stamping it like react-query. */
+function setPolicyEvaluations(evaluations: unknown[]) {
+  fetchClock += POLL_INTERVAL_MS;
+  policyEvaluations = evaluations;
+  policyFetchedAt = fetchClock;
+}
 /** Resolver for the in-flight arm PATCH, so tests control its timing. */
 let armDeferred: {
   resolve: (pr: AzureDevOpsPullRequestDetails) => void;
@@ -89,7 +102,10 @@ vi.mock('@/hooks/use-pull-requests', () => ({
     data: prs.get(prId),
     dataUpdatedAt: prFetchedAt.get(prId) ?? 0,
   }),
-  usePullRequestPolicyEvaluations: () => ({ data: policyEvaluations }),
+  usePullRequestPolicyEvaluations: () => ({
+    data: policyEvaluations,
+    dataUpdatedAt: policyFetchedAt,
+  }),
   useRequeuePolicyEvaluation: () => ({
     // Mirrors react-query: a rejected mutation surfaces through `onError`
     // rather than throwing out of the caller.
@@ -187,6 +203,7 @@ describe('PrCompletionQueueDriver', () => {
     invalidatePr.mockClear();
     requeueCi.mockClear();
     policyEvaluations = [];
+    policyFetchedAt = 0;
     usePrCompletionQueueStore.setState({ entries: [] });
 
     container = document.createElement('div');
@@ -438,6 +455,80 @@ describe('PrCompletionQueueDriver', () => {
     await render();
 
     expect(requeueCi.mock.calls.map(([id]) => id).sort()).toEqual(['e1', 'e3']);
+  });
+
+  /** A required build policy Azure reports as failed. */
+  function rejectedBuildPolicy(evaluationId: string, configId: number) {
+    return {
+      ...pendingBuildPolicy(evaluationId, configId, { buildId: 7 }),
+      status: 'rejected',
+      configuration: {
+        ...pendingBuildPolicy(evaluationId, configId).configuration,
+        settings: { buildDefinitionId: 42, displayName: `Build ${configId}` },
+      },
+    };
+  }
+
+  it('does not skip the PR on a rejected policy read that predates arming', async () => {
+    // The PR details view already populated the shared evaluations cache with a
+    // build that failed on an earlier iteration. That snapshot is served the
+    // instant this entry arms, with no fetch of our own behind it.
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    enqueue(101);
+    enqueue(102);
+    await render();
+    await acceptArm(101);
+    expect(queuedPrIds()).toEqual([101, 102]);
+
+    // One genuine poll later it is still only one confirming read.
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    await render();
+    expect(queuedPrIds()).toEqual([101, 102]);
+
+    // The second confirming poll is what settles it — and it names the check.
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    await render();
+    expect(queuedPrIds()).toEqual([102]);
+    expect(setAutoComplete).toHaveBeenCalledWith({ prId: 101, enabled: false });
+  });
+
+  it('does not add up rejections from two different policies', async () => {
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    enqueue(101);
+    enqueue(102);
+    await render();
+    await acceptArm(101);
+
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    await render();
+
+    // e1 recovered and an unrelated policy e2 now reads rejected for the first
+    // time. That is one read for e2, not a confirmation of e1's.
+    setPolicyEvaluations([rejectedBuildPolicy('e2', 2)]);
+    await render();
+    expect(queuedPrIds()).toEqual([101, 102]);
+  });
+
+  it('forgets a rejection the next read says recovered', async () => {
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    enqueue(101);
+    enqueue(102);
+    await render();
+    await acceptArm(101);
+
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    await render();
+
+    // The build was re-run and passed — even though this read lands too soon
+    // after the last counted one to confirm anything, it clears the count.
+    fetchClock += 50;
+    policyEvaluations = [];
+    policyFetchedAt = fetchClock;
+    await render();
+
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    await render();
+    expect(queuedPrIds()).toEqual([101, 102]);
   });
 
   it('does not run CI for an entry that is still waiting in line', async () => {

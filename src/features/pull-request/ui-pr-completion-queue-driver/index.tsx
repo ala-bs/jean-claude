@@ -67,6 +67,22 @@ export const MERGE_BLOCKED_READS_BEFORE_TRUSTED = 2;
  */
 export const MIN_COUNTED_READ_GAP_MS = POLL_INTERVAL_MS * 0.8;
 
+/**
+ * How many consecutive fetched policy reads must report a rejected blocking
+ * policy before we treat it as real.
+ *
+ * Same hazard as `MERGE_BLOCKED_READS_BEFORE_TRUSTED`, one query over: the
+ * policy-evaluation query key is shared with the PR details view, has a 30s
+ * `staleTime`, and is only *enabled* once this entry arms — so the very first
+ * value the runner sees is usually a cached read that predates arming. A build
+ * that failed on an earlier iteration (or a check Azure is about to re-run)
+ * sits in that snapshot as `rejected`, and acting on it skipped the PR the
+ * instant it was promoted. That first value is therefore only a baseline; this
+ * many reads a poll interval past it, all naming the SAME policy, are what
+ * separate a genuinely failed check from a stale snapshot.
+ */
+export const REJECTED_POLICY_READS_BEFORE_TRUSTED = 2;
+
 type Settlement = {
   outcome: 'succeeded' | 'failed';
   reason: string;
@@ -83,9 +99,17 @@ export function resolveArmedPrSettlement({
   hasRejectedBlockingPolicy,
   hasObservedArmed,
   hasConfirmedMergeBlocked,
+  rejectedPolicyName,
 }: {
   pr: AzureDevOpsPullRequestDetails;
+  /**
+   * Whether a blocking policy has read back as rejected on enough consecutive
+   * *fetched* reads to be trusted — see
+   * `REJECTED_POLICY_READS_BEFORE_TRUSTED`.
+   */
   hasRejectedBlockingPolicy: boolean;
+  /** Name of that policy, for a toast the user can act on. */
+  rejectedPolicyName?: string;
   /**
    * Whether a fetched PR has actually shown `autoCompleteSetBy` set since we
    * armed it. Guards against a pre-arm GET that was already in flight landing
@@ -118,7 +142,12 @@ export function resolveArmedPrSettlement({
     return { outcome: 'failed', reason: 'auto-complete was cancelled' };
   }
   if (hasRejectedBlockingPolicy) {
-    return { outcome: 'failed', reason: 'a required check failed' };
+    return {
+      outcome: 'failed',
+      reason: rejectedPolicyName
+        ? `required check failed (${rejectedPolicyName})`
+        : 'a required check failed',
+    };
   }
   return null;
 }
@@ -188,12 +217,13 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
     prId,
     repoInfo,
   );
-  const { data: evaluations = [] } = usePullRequestPolicyEvaluations(
-    projectId,
-    prId,
-    { refetchInterval: isArmed ? POLL_INTERVAL_MS : false, enabled: isArmed },
-    repoInfo,
-  );
+  const { data: evaluations = [], dataUpdatedAt: evaluationsFetchedAt } =
+    usePullRequestPolicyEvaluations(
+      projectId,
+      prId,
+      { refetchInterval: isArmed ? POLL_INTERVAL_MS : false, enabled: isArmed },
+      repoInfo,
+    );
 
   // The PR query is shared app-wide and has no interval of its own, so the
   // runner drives its own refetch cadence while this entry is armed.
@@ -411,6 +441,9 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
     undefined,
   );
   const lastCountedFetchedAtRef = useRef(0);
+  const rejectedPolicyReadsRef = useRef(0);
+  const lastRejectedEvaluationIdRef = useRef<string | undefined>(undefined);
+  const lastCountedEvaluationsFetchedAtRef = useRef(0);
   useEffect(() => {
     if (!isArmed || !pr) return;
 
@@ -459,22 +492,69 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
       hasObservedArmedRef.current ||
       unarmedReadsRef.current >= UNARMED_READS_BEFORE_TRUSTED;
 
-    const hasRejectedBlockingPolicy = evaluations.some(
+    const rejectedPolicy = evaluations.find(
       (evaluation) =>
         evaluation.isBlocking &&
         evaluation.status === 'rejected' &&
         !evaluation.context?.isExpired,
     );
 
+    // The count must survive only for ONE specific policy staying rejected.
+    // `find` returns whichever blocking rejection Azure lists first, so without
+    // this, policy A rejected on poll 1 and an unrelated policy B rejected on
+    // poll 2 would add up to a "confirmed" failure neither of them earned.
+    // Resetting also happens off-cadence on purpose: a read showing no
+    // rejection is proof the check recovered, even if it is too close to the
+    // last counted one to count as confirmation.
+    const rejectedEvaluationId = rejectedPolicy?.evaluationId;
+    if (rejectedEvaluationId !== lastRejectedEvaluationIdRef.current) {
+      lastRejectedEvaluationIdRef.current = rejectedEvaluationId;
+      rejectedPolicyReadsRef.current = 0;
+    }
+
+    // Same staleness trap as `mergeStatus`, but worse: this query is only
+    // *enabled* when the entry arms, so the value present on the first pass is
+    // whatever the PR details view left in the cache — possibly minutes old,
+    // with no fetch of our own behind it. `dataUpdatedAt` says "the cache was
+    // written then", not "this runner saw a poll". So the first read is taken
+    // as a BASELINE and never counted; only reads a poll interval past it do.
+    if (evaluationsFetchedAt > 0) {
+      const isBaselineRead = lastCountedEvaluationsFetchedAtRef.current === 0;
+      const isNewEvaluationsPoll =
+        evaluationsFetchedAt - lastCountedEvaluationsFetchedAtRef.current >=
+        MIN_COUNTED_READ_GAP_MS;
+      if (isBaselineRead) {
+        lastCountedEvaluationsFetchedAtRef.current = evaluationsFetchedAt;
+      } else if (isNewEvaluationsPoll) {
+        lastCountedEvaluationsFetchedAtRef.current = evaluationsFetchedAt;
+        if (rejectedPolicy) {
+          rejectedPolicyReadsRef.current += 1;
+          console.warn(
+            `[pr-queue] !${prId}: blocking policy "${
+              rejectedPolicy.configuration.settings.displayName ??
+              rejectedPolicy.configuration.type.displayName
+            }" read as rejected (${rejectedPolicyReadsRef.current}/${REJECTED_POLICY_READS_BEFORE_TRUSTED} confirming reads)`,
+            rejectedPolicy,
+          );
+        }
+      }
+    }
+    const hasRejectedBlockingPolicy =
+      !!rejectedPolicy &&
+      rejectedPolicyReadsRef.current >= REJECTED_POLICY_READS_BEFORE_TRUSTED;
+
     const settlement = resolveArmedPrSettlement({
       pr,
       hasRejectedBlockingPolicy,
+      rejectedPolicyName:
+        rejectedPolicy?.configuration.settings.displayName ??
+        rejectedPolicy?.configuration.type.displayName,
       hasObservedArmed: trustMissingAutoComplete,
       hasConfirmedMergeBlocked:
         mergeBlockedReadsRef.current >= MERGE_BLOCKED_READS_BEFORE_TRUSTED,
     });
     if (settlement) settle(settlement);
-  }, [evaluations, isArmed, pr, prFetchedAt, settle]);
+  }, [evaluations, evaluationsFetchedAt, isArmed, pr, prFetchedAt, prId, settle]);
 
   return null;
 }

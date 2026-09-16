@@ -143,4 +143,34 @@ describe('resolveArmedPrSettlement', () => {
       }),
     ).toEqual({ outcome: 'failed', reason: 'a required check failed' });
   });
+
+  it('names the failing check when we know it', () => {
+    expect(
+      resolveArmedPrSettlement({
+        pr: makePr(),
+        hasRejectedBlockingPolicy: true,
+        rejectedPolicyName: 'CI / build',
+        hasObservedArmed: true,
+        hasConfirmedMergeBlocked: true,
+      }),
+    ).toEqual({
+      outcome: 'failed',
+      reason: 'required check failed (CI / build)',
+    });
+  });
+
+  it('stays pending while a rejected check is still unconfirmed', () => {
+    // The first policy read a promoted entry sees is usually a cached snapshot
+    // from before it armed — a build that failed on an older iteration must not
+    // skip the PR instantly.
+    expect(
+      resolveArmedPrSettlement({
+        pr: makePr(),
+        hasRejectedBlockingPolicy: false,
+        rejectedPolicyName: 'CI / build',
+        hasObservedArmed: true,
+        hasConfirmedMergeBlocked: true,
+      }),
+    ).toBeNull();
+  });
 });
