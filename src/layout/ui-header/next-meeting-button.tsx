@@ -5,6 +5,7 @@ import clsx from 'clsx';
 
 import {
   beginCalendarLoad,
+  formatCalendarLoadError,
   markCalendarLoadSucceeded,
   shouldNotifyCalendarLoadError,
 } from '@/lib/calendar-load-error';
@@ -84,10 +85,7 @@ export function NextMeetingButton() {
       } catch (error) {
         if (!cancelled && shouldNotifyCalendarLoadError(error, loadId)) {
           addToast({
-            message:
-              error instanceof Error
-                ? error.message
-                : 'Could not load meetings',
+            message: formatCalendarLoadError(error),
             type: 'error',
           });
         }

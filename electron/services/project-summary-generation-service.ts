@@ -47,7 +47,7 @@ export async function generateProjectSummary({
       model,
       skillName,
       cwd: project.path,
-      allowedTools: ['Read'],
+      allowedTools: ['Read', 'Glob', 'Grep'],
       outputSchema: PROJECT_SUMMARY_SCHEMA,
       timeoutMs: PROJECT_SUMMARY_TIMEOUT_MS,
       prompt,
@@ -93,7 +93,11 @@ function buildProjectSummaryPrompt({
 Repository path: ${project.path}
 Brand color: ${project.color}`;
 
-  if (!includeRequirements) return projectDetails;
+  // Skills may tell the model to delegate to an Explore/subagent. There is no
+  // subagent in a one-off generation, so it must explore inline and answer now.
+  const noDelegation = `Explore the repository yourself with Read/Glob/Grep. Do not launch subagents or background tasks, and do not end your turn waiting on anything. Return the final structured summary in this same turn.`;
+
+  if (!includeRequirements) return `${projectDetails}\n\n${noDelegation}`;
 
   return `Write one short product summary for this software project.
 
@@ -103,7 +107,9 @@ Requirements:
 - One sentence fragment or short sentence.
 - Describe what the app/tool likely does.
 - Mention domain/context if inferable from name/path.
-- No marketing adjectives, no logo directions, no markdown.`;
+- No marketing adjectives, no logo directions, no markdown.
+
+${noDelegation}`;
 }
 
 function extractProjectSummary(value: unknown): string | null {

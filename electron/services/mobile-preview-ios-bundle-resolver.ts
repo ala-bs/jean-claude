@@ -596,6 +596,36 @@ export async function parseSimctlInstalledApps({
   }
 }
 
+/**
+ * Detects an `xcrun simctl launch` that failed because the runtime does not
+ * know `--terminate-running-process`, so callers can fall back to the
+ * sequential terminate-then-launch form.
+ *
+ * simctl has no unknown-option diagnostic at all — verified against the real
+ * binary. An unrecognized flag is swallowed as the positional `<device>`
+ * argument, so the failure surfaces as:
+ *
+ *     Invalid device: --terminate-running-process
+ *
+ * and a wrong argument count instead prints a `Usage: simctl launch …` block.
+ * Matching on "unrecognized/unknown/illegal/invalid option" therefore never
+ * fires. `assertSafeSimctlDeviceSelector` rejects device ids starting with
+ * `-`, so `Invalid device: --…` cannot come from a real device name.
+ *
+ * Note the message this receives always embeds the full argv (see
+ * `buildCommandError`), which is why the flag name alone proves nothing and
+ * the match has to be anchored to simctl's own wording.
+ */
+export function isUnsupportedTerminateRunningProcessError(
+  error: unknown,
+): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /Invalid device:\s*--terminate-running-process\b/i.test(message) ||
+    /^\s*Usage:\s*simctl launch\b/im.test(message)
+  );
+}
+
 export function isAppNotRunningError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (

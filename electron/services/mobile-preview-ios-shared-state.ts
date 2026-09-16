@@ -96,7 +96,12 @@ export const inputScreenDimensionsByDeviceId = new Map<string, RawStreamSize>();
 export const pendingIosSimulatorBootsByDeviceId = new Map<
   string,
   {
-    promise: Promise<MobilePreviewDevice>;
+    /**
+     * `didBoot` distinguishes "we ran simctl boot" from "it was already
+     * booted", so per-caller side effects (minimizing the Simulator window)
+     * only fire for simulators this process actually brought up.
+     */
+    promise: Promise<{ device: MobilePreviewDevice; didBoot: boolean }>;
     abortController: AbortController;
     waiters: Set<symbol>;
   }

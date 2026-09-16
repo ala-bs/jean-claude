@@ -231,6 +231,11 @@ interface ClaudeSession {
   // no `result` can end the run — the agent will be resumed to handle their
   // notifications, and closing stdin would kill the `canUseTool` channel.
   backgroundTaskIds: Set<string>;
+  // False once the streaming-input generator has ended and the SDK has closed
+  // the CLI's stdin. stdin is also the `canUseTool` control channel, so a tool
+  // request arriving after this can never be answered — `handleToolRequest`
+  // fails it fast instead of rendering a card nobody can action.
+  promptStreamOpen: boolean;
 }
 
 /**
@@ -297,6 +302,31 @@ const POST_RESULT_CLOSE_GRACE_MS = 30 * 1000;
  * WITHHELD_RESULT_IDLE_TIMEOUT_MS so both silence-based exits agree.
  */
 const BACKGROUND_WORK_CLOSE_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * How often a suspended close timer re-checks whether the thing it is waiting
+ * on has finished. Only a polling interval — nothing waits a full tick to make
+ * progress, because clearing the last hold lets the *next* re-check re-arm the
+ * real grace period.
+ */
+export const CLOSE_HOLD_RECHECK_MS = 30 * 1000;
+
+/**
+ * How long a still-running tool call may hold stdin open before we conclude it
+ * is never coming back.
+ *
+ * Unlike a permission card — which waits on a human and so is deliberately
+ * unbounded — a tool waits on a machine that can simply die: a Bash against a
+ * hung mount, an MCP server that crashes mid-call, a subagent killed after its
+ * parent's result. The normalizer only drains `pendingToolUses` on a matching
+ * `tool_result`, so such an entry is undrainable, and honouring it forever
+ * would disable BOTH close paths — including the idle watchdog whose entire
+ * purpose is breaking a wedged run.
+ *
+ * Generous enough for a real long build or test suite, short enough that a
+ * wedged run still finalizes on its own.
+ */
+export const MAX_TOOL_HOLD_MS = 30 * 60 * 1000;
 
 /**
  * Live background tasks reported by a `background_tasks_changed` system
@@ -385,6 +415,7 @@ export class ClaudeCodeBackend implements AgentBackend {
       backgroundTaskIds: new Set<string>(),
       closePromptStream: null,
       pushPromptMessage: null,
+      promptStreamOpen: true,
     };
     this.sessions.set(sessionKey, session);
 
@@ -708,6 +739,10 @@ export class ClaudeCodeBackend implements AgentBackend {
 
     const closePromptStream = () => {
       promptStreamOpen = false;
+      // Mirrored onto the session so `handleToolRequest` — which runs on the
+      // control channel, outside this closure's reach — can fail fast instead
+      // of rendering a card whose answer has nowhere to go.
+      session.promptStreamOpen = false;
       // Wake the generator so it can observe the close and return.
       notifyPrompt?.();
     };
@@ -748,9 +783,15 @@ export class ClaudeCodeBackend implements AgentBackend {
     // a withheld result, a long enough silence closes the input stream, the CLI
     // exits, and the replay path finalizes the step as before.
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    // Per-timer hold latch. Reset whenever the timer is torn down: a hold is
+    // usually ended by an incoming message, which cancels the recheck timer
+    // outright so no fire ever observes the release. Leaving the latch set
+    // would grant the next close a bogus second full grace period.
+    const idleHold = { held: false };
     const clearIdleWatchdog = () => {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = null;
+      idleHold.held = false;
     };
     // Set when a follow-up prompt has been injected and the CLI has not yet
     // answered with any message. Without this the run has NO liveness guarantee
@@ -759,6 +800,135 @@ export class ClaudeCodeBackend implements AgentBackend {
     // message would leave the generator suspended, stdin open, and the step
     // stuck `running` forever. Any message at all clears it.
     let awaitingInjectedResponse = false;
+
+    // Tool calls that were already unresolved when the turn's `result` arrived.
+    // The normalizer only drains `pendingToolUses` on a matching `tool_result`,
+    // and a turn that ends as `error_max_turns` / `error_during_execution` (or
+    // against a crashed MCP server) leaves entries that will NEVER be drained.
+    // Honouring those as a hold would wedge the run forever — the exact failure
+    // the idle watchdog exists to break. A `result` is the proof that nothing
+    // more is coming for them, so they are excused from here on; tool calls
+    // started AFTER the result still hold, which is the case that matters.
+    let staleToolUseIds = new Set<string>();
+    // When the current tool-only hold began, or null if none is active.
+    let toolHoldStartedAt: number | null = null;
+    const excuseInFlightToolUses = () => {
+      staleToolUseIds = new Set(session.normalizationCtx.pendingToolUses.keys());
+    };
+    const liveToolUseCount = () => {
+      let live = 0;
+      for (const toolId of session.normalizationCtx.pendingToolUses.keys()) {
+        if (!staleToolUseIds.has(toolId)) live++;
+      }
+      return live;
+    };
+
+    /**
+     * Why stdin must not close right now, or null if it may.
+     *
+     * Both reasons are invisible to the `for await` loop below, which is why
+     * this is consulted at timer-FIRE time rather than arm time:
+     *
+     *  - 'permission': an unanswered card. `canUseTool` arrives on the SDK's
+     *    control channel, not the message stream, so the loop never sees the
+     *    request and cannot cancel a close armed before the card appeared.
+     *    stdin is the channel the answer travels back on.
+     *  - 'tool': a tool call that is still running. The CLI reports nothing
+     *    between `tool_use` and `tool_result`, so a slow Bash or a long build
+     *    looks exactly like a finished run. Closing under it kills the result
+     *    AND every later permission request.
+     *
+     * The kinds are bounded differently on purpose. A permission hold waits on
+     * a HUMAN and is unbounded — no timeout should outlast someone who stepped
+     * away, and `stop()` is the explicit escape hatch. A tool hold waits on a
+     * MACHINE that may never answer, so it is capped; see MAX_TOOL_HOLD_MS.
+     */
+    const describeCloseHold = (): {
+      kind: 'permission' | 'tool';
+      reason: string;
+    } | null => {
+      if (session.pendingResolvers.size > 0) {
+        return {
+          kind: 'permission',
+          reason: `${session.pendingResolvers.size} unanswered permission request(s)`,
+        };
+      }
+      // Populated from `tool_use` blocks and drained by the matching
+      // `tool_result`, so a live entry means the CLI still owes us output.
+      const inFlight = liveToolUseCount();
+      if (inFlight > 0) {
+        return { kind: 'tool', reason: `${inFlight} tool call(s) still running` };
+      }
+      return null;
+    };
+
+    /**
+     * Called from inside a FIRED close/idle timer, never when arming one.
+     *
+     *   'close'   — nothing is holding; proceed.
+     *   'recheck' — still holding; poll again shortly. The caller re-arms in
+     *               its OWN timer slot so a later message can still cancel it.
+     *   'rearm'   — the hold just ended; give whatever it was waiting on a
+     *               fresh full grace period rather than closing on this tick.
+     *
+     * `heldRef` is the CALLER'S own latch, never a shared one. The close timer
+     * and the idle watchdog can be armed at the same time, and with a single
+     * flag the first recheck to fire would consume it and re-arm while the
+     * second saw `false` and closed stdin — in precisely the window the hold
+     * exists to protect.
+     */
+    const evaluateCloseHold = (
+      what: string,
+      heldRef: { held: boolean },
+    ): 'close' | 'recheck' | 'rearm' => {
+      const hold = describeCloseHold();
+      if (!hold) {
+        toolHoldStartedAt = null;
+        if (!heldRef.held) return 'close';
+        heldRef.held = false;
+        dbg.agentPermission(
+          'Session %s close hold released — re-arming %s',
+          sessionKey,
+          what,
+        );
+        return 'rearm';
+      }
+
+      if (hold.kind === 'tool') {
+        const now = Date.now();
+        toolHoldStartedAt ??= now;
+        if (now - toolHoldStartedAt >= MAX_TOOL_HOLD_MS) {
+          // The tool is not coming back — a hung mount, a dead MCP server, a
+          // subagent killed after its parent's result. Give up on it rather
+          // than recheck forever: an undrainable entry would otherwise disable
+          // BOTH close paths, including the idle watchdog whose entire job is
+          // breaking a wedged run, and leave the step on `running` for good.
+          dbg.agent(
+            'Session %s held stdin %dms for %s — giving up on them and letting %s proceed',
+            sessionKey,
+            now - toolHoldStartedAt,
+            hold.reason,
+            what,
+          );
+          excuseInFlightToolUses();
+          toolHoldStartedAt = null;
+          heldRef.held = false;
+          return 'rearm';
+        }
+      } else {
+        toolHoldStartedAt = null;
+      }
+
+      heldRef.held = true;
+      dbg.agentPermission(
+        'Session %s holding stdin open (%s) — deferring %s',
+        sessionKey,
+        hold.reason,
+        what,
+      );
+      return 'recheck';
+    };
+
     const syncIdleWatchdog = () => {
       clearIdleWatchdog();
       // Only armed while a withheld result or an unanswered injected prompt is
@@ -770,7 +940,21 @@ export class ClaudeCodeBackend implements AgentBackend {
           ? 'an injected follow-up prompt'
           : null;
       if (!reason) return;
-      idleTimer = setTimeout(() => {
+      const fire = () => {
+        idleTimer = null;
+        // Silence while a permission card is up is the USER thinking, not a
+        // dead run — and closing here would kill the channel their answer
+        // comes back on.
+        const decision = evaluateCloseHold('the idle watchdog', idleHold);
+        if (decision === 'recheck') {
+          idleTimer = setTimeout(fire, CLOSE_HOLD_RECHECK_MS);
+          idleTimer.unref?.();
+          return;
+        }
+        if (decision === 'rearm') {
+          syncIdleWatchdog();
+          return;
+        }
         dbg.agent(
           'Session %s idle for %dms after %s — closing input stream',
           sessionKey,
@@ -778,7 +962,8 @@ export class ClaudeCodeBackend implements AgentBackend {
           reason,
         );
         closePromptStream();
-      }, WITHHELD_RESULT_IDLE_TIMEOUT_MS);
+      };
+      idleTimer = setTimeout(fire, WITHHELD_RESULT_IDLE_TIMEOUT_MS);
       idleTimer.unref?.();
     };
 
@@ -786,9 +971,12 @@ export class ClaudeCodeBackend implements AgentBackend {
     // message proves the run wasn't over and cancels it, which is what keeps
     // the `canUseTool` control channel alive for misclassified results.
     let closeTimer: ReturnType<typeof setTimeout> | null = null;
+    // Per-timer hold latch; see `idleHold`.
+    const closeHold = { held: false };
     const cancelScheduledClose = () => {
       if (closeTimer) clearTimeout(closeTimer);
       closeTimer = null;
+      closeHold.held = false;
     };
     const schedulePromptStreamClose = () => {
       cancelScheduledClose();
@@ -803,14 +991,27 @@ export class ClaudeCodeBackend implements AgentBackend {
         session.backgroundTaskIds.size,
         session.pendingResolvers.size,
       );
-      closeTimer = setTimeout(() => {
+      const fire = () => {
         closeTimer = null;
+        const decision = evaluateCloseHold('the stdin close', closeHold);
+        if (decision === 'recheck') {
+          // Re-armed in `closeTimer` on purpose: a later SDK message must still
+          // be able to cancel this through `cancelScheduledClose()`.
+          closeTimer = setTimeout(fire, CLOSE_HOLD_RECHECK_MS);
+          closeTimer.unref?.();
+          return;
+        }
+        if (decision === 'rearm') {
+          schedulePromptStreamClose();
+          return;
+        }
         dbg.agentPermission(
           'Session %s stayed silent after its result — closing input stream',
           sessionKey,
         );
         closePromptStream();
-      }, graceMs);
+      };
+      closeTimer = setTimeout(fire, graceMs);
       closeTimer.unref?.();
     };
 
@@ -916,6 +1117,13 @@ export class ClaudeCodeBackend implements AgentBackend {
         // it only if the run ends without ever emitting a real result.
         if (isBackgroundNotificationResult(message)) {
           if (!sawRealResult) session.deferredResultEvents = agentEvents;
+          // Deliberately does NOT excuse in-flight tool calls. This branch is
+          // reached precisely because the result does not end the user's turn,
+          // so foreground work is still running: a background bash finishing
+          // while `pnpm build` is mid-flight would otherwise excuse the build
+          // and let the close timer kill stdin under it — the very AbortError
+          // this whole mechanism exists to prevent. MAX_TOOL_HOLD_MS is what
+          // bounds a tool that never returns.
           syncIdleWatchdog();
           // Re-arm the close: silence after a result still ends the run, even
           // when the last thing we saw was a withheld notification.
@@ -929,6 +1137,11 @@ export class ClaudeCodeBackend implements AgentBackend {
           sawRealResult = true;
           session.deferredResultEvents = null;
           awaitingInjectedResponse = false;
+          // A turn that ended as `error_max_turns` / `error_during_execution`
+          // leaves `tool_use` entries the CLI will never send a `tool_result`
+          // for. Excusing them here is what stops a wedged tool from holding
+          // stdin — and the idle watchdog — open forever.
+          excuseInFlightToolUses();
         }
 
         // A top-level assistant message received AFTER the injected prompt
@@ -1124,6 +1337,22 @@ export class ClaudeCodeBackend implements AgentBackend {
       // Same ordering caveat as above; session-allowed tools resolve to
       // "allowed by agent", which is the normalizer's fallback anyway.
       return Promise.resolve({ behavior: 'allow', updatedInput: input });
+    }
+
+    // NOTE: deliberately no "stream already closed, deny immediately" fast path
+    // here, though it looks like an obvious guard. It costs more than it saves:
+    // returning before pushing an event skips `reactivateAfterFinalizedTurn` in
+    // agent-service, so a step the UI already finalized never flips back to
+    // running and the user sees a tool card with no result and no prompt; it
+    // answers `deny` to an `AskUserQuestion`, which the question path would
+    // always have resolved as `allow`; and the deny itself is written to the
+    // closed stdin, so the CLI never receives it either. The uniform path below
+    // at least renders the request and lets the generator's `finally` settle it.
+    if (!session.promptStreamOpen) {
+      dbg.agentPermission(
+        'Tool %s requested after the input stream closed — the answer cannot reach the CLI',
+        toolName,
+      );
     }
 
     const requestId = nanoid();

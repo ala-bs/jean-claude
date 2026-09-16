@@ -3,7 +3,7 @@ import {
   buildAzureBoardBaseModel,
   buildAzureBoardRelationshipModel,
   resolveAzureBoardIterationFilter,
-} from '@/features/work-item/ui-azure-board-overlay/build-board-model';
+} from '@/features/work-item/ui-work-item-workspace/build-board-model';
 import { describe, expect, it } from 'vitest';
 
 import type { AzureBoardFilters } from '@/stores/azure-board';

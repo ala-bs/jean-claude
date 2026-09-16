@@ -82,6 +82,7 @@ import type {
   YamlPipelineParameter,
 } from '@shared/pipeline-types';
 import type {
+  AzureDevOpsBranchDivergence,
   AzureDevOpsComment,
   AzureDevOpsCommentThread,
   AzureDevOpsCommit,
@@ -140,6 +141,8 @@ import type {
   MobilePreviewAndroidSystemImage,
   MobilePreviewAndroidToolStatus,
   MobilePreviewAttachSessionParams,
+  MobilePreviewBootDeviceParams,
+  MobilePreviewBootDeviceResult,
   MobilePreviewDetachSessionParams,
   MobilePreviewDevice,
   MobilePreviewDeviceAssignment,
@@ -158,6 +161,7 @@ import type {
   MobilePreviewIosRenameDeviceParams,
   MobilePreviewIosRuntime,
   MobilePreviewIosToolStatus,
+  MobilePreviewListMetroPeersParams,
   MobilePreviewListSessionsParams,
   MobilePreviewNativeLogEvent,
   MobilePreviewNativeLogSession,
@@ -166,10 +170,12 @@ import type {
   MobilePreviewOpenDeeplinkParams,
   MobilePreviewOpenDevMenuParams,
   MobilePreviewReloadExpoParams,
+  MobilePreviewReloadExpoResult,
   MobilePreviewSession,
   MobilePreviewSessionEvent,
   MobilePreviewSetTextSizeParams,
   MobilePreviewStartParams,
+  MobilePreviewWaitForMetroClientParams,
   MobileRotationDirection,
   ReactNativeDevToolsEmbeddedBoundsParams,
   ReactNativeDevToolsEmbeddedCloseParams,
@@ -207,6 +213,11 @@ import type {
   NormalizedPermissionRequest,
 } from '@shared/normalized-message-v2';
 import type {
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalSnapshot,
+} from '@shared/terminal-types';
+import type {
   TimesheetAction,
   TimesheetAdapterCapability,
   TimesheetAuthStatus,
@@ -236,6 +247,7 @@ import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-ver
 import type { DebugLogEntry } from '@shared/debug-log-types';
 import type { DetectedAzureRemote } from '@shared/azure-remote-utils';
 import type { FoldRange } from '@shared/fold-types';
+import type { GitCloneProtocol } from '@shared/git-url-utils';
 import type { UpcomingMeeting } from '@shared/calendar-types';
 
 
@@ -243,6 +255,7 @@ import type { UpcomingMeeting } from '@shared/calendar-types';
 export type {
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
+  AzureDevOpsBranchDivergence,
   AzureDevOpsCommit,
   AzureDevOpsFileChange,
   AzureDevOpsCommentThread,
@@ -675,6 +688,11 @@ export interface Api {
       push: (projectId: string) => Promise<void>;
       pull: (projectId: string) => Promise<void>;
       checkoutBranch: (projectId: string, branchName: string) => Promise<void>;
+      /**
+       * `git init` when needed, then seed a README and make the first commit.
+       * Safe to call on a repo that already has commits — it is a no-op there.
+       */
+      init: (projectId: string) => Promise<void>;
     };
     getCommitIgnore: (projectId: string) => Promise<string>;
     updateCommitIgnore: (projectId: string, content: string) => Promise<void>;
@@ -1138,6 +1156,14 @@ export interface Api {
       repoId: string;
       pullRequestId: number;
     }) => Promise<AzureDevOpsFileChange[]>;
+    getPullRequestDivergence: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      sourceRefName?: string;
+      targetRefName?: string;
+    }) => Promise<AzureDevOpsBranchDivergence>;
     getCommitChanges: (params: {
       providerId: string;
       projectId: string;
@@ -1302,6 +1328,13 @@ export interface Api {
       repoId: string;
       pullRequestId: number;
     }) => Promise<void>;
+  };
+  git: {
+    cloneFromUrl: (params: {
+      url: string;
+      protocol: GitCloneProtocol;
+      targetPath: string;
+    }) => Promise<{ success: boolean; error?: string; path?: string }>;
   };
   dialog: {
     openDirectory: () => Promise<string | null>;
@@ -1581,7 +1614,20 @@ export interface Api {
     ) => Promise<void>;
     openDeeplink: (params: MobilePreviewOpenDeeplinkParams) => Promise<void>;
     openDevMenu: (params: MobilePreviewOpenDevMenuParams) => Promise<void>;
-    reloadExpo: (params: MobilePreviewReloadExpoParams) => Promise<void>;
+    reloadExpo: (
+      params: MobilePreviewReloadExpoParams,
+    ) => Promise<MobilePreviewReloadExpoResult>;
+    /** Resolves `false` when no new app attached before the timeout. */
+    waitForMetroClient: (
+      params: MobilePreviewWaitForMetroClientParams,
+    ) => Promise<boolean>;
+    /** Metro socket ids of the apps currently attached to the dev server. */
+    listMetroPeers: (
+      params: MobilePreviewListMetroPeersParams,
+    ) => Promise<string[]>;
+    bootDevice: (
+      params: MobilePreviewBootDeviceParams,
+    ) => Promise<MobilePreviewBootDeviceResult>;
     forwardPort: (params: MobilePreviewForwardPortParams) => Promise<void>;
     ensureMetroReverse: (params: {
       deviceId: string;
@@ -1840,6 +1886,28 @@ export interface Api {
     onGroupAborted: (
       callback: (event: RunCommandGroupAbortEvent) => void,
     ) => () => void;
+  };
+  terminal: {
+    /**
+     * Attaches to the session, spawning a shell only if there is not one
+     * already. Returns the scrollback to replay into a fresh xterm.
+     */
+    ensure: (params: {
+      sessionId: string;
+      cwd: string;
+      cols: number;
+      rows: number;
+    }) => Promise<TerminalSnapshot>;
+    write: (params: { sessionId: string; data: string }) => Promise<void>;
+    resize: (params: {
+      sessionId: string;
+      cols: number;
+      rows: number;
+    }) => Promise<void>;
+    /** Kills the shell. Closing the pane alone does NOT call this. */
+    close: (sessionId: string) => Promise<void>;
+    onData: (callback: (event: TerminalDataEvent) => void) => () => void;
+    onExit: (callback: (event: TerminalExitEvent) => void) => () => void;
   };
   globalPrompt: {
     onShow: (callback: (prompt: GlobalPrompt) => void) => () => void;
@@ -2327,6 +2395,8 @@ export const api: Api = hasWindowApi
         git: {
           getStatus: async () => ({
             isGitRepository: false,
+            hasCommits: false,
+            hasCommitsElsewhere: false,
             branch: '',
             isDetached: false,
             upstream: null,
@@ -2351,6 +2421,7 @@ export const api: Api = hasWindowApi
           push: async () => {},
           pull: async () => {},
           checkoutBranch: async () => {},
+          init: async () => {},
         },
         getCommitIgnore: async () => '',
         updateCommitIgnore: async () => {},
@@ -2625,6 +2696,10 @@ export const api: Api = hasWindowApi
         },
         getPullRequestCommits: async () => [],
         getPullRequestChanges: async () => [],
+        getPullRequestDivergence: async () => ({
+          aheadCount: 0,
+          behindCount: 0,
+        }),
         getCommitChanges: async () => [],
         getFileContentAtCommit: async () => '',
         getPullRequestFileContent: async () => '',
@@ -2669,6 +2744,12 @@ export const api: Api = hasWindowApi
         markPullRequestDraft: async () => {
           throw new Error('API not available');
         },
+      },
+      git: {
+        cloneFromUrl: async () => ({
+          success: false,
+          error: 'API not available',
+        }),
       },
       dialog: {
         openDirectory: async () => null,
@@ -2838,7 +2919,10 @@ export const api: Api = hasWindowApi
         sendInput: async () => {},
         openDeeplink: async () => {},
         openDevMenu: async () => {},
-        reloadExpo: async () => {},
+        reloadExpo: async () => ({ connectedClients: -1 }),
+        waitForMetroClient: async () => false,
+        listMetroPeers: async () => [],
+        bootDevice: async () => ({ deviceId: '' }),
         forwardPort: async () => {},
         ensureMetroReverse: async () => ({
           reversed: false,
@@ -3066,6 +3150,20 @@ export const api: Api = hasWindowApi
         onLog: () => () => {},
         onLogsReset: () => () => {},
         onGroupAborted: () => () => {},
+      },
+      terminal: {
+        ensure: async ({ sessionId }) => ({
+          sessionId,
+          backlog: '',
+          offset: 0,
+          isRunning: false,
+          exitCode: null,
+        }),
+        write: async () => {},
+        resize: async () => {},
+        close: async () => {},
+        onData: () => () => {},
+        onExit: () => () => {},
       },
       globalPrompt: {
         onShow: () => () => {},

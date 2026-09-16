@@ -202,6 +202,8 @@ export function parseCommitDiffFiles(params: {
 
 export interface ParsedGitStatus {
   branch: string;
+  /** False while HEAD is unborn — a `git init`-ed repo with no commit yet. */
+  hasCommits: boolean;
   isDetached: boolean;
   upstream: string | null;
   ahead: number | null;
@@ -219,9 +221,18 @@ export interface ParsedGitStatus {
  * Note that the `# branch.ab` header is only emitted when the branch has an
  * upstream, so ahead/behind stay null for unpublished branches rather than
  * being reported as a misleading 0/0.
+ *
+ * `# branch.oid` carries the unborn-HEAD signal: git prints the literal
+ * `(initial)` there instead of a sha when no commit exists yet. Reading it
+ * here saves `getProjectGitStatus` a second `git rev-parse` subprocess on
+ * every poll, since the answer is already in the output it just parsed.
  */
 export function parseStatus(stdout: string): ParsedGitStatus {
   let branch = '';
+  // Absent `--branch` output at all (never expected here) reads as "has
+  // commits", matching the pre-existing behaviour of every other consumer:
+  // the commit-less case is the rare one and must be positively identified.
+  let hasCommits = true;
   let upstream: string | null = null;
   let ahead: number | null = null;
   let behind: number | null = null;
@@ -231,6 +242,10 @@ export function parseStatus(stdout: string): ParsedGitStatus {
   let conflicted = 0;
 
   for (const line of stdout.split('\n')) {
+    if (line.startsWith('# branch.oid ')) {
+      hasCommits = line.slice('# branch.oid '.length).trim() !== '(initial)';
+      continue;
+    }
     if (line.startsWith('# branch.head ')) {
       branch = line.slice('# branch.head '.length).trim();
       continue;
@@ -267,6 +282,7 @@ export function parseStatus(stdout: string): ParsedGitStatus {
 
   return {
     branch,
+    hasCommits,
     // git reports a detached HEAD as the literal string "(detached)".
     isDetached: branch === '(detached)',
     upstream,

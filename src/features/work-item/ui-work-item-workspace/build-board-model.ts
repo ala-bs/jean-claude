@@ -77,6 +77,9 @@ export function resolveAzureBoardIterationFilter({
 
   const currentIteration = iterations.find((iteration) => iteration.isCurrent);
   if (!currentIteration) {
+    // No current iteration exists, so "Current" cannot narrow anything. Fetch
+    // unfiltered rather than rendering an empty board the user has no obvious
+    // way out of; the `no-match` status still drives the explanatory banner.
     return { status: 'no-match', paths: [] };
   }
   return { status: 'resolved', paths: [currentIteration.path] };

@@ -1,7 +1,6 @@
 // electron/services/azure-devops-service.ts
 
 import { createHash } from 'crypto';
-import { spawn } from 'child_process';
 
 
 import type {
@@ -17,6 +16,7 @@ import type {
   YamlPipelineParameter,
 } from '@shared/pipeline-types';
 import type {
+  AzureDevOpsBranchDivergence,
   AzureDevOpsComment,
   AzureDevOpsCommentThread,
   AzureDevOpsCommit,
@@ -34,14 +34,16 @@ import {
 
 import { createDebug, dbg } from '../lib/debug';
 import { azureHtmlToMarkdown } from './azure-html-to-markdown';
+import { cloneFromUrl } from './git-clone-service';
+import { logPrImageEventSync } from '../lib/pr-image-log';
 import { ProviderRepository } from '../database/repositories/providers';
-import { sendGlobalPromptToWindow } from './global-prompt-service';
 import { TokenRepository } from '../database/repositories/tokens';
 
 export { azureHtmlToMarkdown } from './azure-html-to-markdown';
 export type {
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
+  AzureDevOpsBranchDivergence,
   AzureDevOpsCommit,
   AzureDevOpsFileChange,
   AzureDevOpsCommentThread,
@@ -2160,10 +2162,6 @@ export interface CloneRepositoryResult {
   error?: string;
 }
 
-// Regex patterns to detect SSH host authenticity prompt
-const SSH_AUTHENTICITY_PATTERN = /The authenticity of host '([^']+)'/;
-const FINGERPRINT_PATTERN = /(\w+) key fingerprint is ([^\s.]+)/;
-
 export async function cloneRepository(
   params: CloneRepositoryParams,
 ): Promise<CloneRepositoryResult> {
@@ -2173,77 +2171,9 @@ export async function cloneRepository(
   // Format: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
   const sshUrl = `git@ssh.dev.azure.com:v3/${orgName}/${encodeURIComponent(projectName)}/${encodeURIComponent(repoName)}`;
 
-  return new Promise((resolve) => {
-    const gitProcess = spawn('git', ['clone', sshUrl, targetPath], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    let stderr = '';
-    let promptHandled = false;
-
-    gitProcess.stderr.on('data', async (data: Buffer) => {
-      stderr += data.toString();
-
-      // Check for SSH host authenticity prompt
-      if (!promptHandled && SSH_AUTHENTICITY_PATTERN.test(stderr)) {
-        promptHandled = true;
-
-        const hostMatch = stderr.match(SSH_AUTHENTICITY_PATTERN);
-        const fingerprintMatch = stderr.match(FINGERPRINT_PATTERN);
-
-        const host = hostMatch?.[1] ?? 'unknown';
-        const keyType = fingerprintMatch?.[1] ?? 'Unknown';
-        const fingerprint = fingerprintMatch?.[2] ?? 'unknown';
-
-        const accepted = await sendGlobalPromptToWindow({
-          title: 'Unknown SSH Host',
-          message: `The authenticity of host '${host}' can't be established.`,
-          details: `${keyType} key fingerprint:\n${fingerprint}`,
-          acceptLabel: 'Trust & Connect',
-          rejectLabel: 'Cancel',
-        });
-
-        if (gitProcess.stdin) {
-          gitProcess.stdin.write(accepted ? 'yes\n' : 'no\n');
-        }
-      }
-    });
-
-    gitProcess.on('close', (code) => {
-      if (code === 0) {
-        resolve({ success: true });
-      } else {
-        // Parse common git clone errors for user-friendly messages
-        let errorMessage = stderr.trim();
-
-        if (
-          stderr.includes('Permission denied') ||
-          stderr.includes('Could not read from remote repository')
-        ) {
-          errorMessage =
-            'SSH key not configured or permission denied. Please ensure your SSH key is set up for Azure DevOps.';
-        } else if (
-          stderr.includes('already exists and is not an empty directory')
-        ) {
-          errorMessage = 'Target directory already exists and is not empty.';
-        } else if (stderr.includes('Repository not found')) {
-          errorMessage =
-            'Repository not found. Please check if the repository exists.';
-        } else if (stderr.includes('Host key verification failed')) {
-          errorMessage = 'SSH host verification was rejected.';
-        }
-
-        resolve({ success: false, error: errorMessage });
-      }
-    });
-
-    gitProcess.on('error', (err) => {
-      resolve({
-        success: false,
-        error: `Failed to run git: ${err.message}`,
-      });
-    });
-  });
+  // Delegates to the shared clone service so this flow and the clone-from-URL
+  // flow share host-key prompting, timeout handling, and error mapping.
+  return cloneFromUrl({ cloneUrl: sshUrl, targetPath, protocol: 'ssh' });
 }
 
 // Helper to get auth header and org name from provider
@@ -3054,12 +2984,18 @@ export async function updatePullRequestDescription(params: {
 
   const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}?api-version=7.0`;
 
-  dbg.azure('pr-description:update', {
+  const descriptionStats = {
     pullRequestId: params.pullRequestId,
     length: params.description.length,
     imageMarkdownCount: (params.description.match(/!\[[^\]]*\]\(/g) ?? [])
       .length,
     hasPlaceholders: params.description.includes('jc-image://'),
+  };
+  dbg.azure('pr-description:update', descriptionStats);
+  logPrImageEventSync({
+    source: 'azure',
+    message: 'pr-description:update',
+    data: descriptionStats,
   });
 
   const response = await fetch(url, {
@@ -3078,10 +3014,39 @@ export async function updatePullRequestDescription(params: {
       status: response.status,
       error: error.slice(0, 500),
     });
+    logPrImageEventSync({
+      source: 'azure',
+      message: 'pr-description:update-failed',
+      data: {
+        pullRequestId: params.pullRequestId,
+        status: response.status,
+        error: error.slice(0, 500),
+      },
+    });
     throw new Error(`Failed to update pull request description: ${error}`);
   }
 
   const pr: PullRequestResponse = await response.json();
+
+  // Azure echoes the stored description back. Comparing it with what we sent
+  // is the only way to tell "Azure dropped our image markdown" apart from
+  // "Azure kept it but renders it broken" -- the two look identical in the UI.
+  const storedStats = {
+    pullRequestId: params.pullRequestId,
+    sentLength: params.description.length,
+    storedLength: pr.description?.length ?? 0,
+    sentImageMarkdownCount: descriptionStats.imageMarkdownCount,
+    storedImageMarkdownCount: (pr.description?.match(/!\[[^\]]*\]\(/g) ?? [])
+      .length,
+    identical: (pr.description ?? '') === params.description,
+  };
+  dbg.azure('pr-description:stored', storedStats);
+  logPrImageEventSync({
+    source: 'azure',
+    message: 'pr-description:stored',
+    data: storedStats,
+  });
+
   const webUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_git/${params.repoId}/pullrequest/${pr.pullRequestId}`;
 
   return mapPullRequestResponse(pr, webUrl);
@@ -3208,13 +3173,19 @@ export async function uploadPullRequestAttachment(params: {
     ? `${requestedName.replace(/\.[^./\\]+$/, '') || 'image'}.${sniffed}`
     : requestedName;
 
-  dbg.azure('pr-attachment:upload', {
+  const uploadStats = {
     pullRequestId: params.pullRequestId,
     requestedName,
     requestedMimeType: params.mimeType,
     sniffedExtension: sniffed ?? 'unknown',
     bytes: data.byteLength,
     magic: data.subarray(0, 12).toString('hex'),
+  };
+  dbg.azure('pr-attachment:upload', uploadStats);
+  logPrImageEventSync({
+    source: 'azure',
+    message: 'pr-attachment:upload',
+    data: uploadStats,
   });
 
   for (let attempt = 0; attempt < 10; attempt++) {
@@ -3243,6 +3214,16 @@ export async function uploadPullRequestAttachment(params: {
         status: response.status,
         error: error.slice(0, 500),
       });
+      logPrImageEventSync({
+        source: 'azure',
+        message: 'pr-attachment:upload-failed',
+        data: {
+          fileName,
+          attempt,
+          status: response.status,
+          error: error.slice(0, 500),
+        },
+      });
       if (isDuplicateAttachmentNameError(error) && attempt < 9) {
         continue;
       }
@@ -3254,19 +3235,30 @@ export async function uploadPullRequestAttachment(params: {
       throw new Error('Azure DevOps did not return an attachment URL');
     }
 
+    // The bare URL Azure returns is an unversioned API route: fetching it
+    // (even with a PAT) answers 401 with an empty body, which is exactly what
+    // the markdown renderer gets -- so the image never draws. Azure's own web
+    // editor inserts the download-flavoured URL below, so match it.
+    const renderableUrl = `${attachment.url}?download=false&resolveLfs=true&%24format=octetStream&api-version=5.0-preview.1&sanitize=true`;
+
     dbg.azure('pr-attachment:uploaded', {
       fileName,
       attempt,
-      url: attachment.url,
+      url: renderableUrl,
+    });
+    logPrImageEventSync({
+      source: 'azure',
+      message: 'pr-attachment:uploaded',
+      data: { fileName, attempt, url: renderableUrl },
     });
 
     await verifyAttachmentContentType({
-      attachmentUrl: attachment.url,
+      attachmentUrl: renderableUrl,
       authHeader,
       expectedBytes: data.byteLength,
     });
 
-    return { url: attachment.url };
+    return { url: renderableUrl };
   }
 
   throw new Error('Failed to upload pull request attachment');
@@ -3802,6 +3794,63 @@ export async function getPullRequestCommits(params: {
     comment: commit.comment,
     url: commit.url,
   }));
+}
+
+/**
+ * How many commits the PR source branch is ahead of / behind its target branch.
+ *
+ * Azure's `diffs/commits` endpoint reports the counts relative to `baseVersion`,
+ * so we pass the target branch (e.g. `main`) as the base and the PR's source
+ * branch as the target: `behindCount` is then the number of commits that landed
+ * on the target branch since the source branch last took from it.
+ *
+ * Callers that already hold the PR (the renderer always does) should pass the
+ * ref names so we skip a redundant PR round-trip.
+ */
+export async function getPullRequestDivergence(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+  sourceRefName?: string;
+  targetRefName?: string;
+}): Promise<AzureDevOpsBranchDivergence> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  let { sourceRefName, targetRefName } = params;
+  if (!sourceRefName || !targetRefName) {
+    const pr = await getPullRequest(params);
+    sourceRefName = pr.sourceRefName;
+    targetRefName = pr.targetRefName;
+  }
+
+  const sourceBranch = sourceRefName.replace(/^refs\/heads\//, '');
+  const targetBranch = targetRefName.replace(/^refs\/heads\//, '');
+
+  // `$top=0` only pages the `changes[]` payload; the ahead/behind counts are
+  // computed over the full divergence and are unaffected.
+  const url =
+    `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/diffs/commits` +
+    `?baseVersion=${encodeURIComponent(targetBranch)}&baseVersionType=branch` +
+    `&targetVersion=${encodeURIComponent(sourceBranch)}&targetVersionType=branch` +
+    `&$top=0&api-version=7.0`;
+
+  const response = await fetch(url, {
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to get pull request divergence: ${error}`);
+  }
+
+  const data: { aheadCount?: number; behindCount?: number } =
+    await response.json();
+
+  return {
+    aheadCount: data.aheadCount ?? 0,
+    behindCount: data.behindCount ?? 0,
+  };
 }
 
 export async function getPullRequestChanges(params: {

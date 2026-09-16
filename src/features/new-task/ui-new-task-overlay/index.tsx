@@ -46,6 +46,12 @@ import {
   useComposerFileCommentsStore,
 } from '@/stores/composer-file-comments';
 import {
+  type ConfiguredWorkItemProject,
+  CURRENT_ITERATION_DEFAULT_FILTERS,
+  WORK_ITEM_SELECTION_EXCLUDE_TYPES,
+  WorkItemWorkspace,
+} from '@/features/work-item/ui-work-item-workspace';
+import {
   deleteAttachmentFiles,
   findMissingAttachmentPaths,
 } from '@/lib/prompt-attachment-cleanup';
@@ -55,6 +61,10 @@ import {
   type PreparedProjectFeatures,
   prepareProjectFeatureReferences,
 } from '@/lib/prompt-feature-context';
+import {
+  getDefaultInteractionMode,
+  renormalizeDraftInteractionMode,
+} from '@/lib/default-interaction-mode';
 import {
   getModelsForBackend,
   getModelThinkingCapabilities,
@@ -67,7 +77,6 @@ import {
   type InputMode,
   useNewTaskDraftMetadata,
   useNewTaskDraftStore,
-  type WorkItemsViewMode,
 } from '@/stores/new-task-draft';
 import {
   KeyboardLayerProvider,
@@ -97,7 +106,6 @@ import {
   useActiveProjects,
   useProjectBranches,
   useProjectFeatureMap,
-  useProjectIsGitRepository,
   useReorderProjects,
 } from '@/hooks/use-projects';
 import {
@@ -119,7 +127,6 @@ import {
   useWorkItemComments,
   useWorkItems,
 } from '@/hooks/use-work-items';
-import { useUISetting, useUIStore } from '@/stores/ui';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
@@ -139,10 +146,9 @@ import { useBackendModels } from '@/hooks/use-backend-models';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
+import { useProjectCanCreateWorktree } from '@/hooks/use-project-git';
 import { useProjectSkills } from '@/hooks/use-skills';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
-import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
-import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 
 
 
@@ -168,6 +174,8 @@ function projectHasWorkItems(project: Project | null): boolean {
 }
 
 const EMPTY_PROMPT_FILES: PromptFilePart[] = [];
+/** Stable fallback so a fresh `[]` doesn't defeat the workspace's memoization. */
+const EMPTY_WORK_ITEM_IDS: string[] = [];
 
 const FinalPromptPreviewButton = memo(function FinalPromptPreviewButton({
   getPrompt,
@@ -578,14 +586,9 @@ export function NewTaskOverlay({
   const [highlightedWorkItemId, setHighlightedWorkItemId] = useState<
     string | null
   >(null);
+  // Set by WorkItemWorkspace so Escape pops its details pane stack first.
+  const workItemEscapeInterceptorRef = useRef<(() => boolean) | null>(null);
 
-  // Persisted panel width for work items picker
-  const workItemsPanelWidth = useUISetting('workItemsPanelWidth');
-  const setUISetting = useUIStore((s) => s.setSetting);
-  const handlePanelWidthChange = useCallback(
-    (width: number) => setUISetting('workItemsPanelWidth', width),
-    [setUISetting],
-  );
 
   const { triggerAnimation } = useShrinkToTarget({
     panelRef,
@@ -621,10 +624,6 @@ export function NewTaskOverlay({
         : null,
     [selectedProjectId, projects],
   );
-  const {
-    iterationFilter: workItemsIterationFilter,
-    setIterationFilter: setWorkItemsIterationFilter,
-  } = useWorkItemPickerIterationFilter(selectedProjectId);
   useEffect(() => {
     if (projectsLoading || selectedProjectId === null || selectedProject) {
       return;
@@ -667,9 +666,12 @@ export function NewTaskOverlay({
     },
   });
 
-  const { data: isGitRepository = false, isFetching: isGitRepositoryFetching } =
-    useProjectIsGitRepository(selectedProjectId);
-  const canCreateWorktree = isGitRepository;
+  // Not just "is a git repo": a repo with no commits has nothing to branch
+  // from, so `git worktree add` would fail after the task was already created.
+  const {
+    data: canCreateWorktree = false,
+    isFetching: isGitRepositoryFetching,
+  } = useProjectCanCreateWorktree(selectedProjectId);
 
   // Fetch branches for the selected project
   const { data: branchInfos = [], isFetching: branchesFetching } =
@@ -915,7 +917,9 @@ export function NewTaskOverlay({
 
   const currentInteractionMode = normalizeInteractionModeForBackend({
     backend: currentBackend,
-    mode: draft?.interactionMode ?? 'ask',
+    mode:
+      draft?.interactionMode ??
+      getDefaultInteractionMode({ project: selectedProject }),
   });
   const backendModelSelection = useMemo(
     () =>
@@ -1032,23 +1036,26 @@ export function NewTaskOverlay({
     const nextThinkingEffort =
       rateLimitSuggestion.thinkingEffort ??
       (nextBackend !== currentBackend ? 'default' : currentThinkingEffort);
-    updateDraft({
+    // Functional form: the mode must be re-read from live store state, not the
+    // render-scoped snapshot, or an imperative write between render and this
+    // effect would be clobbered with a stale value.
+    updateDraft((prev) => ({
       agentBackend: nextBackend,
       modelPreference: nextModel,
       thinkingEffort: nextThinkingEffort,
       backendModelPresetId: null,
       shouldAutoSelectBackendModelPreset: false,
-      interactionMode: normalizeInteractionModeForBackend({
+      interactionMode: renormalizeDraftInteractionMode({
+        draftMode: prev?.interactionMode,
         backend: nextBackend,
-        mode: currentInteractionMode,
       }),
-    });
+    }));
   }, [
     currentBackend,
-    currentInteractionMode,
     currentModelPreference,
     currentThinkingEffort,
     draft?.agentBackend,
+    draft?.interactionMode,
     draft?.modelPreference,
     isNoteMode,
     rateLimitSuggestion,
@@ -1670,6 +1677,11 @@ export function NewTaskOverlay({
       return false;
     }
 
+    // The work item details pane steps back one level before the overlay closes.
+    if (workItemEscapeInterceptorRef.current?.()) {
+      return true;
+    }
+
     if (inputMode === 'search' && searchStep === 'compose') {
       // In compose step, go back to select
       backToSelect();
@@ -1677,6 +1689,7 @@ export function NewTaskOverlay({
       // Otherwise close overlay
       onClose();
     }
+    return true;
   }, [isPromptAutocompleteOpen, inputMode, searchStep, backToSelect, onClose]);
 
   // Show search input only in select step
@@ -1983,18 +1996,11 @@ export function NewTaskOverlay({
                 <SearchModeContent
                   project={selectedProject}
                   draftKey={draftKey}
-                  selectedWorkItemIds={draft?.workItemIds ?? []}
-                  viewMode={draft?.workItemsViewMode ?? 'board'}
-                  onViewModeChange={(mode: WorkItemsViewMode) =>
-                    updateDraft({ workItemsViewMode: mode })
-                  }
-                  iterationFilter={workItemsIterationFilter}
-                  onIterationFilterChange={setWorkItemsIterationFilter}
+                  selectedWorkItemIds={draft?.workItemIds ?? EMPTY_WORK_ITEM_IDS}
                   onWorkItemToggle={handleWorkItemToggle}
                   onClearSelectedWorkItems={handleClearSelectedWorkItems}
                   onHighlightChange={setHighlightedWorkItemId}
-                  panelWidth={workItemsPanelWidth}
-                  onPanelWidthChange={handlePanelWidthChange}
+                  escapeInterceptorRef={workItemEscapeInterceptorRef}
                   onAdvanceToCompose={advanceToCompose}
                   canAdvance={canAdvanceToCompose}
                 />
@@ -2064,24 +2070,22 @@ export function NewTaskOverlay({
                     layer={layer}
                     onChange={(selection) => {
                       userTouchedSelectionRef.current = true;
-                      const normalizedMode = normalizeInteractionModeForBackend(
-                        {
-                          backend: selection.backend,
-                          mode: currentInteractionMode,
-                        },
-                      );
+
                       const nextThinkingCapabilities =
                         getModelThinkingCapabilities(
                           selection.model,
                           dynamicModels,
                         );
 
-                      updateDraft({
+                      updateDraft((prev) => ({
                         agentBackend: selection.backend,
                         backendModelPresetId: selection.presetId,
                         shouldAutoSelectBackendModelPreset:
                           selection.presetId !== null,
-                        interactionMode: normalizedMode,
+                        interactionMode: renormalizeDraftInteractionMode({
+                          draftMode: prev?.interactionMode,
+                          backend: selection.backend,
+                        }),
                         modelPreference: selection.model,
                         thinkingEffort: normalizeThinkingEffortForModel({
                           backend: selection.backend,
@@ -2096,7 +2100,7 @@ export function NewTaskOverlay({
                             'default',
                           capabilities: nextThinkingCapabilities,
                         }),
-                      });
+                      }));
                     }}
                   />
                 )}
@@ -2124,18 +2128,18 @@ export function NewTaskOverlay({
                     suggestedPresetId={rateLimitSuggestedPresetId}
                     onApplySuggestion={(selection) => {
                       userTouchedSelectionRef.current = true;
-                      updateDraft({
+                      updateDraft((prev) => ({
                         agentBackend: selection.backend,
                         backendModelPresetId: null,
                         shouldAutoSelectBackendModelPreset: false,
-                        interactionMode: normalizeInteractionModeForBackend({
+                        interactionMode: renormalizeDraftInteractionMode({
+                          draftMode: prev?.interactionMode,
                           backend: selection.backend,
-                          mode: currentInteractionMode,
                         }),
                         modelPreference: selection.model,
                         thinkingEffort:
                           selection.thinkingEffort as ThinkingEffort,
-                      });
+                      }));
                     }}
                   />
                 )}
@@ -2599,30 +2603,20 @@ function SearchModeContent({
   project,
   draftKey,
   selectedWorkItemIds,
-  viewMode,
-  onViewModeChange,
-  iterationFilter,
-  onIterationFilterChange,
   onWorkItemToggle,
   onClearSelectedWorkItems,
   onHighlightChange,
-  panelWidth,
-  onPanelWidthChange,
+  escapeInterceptorRef,
   onAdvanceToCompose,
   canAdvance,
 }: {
   project: Project | null;
   draftKey: string;
   selectedWorkItemIds: string[];
-  viewMode: WorkItemsViewMode;
-  onViewModeChange: (mode: WorkItemsViewMode) => void;
-  iterationFilter: string;
-  onIterationFilterChange: (iterationFilter: string) => void;
   onWorkItemToggle: (workItem: AzureDevOpsWorkItem) => void;
   onClearSelectedWorkItems: () => void;
   onHighlightChange?: (workItemId: string | null) => void;
-  panelWidth?: number;
-  onPanelWidthChange?: (width: number) => void;
+  escapeInterceptorRef: React.RefObject<(() => boolean) | null>;
   onAdvanceToCompose: () => void;
   canAdvance: boolean;
 }) {
@@ -2633,6 +2627,19 @@ function SearchModeContent({
   // select" land on the previously highlighted item.
   const filter = useNewTaskDraftStore(
     (state) => state.drafts[draftKey]?.workItemsFilter ?? '',
+  );
+  const setDraft = useNewTaskDraftStore((state) => state.setDraft);
+  const handleSearchChange = useCallback(
+    (workItemsFilter: string) => setDraft(draftKey, { workItemsFilter }),
+    [draftKey, setDraft],
+  );
+  const selection = useMemo(
+    () => ({
+      selectedWorkItemIds,
+      onToggleSelect: onWorkItemToggle,
+      onClearSelection: onClearSelectedWorkItems,
+    }),
+    [selectedWorkItemIds, onWorkItemToggle, onClearSelectedWorkItems],
   );
 
   if (!project) {
@@ -2659,23 +2666,18 @@ function SearchModeContent({
   }
 
   return (
-    <WorkItemPicker
-      appProjectId={project.id}
-      providerId={project.workItemProviderId!}
-      projectId={project.workItemProjectId!}
-      projectName={project.workItemProjectName!}
-      selectedWorkItemIds={selectedWorkItemIds}
-      onToggleSelect={onWorkItemToggle}
-      onClearSelection={onClearSelectedWorkItems}
+    <WorkItemWorkspace
+      key={project.id}
+      project={project as ConfiguredWorkItemProject}
+      surface="new-task"
+      selection={selection}
       onHighlightChange={onHighlightChange}
-      filter={filter}
-      viewMode={viewMode}
-      onViewModeChange={onViewModeChange}
-      iterationFilter={iterationFilter}
-      onIterationFilterChange={onIterationFilterChange}
-      panelWidth={panelWidth}
-      onPanelWidthChange={onPanelWidthChange}
-      headerRight={
+      escapeInterceptorRef={escapeInterceptorRef}
+      search={filter}
+      onSearchChange={handleSearchChange}
+      defaultFilters={CURRENT_ITERATION_DEFAULT_FILTERS}
+      excludeWorkItemTypes={WORK_ITEM_SELECTION_EXCLUDE_TYPES}
+      headerActions={
         canAdvance ? (
           <Button variant="primary" size="sm" onClick={onAdvanceToCompose}>
             Next

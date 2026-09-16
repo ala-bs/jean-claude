@@ -99,6 +99,15 @@ export function handleCacheEvent(
   // subscribed, otherwise deleted workspaces linger in the renderer.
   const mustApplyPrWorkspaceDeletion = isPrWorkspaceTaskDeleteEvent(event);
 
+  // [qac-debug] temporary instrumentation for the queue-auto-complete toggle.
+  if (event.type === 'project.upsert') {
+    console.warn('[qac] renderer received project.upsert', {
+      projectId: event.project.id,
+      queuePrAutoComplete: event.project.queuePrAutoComplete,
+      willApply: shouldApplyCacheEvent(event),
+    });
+  }
+
   if (!shouldApplyCacheEvent(event) && !mustApplyPrWorkspaceDeletion) {
     return;
   }

@@ -18,7 +18,6 @@ import { deleteAttachmentFiles } from '@/lib/prompt-attachment-cleanup';
 
 export type InputMode = 'search' | 'prompt';
 export type SearchStep = 'select' | 'compose';
-export type WorkItemsViewMode = 'list' | 'board';
 
 export interface NewTaskDraft {
   inputMode: InputMode;
@@ -33,7 +32,6 @@ export interface NewTaskDraft {
   updateWorkItemStatus: boolean;
   workItemsFilter: string;
   searchStep: SearchStep; // NEW: which step in search mode
-  workItemsViewMode: WorkItemsViewMode;
   /** Selected work item/comment composite IDs to include in prompt. */
   selectedCommentIds: string[];
   // Prompt mode state
@@ -163,7 +161,6 @@ function selectDraftMetadata(
     workItemIds: draft.workItemIds,
     updateWorkItemStatus: draft.updateWorkItemStatus,
     searchStep: draft.searchStep,
-    workItemsViewMode: draft.workItemsViewMode,
     selectedCommentIds: draft.selectedCommentIds,
     images: draft.images,
     files: draft.files,

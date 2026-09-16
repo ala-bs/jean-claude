@@ -6,10 +6,13 @@ import {
   ListTodo,
   RotateCw,
   Settings,
+  Terminal as TerminalIcon,
 } from 'lucide-react';
 import { getEditorLabel, useEditorSetting } from '@/hooks/use-settings';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
+import { Button } from '@/common/ui/button';
+import clsx from 'clsx';
 import { useNavigate } from '@tanstack/react-router';
 
 import {
@@ -29,9 +32,12 @@ import { cleanIpcError } from '@/lib/ipc-error';
 import { CommandLogsPane } from '@/features/task/ui-task-panel/command-logs-pane';
 import { CommitHistory } from './commit-history';
 import { CommitPanel } from './commit-panel';
+import { defaultFocusedRef } from './utils-commit-refs';
 import { getProjectRootRunId } from '@shared/run-command-types';
+import { groupCommitRefs } from './utils-commit-refs';
 import type { ProjectGitLogFilter } from '@shared/types';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
+import { ProjectTerminal } from '@/features/project/ui-project-terminal';
 import { RunButton } from '@/features/agent/ui-run-button';
 import { SyncBar } from './sync-bar';
 import { TasksRail } from './tasks-rail';
@@ -60,6 +66,62 @@ function remoteHref(remoteUrl: string): string | null {
   return /^https?:\/\//.test(remoteUrl) ? remoteUrl : null;
 }
 
+/**
+ * Shown instead of the commit history when there is nothing to show. Three
+ * situations land here and all three are resolved by the same action, so they
+ * share one card and differ only in what they explain:
+ *
+ *   not a repo          → `git init` plus a first commit
+ *   repo, never used    → a first commit
+ *   orphan branch       → a first commit *on this branch*; history lives on
+ *                         other branches and is not lost
+ */
+function EmptyRepositoryState({
+  isGitRepository,
+  hasCommitsElsewhere,
+  branch,
+  onInitialize,
+}: {
+  isGitRepository: boolean;
+  hasCommitsElsewhere: boolean;
+  branch: string;
+  onInitialize: () => Promise<void>;
+}) {
+  const isOrphanBranch = isGitRepository && hasCommitsElsewhere;
+
+  const title = !isGitRepository
+    ? 'Not a git repository'
+    : isOrphanBranch
+      ? `${branch || 'This branch'} has no commits yet`
+      : 'No commits yet';
+
+  const detail = !isGitRepository
+    ? 'Git status, branches and history are unavailable for this project.'
+    : isOrphanBranch
+      ? 'This is an orphan branch, so it starts from an empty history. Other branches keep their commits — switch to one to see them.'
+      : 'This repository has no commits, so there is no history to show and tasks cannot create worktrees yet.';
+
+  return (
+    <div className="flex min-w-0 flex-1 items-center justify-center p-5">
+      <div className="border-line-soft text-ink-3 flex max-w-sm flex-col items-center gap-2 rounded-lg border px-4 py-8 text-center text-sm">
+        <FolderGit2 className="text-ink-3 h-5 w-5" />
+        <p className="text-ink-1">{title}</p>
+        <p className="text-xs">{detail}</p>
+        <Button
+          className="mt-2"
+          variant="primary"
+          size="sm"
+          icon={<GitBranch size={14} />}
+          onClick={onInitialize}
+        >
+          {isGitRepository ? 'Create initial commit' : 'Initialize repository'}
+        </Button>
+        <p className="text-ink-3 text-[11px]">Adds a README.md and commits it.</p>
+      </div>
+    </div>
+  );
+}
+
 function ProjectHeader({
   name,
   path,
@@ -70,6 +132,8 @@ function ProjectHeader({
   editorLabel,
   onBack,
   runControl,
+  onToggleTerminal,
+  isTerminalOpen,
   onRefresh,
   isRefreshing,
   children,
@@ -84,6 +148,8 @@ function ProjectHeader({
   onBack?: () => void;
   /** Run/stop controls for commands executed in the repository checkout. */
   runControl?: React.ReactNode;
+  onToggleTerminal: () => void;
+  isTerminalOpen: boolean;
   /** Omitted for non-git projects, where there is no git state to re-read. */
   onRefresh?: () => void;
   isRefreshing: boolean;
@@ -145,6 +211,19 @@ function ProjectHeader({
 
         <div className="flex shrink-0 items-center gap-1.5">
           {runControl}
+          <button
+            type="button"
+            onClick={onToggleTerminal}
+            title="Toggle terminal (⌃`)"
+            aria-label="Toggle terminal"
+            aria-pressed={isTerminalOpen}
+            className={clsx(
+              'hover:bg-glass-light hover:text-ink-0 inline-flex h-[26px] w-[26px] items-center justify-center rounded-md transition-colors',
+              isTerminalOpen ? 'bg-glass-light text-ink-0' : 'text-ink-2',
+            )}
+          >
+            <TerminalIcon size={13} />
+          </button>
           {onRefresh && (
             <button
               type="button"
@@ -227,12 +306,32 @@ export function ProjectPanel({
     });
   }, [addToast, refresh]);
 
+  // `git init` + first commit, for a project folder that is not a repo yet or
+  // is one with an unborn HEAD. Worktrees cannot branch from a commit-less
+  // repo, so this is what unblocks task creation for a brand new project.
+  const initializeRepository = useCallback(async () => {
+    try {
+      await api.projects.git.init(projectId);
+    } catch (error) {
+      addToast({
+        message: `Could not initialize repository: ${cleanIpcError(error)}`,
+        type: 'error',
+      });
+      return;
+    }
+    // `refresh` also clears the new-task forms' cached worktree eligibility,
+    // which this commit just flipped from false to true.
+    await refresh();
+  }, [addToast, projectId, refresh]);
+
   const { data: status } = useProjectGitStatus(projectId);
   const { data: branches } = useProjectBranches(projectId);
 
   const [query, setQuery] = useState('');
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
   const [selectedHash, setSelectedHash] = useState<string | null>(null);
+  /** Explicit branch pick from the row's ref menu; see `focusedRef` below. */
+  const [refOverride, setRefOverride] = useState<string | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
 
   // Run commands from the repository checkout itself. The run service is keyed
@@ -244,6 +343,7 @@ export function ProjectPanel({
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(
     null,
   );
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const runDropdownRef = useRef<{ toggle: () => void } | null>(null);
   // The run dropdown renders nothing without configured commands, so offering
   // its shortcut would be a command palette entry that silently does nothing.
@@ -262,11 +362,13 @@ export function ProjectPanel({
   const canToggleLogs =
     hasConfiguredItems || hasRunCommandLogs || isLogsPaneOpen;
 
-  // The logs pane, the commit diff and the tasks rail all share the right
-  // column. Opening one closes the other so every action has a visible effect —
-  // otherwise ⌘L behind an open commit diff would look like a dead key.
+  // The logs pane, the commit diff, the terminal and the tasks rail all share
+  // the right column. Opening one closes the others so every action has a
+  // visible effect — otherwise ⌘L behind an open commit diff would look like a
+  // dead key.
   const openLogsPane = useCallback(() => {
     setSelectedHash(null);
+    setIsTerminalOpen(false);
     setIsLogsPaneOpen(true);
   }, []);
   // Clearing the commit only belongs on the opening path: closing the logs
@@ -279,6 +381,18 @@ export function ProjectPanel({
     }
     openLogsPane();
   }, [isLogsPaneOpen, openLogsPane]);
+
+  // Unmounting the terminal only detaches the view; the shell keeps running in
+  // the main process, so toggling it closed is cheap and loses nothing.
+  const toggleTerminal = useCallback(() => {
+    if (isTerminalOpen) {
+      setIsTerminalOpen(false);
+      return;
+    }
+    setSelectedHash(null);
+    setIsLogsPaneOpen(false);
+    setIsTerminalOpen(true);
+  }, [isTerminalOpen]);
 
   // Every keystroke would otherwise run a fresh `git log` over the whole
   // repository; the field itself stays responsive because only the query that
@@ -306,6 +420,27 @@ export function ProjectPanel({
     [graphPages],
   );
 
+  // Which of the selected commit's refs the user means. A commit that is the
+  // tip of several branches used to render one badge and a dead `+N`, so
+  // "clicked commit" never answered "which branch". This does.
+  //
+  // Derived rather than reset in an effect: an override that does not belong to
+  // the current selection is simply ignored, so selecting a new commit falls
+  // back to its own default in the same render instead of flashing the old one.
+  const selectedCommit = useMemo(
+    () => commits.find((commit) => commit.hash === selectedHash),
+    [commits, selectedHash],
+  );
+  const refGroups = useMemo(
+    () => groupCommitRefs(selectedCommit?.refs ?? []),
+    [selectedCommit],
+  );
+  const focusedRef =
+    refGroups.find((group) => group.key === refOverride)?.key ??
+    defaultFocusedRef(selectedCommit?.refs ?? []);
+  const focusedGroup =
+    refGroups.find((group) => group.key === focusedRef) ?? null;
+
   useCommands(
     'project-panel-history',
     [
@@ -317,7 +452,11 @@ export function ProjectPanel({
           // The command logs pane binds ⌘F to its own log filter on a bubbling
           // window listener, which this capture-phase dispatcher would otherwise
           // pre-empt. Declining hands the key back to whatever is focused.
-          if (document.activeElement?.closest('[data-command-logs-pane]')) {
+          if (
+            document.activeElement?.closest(
+              '[data-command-logs-pane], [data-project-terminal]',
+            )
+          ) {
             return false;
           }
           searchInput.current?.focus();
@@ -369,9 +508,38 @@ export function ProjectPanel({
         shortcut: 'cmd+l',
         handler: toggleLogsPane,
       },
+      // ⌃` is the conventional terminal toggle and is otherwise unbound in this
+      // app. It must not be ⌘-based: the shell needs ⌘-keys to reach the OS
+      // clipboard, and every ⌘ letter is already taken.
+      {
+        label: 'Toggle Terminal',
+        section: 'Project',
+        shortcut: 'ctrl+`',
+        keywords: ['shell', 'console', 'bash', 'zsh'],
+        handler: toggleTerminal,
+      },
+      // Escape closes the terminal rather than leaving the project. Mutually
+      // exclusive with the other Escape bindings here: only one of the right
+      // column's occupants is ever on screen.
+      isTerminalOpen && {
+        label: 'Close Terminal',
+        shortcut: 'escape',
+        handler: () => {
+          // Escape belongs to the shell while it has focus — it is how you
+          // leave insert mode in vim, dismiss a completion menu, and so on.
+          // Declining hands the key back to xterm; ⌃` still closes the pane.
+          if (document.activeElement?.closest('[data-project-terminal]')) {
+            return false;
+          }
+          setIsTerminalOpen(false);
+          return true;
+        },
+        hideInCommandPalette: true,
+      },
       backToTaskId !== undefined &&
         selectedHash === null &&
-        !isLogsPaneOpen && {
+        !isLogsPaneOpen &&
+        !isTerminalOpen && {
           label: 'Back to Task',
           section: 'Project',
           shortcut: 'escape',
@@ -408,9 +576,19 @@ export function ProjectPanel({
   }
 
   const isGitRepository = status?.isGitRepository ?? true;
+  // Optimistic until the first status lands, so the panel does not flash the
+  // "initialize this repository" card at every project with history.
+  const hasCommits = status?.hasCommits ?? true;
+  // True whenever any ref holds a commit, so it is also true in the ordinary
+  // case; only a never-committed repo makes it false.
+  const hasCommitsElsewhere = status?.hasCommitsElsewhere ?? true;
 
   return (
-    <div className="bg-bg-0 flex h-full min-h-0 flex-1 flex-col">
+    // `min-w-0`: as a flex child the panel would otherwise be sized by its
+    // min-content width (the sync bar's non-wrapping actions, the header's
+    // buttons), growing wider than the viewport and getting clipped by
+    // `main`'s `overflow-hidden` — the Push button was cut in half.
+    <div className="bg-bg-0 flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
       <ProjectHeader
         name={project.name}
         path={project.path}
@@ -436,18 +614,29 @@ export function ProjectPanel({
             }}
           />
         }
+        onToggleTerminal={toggleTerminal}
+        isTerminalOpen={isTerminalOpen}
         onRefresh={isGitRepository ? runRefresh : undefined}
         isRefreshing={isRefreshing}
       >
         <ProjectLogoBackground project={project} showColorFallback />
       </ProjectHeader>
 
-      {isGitRepository && status && (
+      {/* Hidden only for a repo with no commits anywhere: an unborn HEAD has
+          nothing to push and no upstream, so Fetch/Pull/Push would produce raw
+          git errors ("src refspec does not match any") directly above a card
+          saying there are no commits yet.
+
+          Deliberately keyed on `hasCommitsElsewhere` rather than `hasCommits`,
+          which is weaker. The bar holds the panel's only branch selector, so
+          hiding it on an orphan branch would strand the user there with no way
+          back to the branch that has the history. */}
+      {isGitRepository && hasCommitsElsewhere && status && (
         <SyncBar projectId={projectId} status={status} />
       )}
 
       <div className="flex min-h-0 flex-1">
-        {isGitRepository ? (
+        {isGitRepository && hasCommits ? (
           <CommitHistory
             commits={commits}
             branch={status?.branch ?? ''}
@@ -465,6 +654,15 @@ export function ProjectPanel({
             isCountingMatches={isCountingMatches && isFiltered(filter)}
             searchInputRef={searchInput}
             selectedHash={selectedHash}
+            focusedRef={focusedRef}
+            onFocusRef={({ hash, refKey }) => {
+              // Picking a branch on a row that is not open also opens it —
+              // otherwise the choice would have nowhere to show itself.
+              setSelectedHash(hash);
+              setRefOverride(refKey);
+              setIsLogsPaneOpen(false);
+              setIsTerminalOpen(false);
+            }}
             onSelectCommit={(commit) => {
               // Clicking the open commit again closes the pane, so the rail can
               // be brought back without reaching for the Close button.
@@ -472,22 +670,22 @@ export function ProjectPanel({
                 current === commit.hash ? null : commit.hash,
               );
               setIsLogsPaneOpen(false);
+              setIsTerminalOpen(false);
             }}
           />
         ) : (
-          <div className="flex min-w-0 flex-1 items-center justify-center p-5">
-            <div className="border-line-soft text-ink-3 flex flex-col items-center gap-2 rounded-lg border px-4 py-8 text-center text-sm">
-              <FolderGit2 className="text-ink-3 h-5 w-5" />
-              <p className="text-ink-1">Not a git repository</p>
-              <p className="text-xs">
-                Git status, branches and history are unavailable for this
-                project.
-              </p>
-            </div>
-          </div>
+          <EmptyRepositoryState
+            isGitRepository={isGitRepository}
+            hasCommitsElsewhere={status?.hasCommitsElsewhere ?? false}
+            /* `?? false` above, not the optimistic default: while status is
+               loading this card is not rendered at all, and if it ever were,
+               "fresh repo" is the safer story to tell than "orphan branch". */
+            branch={status?.branch ?? ''}
+            onInitialize={initializeRepository}
+          />
         )}
 
-        {/* One right-hand column, three occupants. The commit history beside it
+        {/* One right-hand column, four occupants. The commit history beside it
             is `flex-1` with `flex-basis: 0`, so it carries no shrink weight —
             the wrapper keeps the pane at the width the user dragged it to
             instead of letting it absorb every shortfall. */}
@@ -496,6 +694,15 @@ export function ProjectPanel({
             <CommitPanel
               projectId={projectId}
               commitHash={selectedHash}
+              focusedRef={
+                focusedGroup && {
+                  name: focusedGroup.key,
+                  kind: focusedGroup.ref.kind,
+                  isHead: focusedGroup.ref.isHead,
+                  remotes: focusedGroup.remotes.map((remote) => remote.name),
+                  otherRefCount: refGroups.length - 1,
+                }
+              }
               onClose={() => setSelectedHash(null)}
             />
           ) : isLogsPaneOpen ? (
@@ -506,6 +713,12 @@ export function ProjectPanel({
               selectedCommandId={selectedCommandId}
               onSelectCommand={setSelectedCommandId}
               onClose={() => setIsLogsPaneOpen(false)}
+            />
+          ) : isTerminalOpen ? (
+            <ProjectTerminal
+              projectId={projectId}
+              cwd={project.path}
+              onClose={() => setIsTerminalOpen(false)}
             />
           ) : (
             <TasksRail projectId={projectId} />

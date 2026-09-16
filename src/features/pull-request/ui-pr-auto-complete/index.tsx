@@ -36,6 +36,10 @@ import { useToastStore } from '@/stores/toasts';
 
 import { getCurrentIdentityId } from '../utils-pr-current-user';
 
+// [qac-debug] temporary: last value each project's rows observed, so the
+// per-row instrumentation logs transitions instead of one line per row.
+const qacLastObserved = new Map<string, boolean | 'no-project'>();
+
 export function PrAutoComplete({
   pr,
   projectId,
@@ -52,12 +56,13 @@ export function PrAutoComplete({
   const requeueMutation = useRequeuePolicyEvaluation(projectId, pr.id, repoInfo);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [queuedIds, setQueuedIds] = useState<Set<string>>(() => new Set());
-  const { data: evaluations = [] } = usePullRequestPolicyEvaluations(
-    projectId,
-    pr.id,
-    { refetchInterval: isModalOpen && queuedIds.size > 0 ? 3_000 : false },
-    repoInfo,
-  );
+  const { data: evaluations = [], isPending: isEvaluationsPending } =
+    usePullRequestPolicyEvaluations(
+      projectId,
+      pr.id,
+      { refetchInterval: isModalOpen && queuedIds.size > 0 ? 3_000 : false },
+      repoInfo,
+    );
   const previousEvaluationsRef = useRef(evaluations);
   const invalidatePrDetails = useInvalidatePullRequestDetails(
     projectId,
@@ -82,6 +87,21 @@ export function PrAutoComplete({
 
   const { data: project } = useProject(projectId);
   const isQueueEnabled = !!project?.queuePrAutoComplete;
+
+  // [qac-debug] temporary instrumentation for the queue-auto-complete toggle.
+  // This component mounts once per PR feed row, so logging every render would
+  // emit one line per row per project change and bury the two lines that
+  // actually matter. Log only when the observed value transitions.
+  useEffect(() => {
+    const observed = project ? !!project.queuePrAutoComplete : 'no-project';
+    if (qacLastObserved.get(projectId) === observed) return;
+    qacLastObserved.set(projectId, observed);
+    console.warn('[qac-row] PrAutoComplete observed new value', {
+      projectId,
+      firstSeenOnPr: pr.id,
+      queuePrAutoComplete: observed,
+    });
+  }, [pr.id, project, projectId]);
   const enqueue = usePrCompletionQueueStore((state) => state.enqueue);
   const queued = usePrCompletionQueueEntry(projectId, pr.id);
   const leaveQueue = useLeavePrCompletionQueue();
@@ -185,6 +205,63 @@ export function PrAutoComplete({
     }
   }, [allowedStrategies, mergeStrategy]);
 
+  // Enqueue with whatever completion options the PR already carries (or sane
+  // defaults). The queue is meant to be a single press on the rail item, so it
+  // never goes through the modal — the driver arms it and runs its CI later.
+  const handleQuickEnqueue = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      // The strategy is snapshotted into the entry and only PATCHed much later,
+      // so it must not be guessed from an unresolved policy query:
+      // `getAllowedMergeStrategies([])` returns *every* strategy, which would
+      // bake `noFastForward` into a squash-only repo and make the arm fail.
+      if (!currentIdentityId || isEvaluationsPending) return;
+      enqueue({
+        projectId,
+        prId: pr.id,
+        prTitle: pr.title,
+        targetBranch: pr.targetRefName.replace('refs/heads/', ''),
+        repoInfo,
+        autoCompleteSetById: currentIdentityId,
+        completionOptions: {
+          mergeStrategy:
+            pr.completionOptions?.mergeStrategy ??
+            allowedStrategies[0] ??
+            'noFastForward',
+          deleteSourceBranch: pr.completionOptions?.deleteSourceBranch ?? true,
+          transitionWorkItems:
+            pr.completionOptions?.transitionWorkItems ?? false,
+          mergeCommitMessage: pr.completionOptions?.mergeCommitMessage,
+          // Mirrors the modal's opt-in checkbox: only ignore optional policies
+          // if the PR was already set up that way. Enqueueing must not silently
+          // widen what gets waived.
+          autoCompleteIgnoreConfigIds: pr.completionOptions
+            ?.autoCompleteIgnoreConfigIds?.length
+            ? optionalPolicyConfigIds
+            : undefined,
+        },
+      });
+      addToast({
+        type: 'success',
+        message: `PR !${pr.id} added to the completion queue`,
+      });
+    },
+    [
+      addToast,
+      allowedStrategies,
+      currentIdentityId,
+      enqueue,
+      isEvaluationsPending,
+      optionalPolicyConfigIds,
+      pr.completionOptions,
+      pr.id,
+      pr.targetRefName,
+      pr.title,
+      projectId,
+      repoInfo,
+    ],
+  );
+
   const handleEnable = useCallback(() => {
     if (!currentIdentityId || autoCompleteMutation.isAnyPending) return;
 
@@ -200,45 +277,17 @@ export function PrAutoComplete({
           : undefined,
     };
 
-    // With the project setting on, the PATCH is deferred to the queue driver so
-    // only one PR of this project is armed at a time.
-    if (isQueueEnabled) {
-      enqueue({
-        projectId,
-        prId: pr.id,
-        prTitle: pr.title,
-        targetBranch: pr.targetRefName.replace('refs/heads/', ''),
-        repoInfo,
-        autoCompleteSetById: currentIdentityId,
-        completionOptions,
-      });
-      addToast({
-        type: 'success',
-        message: `PR !${pr.id} queued for auto-complete`,
-      });
-      setIsModalOpen(false);
-      return;
-    }
-
     autoCompleteMutation.mutate(
       { enabled: true, autoCompleteSetById: currentIdentityId, completionOptions },
       { onSuccess: () => setIsModalOpen(false) },
     );
   }, [
-    addToast,
     currentIdentityId,
     autoCompleteMutation,
-    enqueue,
-    isQueueEnabled,
     mergeStrategy,
     deleteSourceBranch,
     transitionWorkItems,
     mergeCommitMessage,
-    pr.id,
-    pr.targetRefName,
-    pr.title,
-    projectId,
-    repoInfo,
     showCommitMessage,
     ignoreOptionalPolicies,
     optionalPolicyConfigIds,
@@ -283,7 +332,11 @@ export function PrAutoComplete({
   // Queue membership wins over the plain auto-complete chip: once armed, the PR
   // is both auto-completing *and* queued, and the position is the useful bit.
   if (queued) {
-    const isArmed = queued.entry.status !== 'waiting';
+    // `arming` is not yet merging — the PATCH is still in flight, and the leave
+    // path deliberately does not disarm during it, so the label and the tooltip
+    // must not promise a cancel that will not happen.
+    const isArmed = queued.entry.status === 'armed';
+    const isPending = queued.entry.status !== 'waiting';
     const queuedClassName =
       variant === 'compact'
         ? 'text-status-pr bg-status-pr/10 ring-status-pr/20 ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1'
@@ -291,12 +344,16 @@ export function PrAutoComplete({
 
     return (
       <div className={queuedClassName}>
-        {isArmed ? (
+        {isPending ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : (
           <ListOrdered className="h-3.5 w-3.5" />
         )}
-        <span>{isArmed ? 'Merging' : `Queued #${queued.position}`}</span>
+        <span>
+          {isArmed
+            ? `Merging #${queued.position}`
+            : `Queued #${queued.position}`}
+        </span>
         <button
           onClick={handleLeaveQueue}
           className="ml-0.5 rounded p-0.5 hover:bg-white/10"
@@ -359,19 +416,31 @@ export function PrAutoComplete({
       <button
         type="button"
         onClick={(e) => {
+          if (isQueueEnabled) {
+            handleQuickEnqueue(e);
+            return;
+          }
           e.stopPropagation();
           resetForm();
           setIsModalOpen(true);
         }}
         className={triggerClassName}
-        disabled={autoCompleteMutation.isAnyPending}
+        disabled={
+          autoCompleteMutation.isAnyPending ||
+          (isQueueEnabled && isEvaluationsPending)
+        }
+        title={
+          isQueueEnabled
+            ? 'Add to the completion queue — CI runs automatically when it is its turn'
+            : undefined
+        }
       >
         {autoCompleteMutation.isAnyPending ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : (
           <GitMerge className="h-3.5 w-3.5" />
         )}
-        {isQueueEnabled ? 'Queue auto-complete' : 'Set auto-complete'}
+        Set auto-complete
       </button>
       <Modal
         isOpen={isModalOpen}
@@ -530,7 +599,7 @@ export function PrAutoComplete({
               {autoCompleteMutation.isAnyPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                isQueueEnabled ? 'Add to completion queue' : 'Enable auto-complete'
+                'Enable auto-complete'
               )}
             </button>
           </div>

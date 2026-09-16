@@ -1037,7 +1037,7 @@ describe('uploadPullRequestAttachment', () => {
         dataBase64,
       }),
     ).resolves.toEqual({
-      url: 'https://dev.azure.com/org/project/_apis/attachment/image-6105d6cc-1.png',
+      url: 'https://dev.azure.com/org/project/_apis/attachment/image-6105d6cc-1.png?download=false&resolveLfs=true&%24format=octetStream&api-version=5.0-preview.1&sanitize=true',
     });
 
     const urls = vi.mocked(fetch).mock.calls.map(([input]) => String(input));
@@ -1096,7 +1096,7 @@ describe('uploadPullRequestAttachment', () => {
         dataBase64,
       }),
     ).resolves.toEqual({
-      url: 'https://dev.azure.com/org/project/_apis/attachment/image-6105d6cc.png',
+      url: 'https://dev.azure.com/org/project/_apis/attachment/image-6105d6cc.png?download=false&resolveLfs=true&%24format=octetStream&api-version=5.0-preview.1&sanitize=true',
     });
 
     // Uploading must not depend on a pull request ownership lookup.

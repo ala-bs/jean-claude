@@ -20,6 +20,9 @@ const prs = new Map<number, AzureDevOpsPullRequestDetails>();
 let queueEnabled = true;
 const setAutoComplete = vi.fn();
 const invalidatePr = vi.fn();
+const requeueCi = vi.fn();
+/** Policy evaluations the mocked hook serves to the armed entry's runner. */
+let policyEvaluations: unknown[] = [];
 /** Resolver for the in-flight arm PATCH, so tests control its timing. */
 let armDeferred: {
   resolve: (pr: AzureDevOpsPullRequestDetails) => void;
@@ -42,7 +45,22 @@ vi.mock('@/hooks/use-pull-requests', () => ({
   usePullRequest: (_projectId: string, prId: number) => ({
     data: prs.get(prId),
   }),
-  usePullRequestPolicyEvaluations: () => ({ data: [] }),
+  usePullRequestPolicyEvaluations: () => ({ data: policyEvaluations }),
+  useRequeuePolicyEvaluation: () => ({
+    // Mirrors react-query: a rejected mutation surfaces through `onError`
+    // rather than throwing out of the caller.
+    mutate: (
+      params: { evaluationId: string },
+      options?: { onError?: (error: unknown) => void },
+    ) => {
+      try {
+        requeueCi(params.evaluationId);
+      } catch (error) {
+        options?.onError?.(error);
+      }
+    },
+    isPending: false,
+  }),
   // The real hook returns a NEW function identity on every render (its resolved
   // repo info is a fresh object literal). Mirrored here so the poll-interval
   // test exercises that, while calls land on one shared spy.
@@ -121,6 +139,8 @@ describe('PrCompletionQueueDriver', () => {
     armDeferred = null;
     setAutoComplete.mockClear();
     invalidatePr.mockClear();
+    requeueCi.mockClear();
+    policyEvaluations = [];
     usePrCompletionQueueStore.setState({ entries: [] });
 
     container = document.createElement('div');
@@ -206,6 +226,103 @@ describe('PrCompletionQueueDriver', () => {
     // second armed PR is exactly the pileup this queue exists to prevent.
     expect(setAutoComplete).toHaveBeenCalledWith({ prId: 101, enabled: false });
     expect(queuedPrIds()).toEqual([102]);
+  });
+
+  /** A required build policy that Azure has not actually run yet. */
+  function pendingBuildPolicy(
+    evaluationId: string,
+    configId: number,
+    context?: { buildId?: number; isExpired?: boolean },
+  ) {
+    return {
+      evaluationId,
+      status: 'queued',
+      isBlocking: true,
+      configuration: {
+        id: configId,
+        isEnabled: true,
+        isBlocking: true,
+        type: { id: 'build', displayName: 'Build' },
+        settings: { buildDefinitionId: 42 },
+      },
+      context,
+    };
+  }
+
+  it('re-runs a policy that expires again after a push, but not one already running', async () => {
+    policyEvaluations = [pendingBuildPolicy('e1', 1)];
+    enqueue(101);
+    await render();
+    await acceptArm(101);
+    expect(requeueCi.mock.calls.map(([id]) => id)).toEqual(['e1']);
+
+    // The build starts: same evaluation, now actually running. Fresh array so
+    // the effect re-runs — a still-pending policy must not be re-triggered.
+    policyEvaluations = [pendingBuildPolicy('e1', 1, { buildId: 7 })];
+    await render();
+    expect(requeueCi).toHaveBeenCalledTimes(1);
+
+    // Someone pushes to the source branch: Azure expires that same run. The PR
+    // is still armed and will never merge until it is run again.
+    policyEvaluations = [
+      pendingBuildPolicy('e1', 1, { buildId: 7, isExpired: true }),
+    ];
+    await render();
+    expect(requeueCi.mock.calls.map(([id]) => id)).toEqual(['e1', 'e1']);
+  });
+
+  it('retries a requeue that Azure rejected instead of wedging the queue', async () => {
+    requeueCi.mockImplementationOnce(() => {
+      throw new Error('nope');
+    });
+    policyEvaluations = [pendingBuildPolicy('e1', 1)];
+    enqueue(101);
+    await render();
+    await acceptArm(101);
+    expect(requeueCi).toHaveBeenCalledTimes(1);
+
+    // Next poll: the policy is still pending, so the failed attempt must not
+    // count as "already asked" — otherwise the head entry blocks forever.
+    policyEvaluations = [pendingBuildPolicy('e1', 1)];
+    await render();
+    expect(requeueCi).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs the armed PR required CI, once per policy, and ignores the rest', async () => {
+    policyEvaluations = [
+      pendingBuildPolicy('e1', 1),
+      // Already running — must not be re-triggered.
+      pendingBuildPolicy('e2', 2, { buildId: 7 }),
+      // Stale run for an older commit — must be re-triggered.
+      pendingBuildPolicy('e3', 3, { buildId: 8, isExpired: true }),
+      // Optional policy — the queue only owes the required ones.
+      {
+        ...pendingBuildPolicy('e4', 4),
+        isBlocking: false,
+        configuration: {
+          ...pendingBuildPolicy('e4', 4).configuration,
+          isBlocking: false,
+        },
+      },
+    ];
+    enqueue(101);
+    await render();
+    await acceptArm(101);
+    // A second poll must not double-trigger the same policies. Rebuilt as a
+    // fresh array (a new query result identity) so the effect really re-runs.
+    policyEvaluations = [...policyEvaluations];
+    await render();
+
+    expect(requeueCi.mock.calls.map(([id]) => id).sort()).toEqual(['e1', 'e3']);
+  });
+
+  it('does not run CI for an entry that is still waiting in line', async () => {
+    policyEvaluations = [pendingBuildPolicy('e1', 1)];
+    enqueue(101);
+    await render();
+
+    // 101 is only `arming` here — nothing armed yet, so no CI should fire.
+    expect(requeueCi).not.toHaveBeenCalled();
   });
 
   it('does not fail the entry on a stale pre-arm read', async () => {

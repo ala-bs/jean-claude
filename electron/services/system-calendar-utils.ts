@@ -29,6 +29,59 @@ export function isCalendarAccessDeniedError(error: unknown): boolean {
   );
 }
 
+const XCODE_LICENSE_SIGNATURE = 'You have not agreed to the Xcode license';
+
+export function isXcodeLicenseError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const { stderr, message } = error as { stderr?: unknown; message?: unknown };
+  return [stderr, message].some(
+    (value) =>
+      typeof value === 'string' && value.includes(XCODE_LICENSE_SIGNATURE),
+  );
+}
+
+const MAX_CALENDAR_ERROR_LENGTH = 300;
+
+/**
+ * Turns a raw `execFile` failure from the Swift helper into a short, readable
+ * message. Node puts the entire `xcrun swift -e <script>` command line into
+ * `error.message`, which makes the unsanitized error unreadable in a toast.
+ */
+export function summarizeCalendarCommandError(
+  error: unknown,
+  script = '',
+): string {
+  const { stderr, message } = (error ?? {}) as {
+    stderr?: unknown;
+    message?: unknown;
+  };
+
+  const detail = [stderr, message]
+    .map((value) => (typeof value === 'string' ? value : ''))
+    .map((value) => {
+      let cleaned = value.replace(/\s+/g, ' ').trim();
+      const normalizedScript = script.replace(/\s+/g, ' ').trim();
+      if (normalizedScript) {
+        cleaned = cleaned.split(normalizedScript).join(' ');
+      }
+      return cleaned.replace(/^Command failed:\s*(xcrun swift -e)?/, '').trim();
+    })
+    .find((value) => value.length > 0);
+
+  if (!detail) {
+    return 'Could not read your calendar.';
+  }
+
+  const truncated =
+    detail.length > MAX_CALENDAR_ERROR_LENGTH
+      ? `${detail.slice(0, MAX_CALENDAR_ERROR_LENGTH).trimEnd()}…`
+      : detail;
+
+  return `Could not read your calendar: ${truncated}`;
+}
+
 export function parseCalendarEventRecords(
   rawOutput: string,
 ): CalendarEventRecord[] {

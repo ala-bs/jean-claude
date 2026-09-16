@@ -17,7 +17,10 @@ interface NewTaskFormDraft {
   useWorktree: boolean;
   useExistingBranch: boolean;
   sourceBranch: string | null; // null means use project's default branch
-  interactionMode: InteractionMode;
+  // Absent = not explicitly chosen yet; consumers fall back to the project
+  // default (see `getDefaultInteractionMode`). Matches the `new-task-draft`
+  // store, where drafts are `Partial<NewTaskDraft>` and unset means undefined.
+  interactionMode?: InteractionMode;
   modelPreference: ModelPreference;
   thinkingEffort: ThinkingEffort;
   backendModelPresetId: string | null;
@@ -41,7 +44,6 @@ const defaultDraft: NewTaskFormDraft = {
   useWorktree: false,
   useExistingBranch: false,
   sourceBranch: null,
-  interactionMode: 'ask',
   modelPreference: 'default',
   thinkingEffort: 'default',
   backendModelPresetId: null,
@@ -111,6 +113,11 @@ const useStore = create<NewTaskFormState>()(
     { name: 'new-task-form' },
   ),
 );
+
+// Exported for tests, which need `getState()` outside a React render. The
+// internal binding keeps its `use` prefix so rules-of-hooks still applies to
+// the selector call sites below.
+export const newTaskFormStoreApi = useStore;
 
 export function useNewTaskFormStore(projectId: string) {
   const draft = useStore((state) => state.drafts[projectId] ?? defaultDraft);

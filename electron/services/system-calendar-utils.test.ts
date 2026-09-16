@@ -7,6 +7,7 @@ import {
   isLikelyAllDayCalendarEvent,
   parseCalendarEventRecords,
   shouldSuppressCalendarMeetingAlert,
+  summarizeCalendarCommandError,
 } from './system-calendar-utils';
 
 describe('isCalendarAccessDeniedError', () => {
@@ -206,5 +207,36 @@ describe('isLikelyAllDayCalendarEvent', () => {
         endAt: '2026-05-23T10:30:00',
       }),
     ).toBe(false);
+  });
+});
+
+describe('summarizeCalendarCommandError', () => {
+  const script = 'import Foundation\nimport EventKit\nprint("hi")';
+
+  it('removes the embedded swift script from the message', () => {
+    const error = Object.assign(
+      new Error(`Command failed: xcrun swift -e ${script}\nboom happened`),
+      { stderr: '' },
+    );
+
+    const summary = summarizeCalendarCommandError(error, script);
+    expect(summary).toBe('Could not read your calendar: boom happened');
+    expect(summary).not.toContain('EventKit');
+  });
+
+  it('prefers stderr and truncates very long details', () => {
+    const error = Object.assign(new Error('Command failed'), {
+      stderr: 'x'.repeat(400),
+    });
+
+    const summary = summarizeCalendarCommandError(error, script);
+    expect(summary.endsWith('…')).toBe(true);
+    expect(summary.length).toBeLessThan(340);
+  });
+
+  it('falls back when there is nothing useful', () => {
+    expect(summarizeCalendarCommandError(undefined)).toBe(
+      'Could not read your calendar.',
+    );
   });
 });

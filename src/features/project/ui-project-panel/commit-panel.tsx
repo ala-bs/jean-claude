@@ -1,4 +1,13 @@
-import { Check, ChevronDown, ChevronRight, Copy, GitPullRequest, X } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  GitBranch,
+  GitPullRequest,
+  Tag,
+  X,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 import clsx from 'clsx';
 
@@ -9,6 +18,7 @@ import {
 import { FileDiffContent } from '@/features/common/ui-file-diff';
 import { formatRelativeTime } from '@/lib/time';
 import type { ProjectCommitDiffFile } from '@shared/types';
+import type { ProjectGitRef } from '@shared/types';
 import { useCommitDiffPaneWidth } from '@/stores/navigation';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 
@@ -142,10 +152,25 @@ function CommitFile({
 export function CommitPanel({
   projectId,
   commitHash,
+  focusedRef,
   onClose,
 }: {
   projectId: string;
   commitHash: string;
+  /**
+   * Branch the history list is focusing on this commit, echoed in the header.
+   * A tip commit can belong to several branches, so the hash alone does not say
+   * which one the user opened. Null when the commit carries no refs.
+   */
+  focusedRef: {
+    name: string;
+    kind: ProjectGitRef['kind'];
+    isHead: boolean;
+    /** Remotes in sync with it, folded into one marker rather than listed. */
+    remotes: string[];
+    /** Other refs on the same commit, so the header can say "1 more". */
+    otherRefCount: number;
+  } | null;
   onClose: () => void;
 }) {
   const { data: detail, isLoading } = useProjectCommitDetail(
@@ -220,6 +245,38 @@ export function CommitPanel({
           <span className="border-line bg-bg-2 text-ink-1 rounded border px-1.5 py-px font-mono text-[11px]">
             {detail?.shortHash ?? commitHash.slice(0, 7)}
           </span>
+          {focusedRef && (
+            <span
+              title={[
+                `${focusedRef.kind === 'tag' ? 'Focused tag' : 'Focused branch'}: ${focusedRef.name}`,
+                focusedRef.isHead ? 'currently checked out' : null,
+                ...focusedRef.remotes.map((remote) => `in sync with ${remote}`),
+                focusedRef.otherRefCount > 0
+                  ? 'This commit is also the tip of other refs — pick one from the +N menu in the history list.'
+                  : null,
+              ]
+                .filter(Boolean)
+                .join('\n')}
+              className="bg-acc/15 text-acc-ink inline-flex min-w-0 items-center gap-1 rounded px-1.5 py-px font-mono text-[10.5px]"
+            >
+              {focusedRef.kind === 'tag' ? (
+                <Tag size={10} className="shrink-0 opacity-70" />
+              ) : (
+                <GitBranch size={10} className="shrink-0 opacity-70" />
+              )}
+              <span className="truncate">{focusedRef.name}</span>
+              {focusedRef.remotes.length > 0 && (
+                <span aria-hidden className="shrink-0 opacity-60">
+                  ●
+                </span>
+              )}
+              {focusedRef.otherRefCount > 0 && (
+                <span className="text-ink-3 shrink-0">
+                  +{focusedRef.otherRefCount}
+                </span>
+              )}
+            </span>
+          )}
           {(detail?.parents.length ?? 0) > 1 && (
             <span className="text-ink-3 inline-flex items-center gap-1 font-mono text-[10.5px]">
               <GitPullRequest size={9} />

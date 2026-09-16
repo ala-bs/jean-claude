@@ -1,7 +1,9 @@
 import {
   AlertTriangle,
   ArrowRight,
+  Check,
   Clock,
+  Copy,
   Edit3,
   ExternalLink,
   Eye,
@@ -31,6 +33,7 @@ import {
   type PullRequestRepoInfo,
   useMarkPullRequestDraft,
   usePublishPullRequest,
+  usePullRequestDivergence,
   useUpdatePullRequestTitle,
 } from '@/hooks/use-pull-requests';
 import { Button } from '@/common/ui/button';
@@ -52,6 +55,7 @@ import { PrAutoComplete } from '../ui-pr-auto-complete';
 import { PrRunControl } from '../ui-pr-run-control';
 import { PrVoteDropdown } from '../ui-pr-vote-dropdown';
 import type { Task } from '@shared/types';
+import { useCopyPrLink } from '../use-copy-pr-link';
 
 function getStatusBadge(
   status: AzureDevOpsPullRequestDetails['status'],
@@ -136,9 +140,24 @@ export function PrHeader({
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(pr.title);
   const [titleError, setTitleError] = useState<string | null>(null);
+  const { copyLink, didCopy } = useCopyPrLink(pr.url);
   const sourceBranch = getBranchName(pr.sourceRefName);
   const targetBranch = getBranchName(pr.targetRefName);
   const avatarProviderId = providerId ?? project?.repoProviderId;
+  // Only open PRs can still fall behind their target branch.
+  const { data: divergence } = usePullRequestDivergence(
+    projectId,
+    pr.id,
+    repoInfo,
+    {
+      enabled: pr.status === 'active',
+      // Branch names are already on the PR — pass them so the main process
+      // doesn't re-fetch the PR just to read its refs.
+      sourceRefName: pr.sourceRefName,
+      targetRefName: pr.targetRefName,
+    },
+  );
+  const behindCount = divergence?.behindCount ?? 0;
 
   useEffect(() => {
     if (!isEditingTitle) {
@@ -364,6 +383,20 @@ export function PrHeader({
               {editorSetting ? getEditorLabel(editorSetting) : 'Editor'}
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => void copyLink()}
+            aria-label="Copy PR link"
+            title="Copy PR link"
+            className="border-glass-border bg-bg-1 hover:bg-bg-2 flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs transition-colors"
+          >
+            {didCopy ? (
+              <Check className="h-3.5 w-3.5 text-green-500" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+            {didCopy ? 'Copied' : 'Copy link'}
+          </button>
           <a
             href={pr.url}
             target="_blank"
@@ -530,6 +563,14 @@ export function PrHeader({
                 <span className="bg-status-done/15 text-status-done rounded px-1.5 py-0.5">
                   {targetBranch}
                 </span>
+                {behindCount > 0 && (
+                  <span
+                    className="bg-status-run/15 text-status-run rounded px-1.5 py-0.5"
+                    title={`This branch is ${behindCount} commit${behindCount === 1 ? '' : 's'} behind ${targetBranch}`}
+                  >
+                    {behindCount} behind
+                  </span>
+                )}
               </div>
 
               <span className="text-ink-4">·</span>

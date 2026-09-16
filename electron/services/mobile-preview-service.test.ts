@@ -2058,3 +2058,55 @@ describe('listDeviceAssignments', () => {
     expect(logger.error).toHaveBeenCalled();
   });
 });
+
+describe('mobile preview bootDevice', () => {
+  function createBootService(bootDevice?: (deviceId: string) => Promise<{ deviceId: string }>) {
+    const adapter = {
+      listDevices: async () => [],
+      startStream: async () => ({ session: {}, stop: async () => {} }),
+      sendInput: async () => {},
+      openDeeplink: async () => {},
+      setTextSize: async () => {},
+      setColorScheme: async () => {},
+      rotate: async () => {},
+      ...(bootDevice ? { bootDevice } : {}),
+    } as never;
+
+    return createMobilePreviewService({
+      adapters: { ios: adapter, android: adapter },
+      emitter: { sendToWebContents: () => {}, sendToAllWindows: () => {} },
+      validateTaskCanStart: async () => undefined,
+    });
+  }
+
+  it('delegates to the platform adapter', async () => {
+    // The service calls the adapter method unbound, so this also pins that the
+    // delegation keeps working if an adapter ever starts using `this`.
+    const bootDevice = vi.fn(async (deviceId: string) => ({
+      deviceId: `${deviceId}-resolved`,
+    }));
+
+    await expect(
+      createBootService(bootDevice).bootDevice({
+        platform: 'android',
+        deviceId: 'Pixel_8',
+      }),
+    ).resolves.toEqual({ deviceId: 'Pixel_8-resolved' });
+    expect(bootDevice).toHaveBeenCalledWith('Pixel_8');
+  });
+
+  it('throws when the adapter does not support booting', async () => {
+    await expect(
+      createBootService().bootDevice({ platform: 'ios', deviceId: 'sim-1' }),
+    ).rejects.toThrow(/not supported for platform/);
+  });
+
+  it('rejects an unsupported platform', async () => {
+    await expect(
+      createBootService(async (deviceId) => ({ deviceId })).bootDevice({
+        platform: 'web' as never,
+        deviceId: 'sim-1',
+      }),
+    ).rejects.toThrow(/Unsupported mobile preview platform/);
+  });
+});

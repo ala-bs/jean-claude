@@ -124,6 +124,7 @@ import { dbg } from '../lib/debug';
 import { generateTaskName } from './name-generation-service';
 import { getAgentBackendProvider } from './agent-backends/providers';
 import { JcMcpBridgeService } from './jc-mcp-bridge-service';
+import { mergeConflictTracker } from './merge-conflict-tracker';
 import { normalizeThinkingEffortForModel } from '../../shared/thinking-settings';
 import { notificationService } from './notification-service';
 import { OpenCodeBackend } from './agent-backends/opencode/opencode-backend';
@@ -599,6 +600,13 @@ interface ActiveSession {
   queuedPromptIdsBySubmissionId: Map<string, string>;
   /** Identifies this session's shell-edit tracking, see `shellEditTracker`. */
   shellEditToken?: object;
+  /** Working directory tracked for merge resolutions this turn. */
+  mergeTrackingDir?: string;
+  /**
+   * HEAD when the turn started. Bounds the search for merge commits the agent
+   * created, which is how merges committed with `--no-verify` are recovered.
+   */
+  mergeTrackingHead?: string | null;
 }
 
 function queuedPromptTombstoneKey(stepId: string, submissionId: string): string {
@@ -1142,6 +1150,70 @@ class AgentService {
   }
 
   /**
+   * Emits one entry per merge whose conflicts were resolved during the turn.
+   *
+   * Kept separate from the turn summary on purpose: a `git merge main` can bring
+   * in hundreds of files, and the handful the agent actually had to resolve by
+   * hand are the part worth reviewing.
+   */
+  private async emitMergeResolutionEntries(
+    session: ActiveSession,
+  ): Promise<void> {
+    const worktreePath = session.mergeTrackingDir;
+    if (!worktreePath) return;
+    let resolutions: Awaited<
+      ReturnType<typeof mergeConflictTracker.capture>
+    > = [];
+    try {
+      resolutions = await mergeConflictTracker.capture({
+        worktreePath,
+        sinceHead: session.mergeTrackingHead ?? null,
+      });
+    } catch (error) {
+      dbg.agent('Failed to capture merge resolutions: %O', error);
+    } finally {
+      // Advance the lower bound even when the capture failed. Leaving it stale
+      // makes every later turn re-scan the same range and re-emit the same
+      // resolutions, since dedup only spans a single capture.
+      const head = await mergeConflictTracker.headSha(worktreePath);
+      // A transient failure here must not null out the bound permanently: the
+      // backfill is disabled entirely while `sinceHead` is null, which is the
+      // only path that survives `git commit --no-verify`.
+      if (head) session.mergeTrackingHead = head;
+    }
+    if (!resolutions.length) return;
+
+    for (const resolution of resolutions) {
+      if (!resolution.files.length) continue;
+      await this.persistAndEmitSyntheticEntry(session.taskId, session, {
+        id: nanoid(),
+        date: new Date().toISOString(),
+        isSynthetic: true,
+        type: 'tool-use',
+        toolId: `merge-resolution-${nanoid()}`,
+        name: 'merge-resolution',
+        input: {
+          oursSha: resolution.oursSha,
+          theirsSha: resolution.theirsSha,
+          theirsLabel: resolution.theirsLabel,
+          truncated: resolution.truncated,
+          files: resolution.files.map((file) => ({
+            filePath: file.filePath,
+            deleted: file.resolvedDeleted,
+            unavailable: file.unavailable,
+            base: file.base,
+            ours: file.ours,
+            theirs: file.theirs,
+            resolved: file.resolved,
+            additions: file.additions,
+            deletions: file.deletions,
+          })),
+        },
+      });
+    }
+  }
+
+  /**
    * Emits one authoritative edit entry covering every file changed during the
    * turn, shell commands and Edit/Write tool uses alike.
    */
@@ -1149,6 +1221,10 @@ class AgentService {
     stepId: string,
     session: ActiveSession,
   ): Promise<void> {
+    // Emitted first so the resolution reads as happening before the turn's
+    // overall diff, which includes the merge's incoming files.
+    await this.emitMergeResolutionEntries(session);
+
     let files;
     try {
       files = await shellEditTracker.captureTurn(stepId);
@@ -1873,6 +1949,14 @@ class AgentService {
     // Baseline snapshot so shell commands that edit files (sed -i, scripts,
     // heredoc redirects) still show up in the prompt-group diff summary.
     session.shellEditToken = shellEditTracker.begin({ stepId, workingDir });
+
+    // Merge conflict resolutions are captured separately, so that merging the
+    // base branch in does not bury the resolution under its incoming files.
+    session.mergeTrackingDir = workingDir;
+    session.mergeTrackingHead = await mergeConflictTracker.headSha(workingDir);
+    void mergeConflictTracker.install(workingDir).catch((error: unknown) => {
+      dbg.agent('Failed to install merge hook: %O', error);
+    });
 
     dbg.agentSession(
       'runBackend for step %s (task %s): backend=%s, cwd=%s, resuming=%s',

@@ -122,9 +122,20 @@ export function useMobilePreviewActions({
 
   const handleReloadExpo = useCallback(
     () =>
-      runAction('Failed to reload Expo', () =>
-        api.mobilePreview.reloadExpo({ metroPort }),
-      ),
+      runAction('Failed to reload Expo', async () => {
+        const { connectedClients } = await api.mobilePreview.reloadExpo({
+          metroPort,
+        });
+        // Metro accepts the broadcast with or without an app listening, so
+        // without this the pane reports success for a reload that reached
+        // nobody -- the same "nothing happened" bug the dev pane now catches.
+        // `-1` means the count is unknown, which is not a failure.
+        if (connectedClients === 0) {
+          throw new Error(
+            `No app is connected to Metro on :${metroPort}, so there was nothing to reload.`,
+          );
+        }
+      }),
     [metroPort, runAction],
   );
 

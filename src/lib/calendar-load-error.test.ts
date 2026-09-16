@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   beginCalendarLoad,
+  formatCalendarLoadError,
   markCalendarLoadSucceeded,
   shouldNotifyCalendarLoadError,
 } from './calendar-load-error';
@@ -51,5 +52,23 @@ describe('shouldNotifyCalendarLoadError', () => {
 
     expect(shouldNotifyCalendarLoadError(error, beginCalendarLoad())).toBe(true);
     expect(shouldNotifyCalendarLoadError(error, beginCalendarLoad())).toBe(true);
+  });
+});
+
+describe('formatCalendarLoadError', () => {
+  it('strips the Electron IPC wrapper', () => {
+    expect(
+      formatCalendarLoadError(
+        new Error(
+          "Error invoking remote method 'calendar:listUpcomingMeetings': Error: Calendar access not granted.",
+        ),
+      ),
+    ).toBe('Calendar access not granted.');
+  });
+
+  it('falls back to a readable message when empty', () => {
+    expect(formatCalendarLoadError(new Error(''))).toBe(
+      'Could not read your calendar.',
+    );
   });
 });

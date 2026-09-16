@@ -78,6 +78,7 @@ import type {
   MobilePreviewAndroidCreateDeviceParams,
   MobilePreviewAndroidInstallSystemImageParams,
   MobilePreviewAttachSessionParams,
+  MobilePreviewBootDeviceParams,
   MobilePreviewDetachSessionParams,
   MobilePreviewExpoLaunchParams,
   MobilePreviewForwardPortParams,
@@ -87,6 +88,7 @@ import type {
   MobilePreviewIosAppStatusRequestParams,
   MobilePreviewIosCreateDeviceParams,
   MobilePreviewIosRenameDeviceParams,
+  MobilePreviewListMetroPeersParams,
   MobilePreviewListSessionsParams,
   MobilePreviewNativeLogStartParams,
   MobilePreviewOpenDeeplinkParams,
@@ -94,6 +96,7 @@ import type {
   MobilePreviewReloadExpoParams,
   MobilePreviewSetTextSizeParams,
   MobilePreviewStartParams,
+  MobilePreviewWaitForMetroClientParams,
   MobileRotationDirection,
   ReactNativeDevToolsEmbeddedBoundsParams,
   ReactNativeDevToolsEmbeddedCloseParams,
@@ -123,6 +126,10 @@ import {
   type UpdateProjectCommand,
   type UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
+import {
+  TERMINAL_DATA_CHANNEL,
+  TERMINAL_EXIT_CHANNEL,
+} from '@shared/terminal-types';
 
 import type {
   NewWorkActivityEvent,
@@ -200,6 +207,7 @@ import {
   getPullRequest,
   getPullRequestChanges,
   getPullRequestCommits,
+  getPullRequestDivergence,
   getPullRequestFileContent,
   getPullRequestPolicyEvaluations,
   getPullRequestTags,
@@ -332,6 +340,7 @@ import {
   getProjectGitGraph,
   getProjectGitStatus,
   getProjectWorkingTreeFiles,
+  initProjectRepository,
   pullProject,
   pushProject,
 } from '../services/project-git-service';
@@ -441,6 +450,7 @@ import {
   searchRegistry,
 } from '../services/skill-registry-service';
 import { detectMobilePreviewProjectConfig } from '../services/mobile-preview-project-detector';
+import { logPrImageEventSync } from '../lib/pr-image-log';
 import { mobilePreviewAndroidAppService } from '../services/mobile-preview-android-app-service';
 import { mobilePreviewNativeLogService } from '../services/mobile-preview-native-log-service';
 
@@ -456,6 +466,11 @@ import {
   getLocalStorageDiagnosticsLogPath,
   recordBootGuardBlocked,
 } from '../lib/localstorage-diagnostics';
+import {
+  type GitCloneProtocol,
+  parseGitUrl,
+  toCloneUrl,
+} from '@shared/git-url-utils';
 import {
   listOpenAiBaseImageOptions,
   removeOpenAiBaseImage,
@@ -524,6 +539,7 @@ import { stopReloadPreviewActivities } from '../services/reload-preview-service'
 import { systemCalendarService } from '../services/system-calendar-service';
 import { taskRuntimeCleanupService } from '../services/task-runtime-cleanup-service';
 import { TaskStepRepository } from '../database/repositories/task-steps';
+import { terminalService } from '../services/terminal-service';
 import { timesheetService } from '../services/timesheet-service';
 import { TrackedPipelineRepository } from '../database/repositories/tracked-pipelines';
 import { UsageSnapshotRepository } from '../database/repositories/usage-snapshots';
@@ -561,6 +577,7 @@ import {
   validateTaskBranchRename,
   validateTaskSourceBranchChange,
 } from './task-source-branch-validation';
+import { cloneFromUrl } from '../services/git-clone-service';
 import { registerPrWorkspaceIpcHandlers } from './pr-workspace-ipc';
 
 function redactAiGenerationSetting(
@@ -1120,6 +1137,23 @@ function toCacheSubscriptionUpdate(
     value.revision >= 0
       ? value.revision
       : 0;
+
+  // [qac-debug] temporary: prove/disprove that the renderer's subscription list
+  // is being truncated (which would silently drop project:* cache events).
+  if (
+    Array.isArray(value.subscriptions) &&
+    value.subscriptions.length > MAX_CACHE_SUBSCRIPTIONS
+  ) {
+    const dropped = value.subscriptions.slice(MAX_CACHE_SUBSCRIPTIONS);
+    console.warn(
+      '[qac] cache subscriptions truncated: total=%d dropped=%d droppedProjectKeys=%o',
+      value.subscriptions.length,
+      dropped.length,
+      dropped
+        .map((subscription) => subscription?.resourceKey)
+        .filter((key) => typeof key === 'string' && key.startsWith('project')),
+    );
+  }
 
   const subscriptions = Array.isArray(value.subscriptions)
     ? value.subscriptions
@@ -1761,6 +1795,9 @@ export function registerIpcHandlers() {
       });
     },
   );
+  ipcMain.handle('projects:git:init', async (_, projectId: string) => {
+    return initProjectRepository(await requireProjectPath(projectId));
+  });
   ipcMain.handle('projects:git:push', async (_, projectId: string) => {
     return pushProject(await requireProjectPath(projectId));
   });
@@ -3946,6 +3983,21 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    'azureDevOps:getPullRequestDivergence',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+        sourceRefName?: string;
+        targetRefName?: string;
+      },
+    ) => getPullRequestDivergence(params),
+  );
+
+  ipcMain.handle(
     'azureDevOps:getPullRequestChanges',
     (
       _,
@@ -4568,6 +4620,43 @@ export function registerIpcHandlers() {
       }
 
       return { id: pr.id, url: pr.url, editorCloseWarning };
+    },
+  );
+
+  // Git clone from an arbitrary URL
+  ipcMain.handle(
+    'git:cloneFromUrl',
+    async (
+      _,
+      params: { url: string; protocol: GitCloneProtocol; targetPath: string },
+    ): Promise<{ success: boolean; error?: string; path?: string }> => {
+      const { url, protocol, targetPath } = params;
+
+      const parsed = parseGitUrl(url);
+      if (!parsed) {
+        return { success: false, error: 'Could not parse that git URL.' };
+      }
+
+      // Logged from the parsed parts, never the raw input: a pasted
+      // `https://x-access-token:<token>@host/...` would otherwise put the
+      // credential into the debug stream that is broadcast to the renderer.
+      dbg.ipc(
+        'git:cloneFromUrl %s/%s (%s) -> %s',
+        parsed.host,
+        parsed.repoPath,
+        protocol,
+        targetPath,
+      );
+
+      const result = await cloneFromUrl({
+        cloneUrl: toCloneUrl(parsed, protocol),
+        targetPath,
+        protocol,
+      });
+
+      return result.success
+        ? { success: true, path: targetPath }
+        : { success: false, error: result.error };
     },
   );
 
@@ -5513,6 +5602,15 @@ export function registerIpcHandlers() {
       // Format-string placeholders keep renderer input out of the format
       // directive itself, so a `%j` in the message stays literal text.
       dbg.renderer('%s %s %s', clamp(params?.scope, 64), clamp(params?.message, 200), data);
+      // PR image uploads are reported long after the fact, so mirror just that
+      // scope to a file the user can hand back.
+      if (clamp(params?.scope, 64) === '[pr-create]') {
+        logPrImageEventSync({
+          source: 'renderer',
+          message: clamp(params?.message, 200),
+          data: params?.data,
+        });
+      }
     },
   );
   ipcMain.handle('debug:getTableNames', () => DebugRepository.getTableNames());
@@ -5907,6 +6005,21 @@ export function registerIpcHandlers() {
       mobilePreviewService.reloadExpo(params),
   );
   ipcMain.handle(
+    'mobilePreview:waitForMetroClient',
+    (_, params: MobilePreviewWaitForMetroClientParams) =>
+      mobilePreviewService.waitForMetroClient(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:listMetroPeers',
+    (_, params: MobilePreviewListMetroPeersParams) =>
+      mobilePreviewService.listMetroPeers(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:bootDevice',
+    (_, params: MobilePreviewBootDeviceParams) =>
+      mobilePreviewService.bootDevice(params),
+  );
+  ipcMain.handle(
     'mobilePreview:openDevMenu',
     (_, params: MobilePreviewOpenDevMenuParams) =>
       mobilePreviewService.openDevMenu(params),
@@ -6144,6 +6257,53 @@ export function registerIpcHandlers() {
           text,
           generation,
         );
+      }
+    });
+  });
+
+  // Interactive terminal (project panel)
+  ipcMain.handle(
+    'project:terminal:ensure',
+    (
+      _,
+      params: { sessionId: string; cwd: string; cols: number; rows: number },
+    ) => {
+      dbg.ipc('project:terminal:ensure %s', params.sessionId);
+      return terminalService.ensureSession(params);
+    },
+  );
+
+  ipcMain.handle(
+    'project:terminal:write',
+    (_, params: { sessionId: string; data: string }) => {
+      terminalService.write(params);
+    },
+  );
+
+  ipcMain.handle(
+    'project:terminal:resize',
+    (_, params: { sessionId: string; cols: number; rows: number }) => {
+      terminalService.resize(params);
+    },
+  );
+
+  ipcMain.handle('project:terminal:close', (_, sessionId: string) => {
+    dbg.ipc('project:terminal:close %s', sessionId);
+    terminalService.close(sessionId);
+  });
+
+  terminalService.onData((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send(TERMINAL_DATA_CHANNEL, event);
+      }
+    });
+  });
+
+  terminalService.onExit((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send(TERMINAL_EXIT_CHANNEL, event);
       }
     });
   });

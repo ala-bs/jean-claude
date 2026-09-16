@@ -89,6 +89,7 @@ import { PrDiffView } from '../ui-pr-diff-view';
 import { PrHeader } from '../ui-pr-header';
 import { PrOverview } from '../ui-pr-overview';
 import { PrReviewAgentChatCard } from '../ui-pr-review-agent-chat-card';
+import { useCopyPrLink } from '../use-copy-pr-link';
 
 
 const PR_DETAIL_TABS: PrDetailTab[] = ['overview', 'files', 'commits'];
@@ -176,6 +177,8 @@ export function PrDetail({
     }
   };
 
+  const { copyLink: copyPrLink } = useCopyPrLink(pr?.url);
+
   const navigateTab = useCallback(
     (direction: 'next' | 'prev') => {
       const currentIndex = PR_DETAIL_TABS.indexOf(activeTab);
@@ -219,6 +222,13 @@ export function PrDetail({
       handler: () => setActiveTab('commits'),
       hideInCommandPalette: true,
     },
+    pr?.url ? {
+      label: 'Copy PR Link',
+      section: 'Pull Request',
+      handler: () => {
+        void copyPrLink();
+      },
+    } : false,
     pr?.url ? {
       label: 'Open PR in Azure DevOps',
       shortcut: 'cmd+shift+o',
@@ -760,7 +770,7 @@ export function PrDetail({
 
   if (isPrLoading) {
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="flex h-full w-full min-w-0 flex-1 items-center justify-center">
         <Loader2 className="text-ink-3 h-6 w-6 animate-spin" />
       </div>
     );
@@ -768,7 +778,7 @@ export function PrDetail({
 
   if (!pr) {
     return (
-      <div className="text-ink-3 flex h-full items-center justify-center">
+      <div className="text-ink-3 flex h-full w-full min-w-0 flex-1 items-center justify-center">
         Pull request not found
       </div>
     );

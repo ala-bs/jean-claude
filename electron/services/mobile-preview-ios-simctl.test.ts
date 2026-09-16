@@ -16,14 +16,17 @@ import {
   commandExistsMock,
   installIosPreviewTestHooks,
   iosIdbAdapter,
+  minimizeMobilePreviewWindowsMock,
   runCommandMock,
 } from './mobile-preview-ios-test-helpers';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ensureIosSimulatorBooted,
   parseSimctlDeviceTypes,
   parseSimctlDevices,
   parseSimctlRuntimes,
 } from './mobile-preview-ios-simctl';
+import type { runCommand } from './mobile-preview-process';
 
 describe('mobile preview iOS simctl', () => {
   installIosPreviewTestHooks();
@@ -435,5 +438,91 @@ describe('mobile preview iOS simctl', () => {
     expect(() => parseSimctlDevices(JSON.stringify({ devices: [] }))).toThrow(
       /Invalid simctl devices JSON: expected root devices object/,
     );
+  });
+});
+
+describe('ensureIosSimulatorBooted window minimization', () => {
+  installIosPreviewTestHooks();
+
+  function stubSimctlList(state: 'Booted' | 'Shutdown') {
+    runCommandMock.mockImplementation(async (_command, args) => {
+      const argv = (args ?? []) as string[];
+      if (argv.includes('list')) {
+        return {
+          stdout: JSON.stringify({
+            devices: {
+              'com.apple.CoreSimulator.SimRuntime.iOS-18-2': [
+                { name: 'iPhone 16', udid: 'sim-1', state },
+              ],
+            },
+          }),
+          stderr: '',
+        } as Awaited<ReturnType<typeof runCommand>>;
+      }
+      return { stdout: '', stderr: '' } as Awaited<
+        ReturnType<typeof runCommand>
+      >;
+    });
+  }
+
+  it('does not minimize a simulator that was already booted', async () => {
+    // Regression: the minimize call used to sit after an early return for
+    // already-booted devices. Moving it to the per-caller waiter must not
+    // start yanking the user's open Simulator window into the Dock.
+    stubSimctlList('Booted');
+
+    await ensureIosSimulatorBooted('sim-1');
+
+    expect(minimizeMobilePreviewWindowsMock).not.toHaveBeenCalled();
+  });
+
+  it('minimizes a simulator it actually booted', async () => {
+    stubSimctlList('Shutdown');
+
+    await ensureIosSimulatorBooted('sim-1');
+
+    expect(minimizeMobilePreviewWindowsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ windowNameIncludes: ['iPhone 16'] }),
+    );
+  });
+
+  it('leaves the window alone when the caller opts out', async () => {
+    // The lightweight mobile dev pane renders no framebuffer, so the real
+    // Simulator window is the whole point.
+    stubSimctlList('Shutdown');
+
+    await ensureIosSimulatorBooted('sim-1', undefined, {
+      minimizeWindow: false,
+    });
+
+    expect(minimizeMobilePreviewWindowsMock).not.toHaveBeenCalled();
+  });
+
+  it('minimizes when the default caller arrives first', async () => {
+    // Mirror of the test below with the arrival order reversed. Without both
+    // orderings, storing the preference on the shared entry with last-write-
+    // wins semantics would still satisfy the single-ordering assertion.
+    stubSimctlList('Shutdown');
+
+    await Promise.all([
+      ensureIosSimulatorBooted('sim-1'),
+      ensureIosSimulatorBooted('sim-1', undefined, { minimizeWindow: false }),
+    ]);
+
+    expect(minimizeMobilePreviewWindowsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let one caller opting out suppress another caller', async () => {
+    // Concurrent callers share one deduped boot promise; the window preference
+    // must stay per caller rather than belonging to whoever created the entry.
+    stubSimctlList('Shutdown');
+
+    const [, booted] = await Promise.all([
+      ensureIosSimulatorBooted('sim-1', undefined, { minimizeWindow: false }),
+      ensureIosSimulatorBooted('sim-1'),
+    ]);
+
+    expect(booted.id).toBe('sim-1');
+    expect(minimizeMobilePreviewWindowsMock).toHaveBeenCalledTimes(1);
   });
 });

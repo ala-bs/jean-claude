@@ -97,6 +97,16 @@ export interface AzureDevOpsCommit {
   url: string;
 }
 
+/**
+ * How far the PR source branch has drifted from its target branch.
+ * `behindCount` is the number of commits on the target branch that the
+ * source branch does not have yet.
+ */
+export interface AzureDevOpsBranchDivergence {
+  aheadCount: number;
+  behindCount: number;
+}
+
 export interface AzureDevOpsFileChange {
   path: string;
   changeType: 'add' | 'edit' | 'delete' | 'rename';

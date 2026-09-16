@@ -28,6 +28,75 @@ describe('detectJson', () => {
     expect(result?.entryCount).toBe(3);
   });
 
+  it('detects payloads with literal newlines inside string values', () => {
+    // Copying a multi-line message field out of a log viewer or API console
+    // keeps the raw newline, which strict JSON.parse rejects.
+    const result = detectJson(
+      '[\n{\n"message": "first line.\nsecond line?",\n"priority": 1\n}\n]',
+    );
+
+    expect(result?.kind).toBe('array');
+    expect(result?.entryCount).toBe(1);
+    expect(JSON.parse(result?.json ?? 'null')).toEqual([
+      { message: 'first line.\nsecond line?', priority: 1 },
+    ]);
+  });
+
+  it('detects payloads with literal tabs inside string values', () => {
+    const result = detectJson('{"a": "col1\tcol2", "b": "another value"}');
+
+    expect(result?.kind).toBe('object');
+    expect(JSON.parse(result?.json ?? 'null')).toEqual({
+      a: 'col1\tcol2',
+      b: 'another value',
+    });
+  });
+
+  it('does not repair escaped quotes into broken strings', () => {
+    const result = detectJson('{"quote": "she said \\"hi\\"", "n": 12345}');
+
+    expect(JSON.parse(result?.json ?? 'null')).toEqual({
+      quote: 'she said "hi"',
+      n: 12345,
+    });
+  });
+
+  // The control-character repair must never rescue text that is not JSON:
+  // a false positive turns an ordinary paste into a JSON card.
+  it('does not let the control-char repair rescue non-JSON text', () => {
+    // Prose in braces, with quotes and newlines.
+    expect(
+      detectJson('{ note: remember to ask "why"\nand then go home }'),
+    ).toBeNull();
+    // Unterminated string containing a newline.
+    expect(detectJson('{"a": "unterminated and quite long\n}')).toBeNull();
+    // Backslash outside a string literal.
+    expect(detectJson('{"a": 1, \\ "b": 2, "c": "still not json"}')).toBeNull();
+    // A stray control character outside any string literal is left alone,
+    // so this stays invalid rather than being silently repaired.
+    expect(
+      detectJson('{"a": 1, "b":\u000b 2, "c": "value here padding"}'),
+    ).toBeNull();
+  });
+
+  it('keeps escaped backslashes and quotes intact while repairing', () => {
+    const result = detectJson('{"a": "ends with backslash\\\\", "b": "x\ny"}');
+
+    expect(JSON.parse(result?.json ?? 'null')).toEqual({
+      a: 'ends with backslash\\',
+      b: 'x\ny',
+    });
+  });
+
+  it('applies the size cap to the repaired payload, not just the input', () => {
+    // A vertical tab has no short escape, so each one becomes `\u000b`
+    // (6 chars): an input under the cap serializes to a value above it.
+    const raw = `{"a": "${'\u000b'.repeat(MAX_JSON_LENGTH / 2)}"}`;
+
+    expect(raw.length).toBeLessThan(MAX_JSON_LENGTH);
+    expect(detectJson(raw)).toBeNull();
+  });
+
   it('ignores plain text, scalars and invalid JSON', () => {
     expect(detectJson('just some note text here, nothing json')).toBeNull();
     expect(detectJson('"a fairly long quoted string value"')).toBeNull();

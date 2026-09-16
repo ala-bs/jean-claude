@@ -264,15 +264,18 @@ describe('mobile preview iOS app status and restart', () => {
       await expect(
         iosIdbAdapter.restartIosApp({ appPath, deviceId: 'device-1' }),
       ).resolves.toMatchObject({ bundleId: 'com.example.restart' });
+      // One atomic relaunch: a separate `terminate` races the dying process
+      // and takes the freshly launched app down with it.
       expect(runCommandMock.mock.calls).toEqual([
         [
           'xcrun',
-          ['simctl', 'terminate', 'device-1', 'com.example.restart'],
-          { signal: expect.any(AbortSignal) },
-        ],
-        [
-          'xcrun',
-          ['simctl', 'launch', 'device-1', 'com.example.restart'],
+          [
+            'simctl',
+            'launch',
+            '--terminate-running-process',
+            'device-1',
+            'com.example.restart',
+          ],
           { signal: expect.any(AbortSignal) },
         ],
       ]);
@@ -292,7 +295,7 @@ describe('mobile preview iOS app status and restart', () => {
         JSON.stringify({ expo: { ios: { bundleIdentifier: 'com.example.restart' } } }),
       );
       runCommandMock.mockImplementation(async (_command, args, options) => {
-        if (args[1] === 'terminate') {
+        if (args[1] === 'launch') {
           terminateStarted = true;
           await new Promise<void>((_resolve, reject) => {
             rejectTerminate = () => reject(new Error('terminate closed'));
@@ -322,9 +325,8 @@ describe('mobile preview iOS app status and restart', () => {
       rejectTerminate?.();
       await dispose;
       await expect(restart).resolves.toBeInstanceOf(Error);
-      expect(
-        runCommandMock.mock.calls.some(([, args]) => args[1] === 'launch'),
-      ).toBe(false);
+      // Only the aborted relaunch ran; disposal must not start another one.
+      expect(runCommandMock.mock.calls).toHaveLength(1);
     } finally {
       rejectTerminate?.();
       await rm(appPath, { recursive: true, force: true });
@@ -346,7 +348,7 @@ describe('mobile preview iOS app status and restart', () => {
     }
   });
 
-  it('launches an iOS app when terminate reports it is not running', async () => {
+  it('falls back to terminate + launch when the runtime rejects the flag', async () => {
     const appPath = await mkdtemp(join(tmpdir(), 'jc-ios-restart-stopped-'));
     try {
       await writeFile(
@@ -354,6 +356,15 @@ describe('mobile preview iOS app status and restart', () => {
         JSON.stringify({ expo: { ios: { bundleIdentifier: 'com.example.restart' } } }),
       );
       runCommandMock
+        .mockRejectedValueOnce(
+          // Real simctl wording, captured from the binary: an unknown flag is
+          // swallowed as the positional <device>. Note `buildCommandError`
+          // prefixes the full argv, so the flag name alone proves nothing.
+          new Error(
+            'Command failed: xcrun simctl launch --terminate-running-process device-1 com.example.restart\nInvalid device: --terminate-running-process',
+          ),
+        )
+        // The app was not running, which the sequential path tolerates.
         .mockRejectedValueOnce(
           new Error('An error was encountered: found nothing to terminate'),
         )
@@ -372,7 +383,7 @@ describe('mobile preview iOS app status and restart', () => {
     }
   });
 
-  it('does not launch after an unrecognized terminate failure', async () => {
+  it('does not retry after an unrecognized relaunch failure', async () => {
     const appPath = await mkdtemp(join(tmpdir(), 'jc-ios-restart-error-'));
     try {
       await writeFile(
@@ -384,6 +395,32 @@ describe('mobile preview iOS app status and restart', () => {
       await expect(
         iosIdbAdapter.restartIosApp({ appPath, deviceId: 'device-1' }),
       ).rejects.toThrow('Simulator unavailable');
+      expect(runCommandMock).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(appPath, { recursive: true, force: true });
+    }
+  });
+
+  it('does not fall back just because the argv mentions the flag', async () => {
+    // `buildCommandError` embeds the whole argv in the message, so every
+    // failure of this command contains "--terminate-running-process". Matching
+    // on the flag name would turn any launch failure into a silent kill and
+    // relaunch of the user's app, hiding the real error.
+    const appPath = await mkdtemp(join(tmpdir(), 'jc-ios-restart-argv-'));
+    try {
+      await writeFile(
+        join(appPath, 'app.json'),
+        JSON.stringify({ expo: { ios: { bundleIdentifier: 'com.example.restart' } } }),
+      );
+      runCommandMock.mockRejectedValue(
+        new Error(
+          'Command failed: xcrun simctl launch --terminate-running-process device-1 com.example.restart\nThe request was denied by service delegate (SBMainWorkspace).',
+        ),
+      );
+
+      await expect(
+        iosIdbAdapter.restartIosApp({ appPath, deviceId: 'device-1' }),
+      ).rejects.toThrow(/denied by service delegate/);
       expect(runCommandMock).toHaveBeenCalledTimes(1);
     } finally {
       await rm(appPath, { recursive: true, force: true });

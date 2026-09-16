@@ -1,8 +1,9 @@
 /* eslint-disable sort-imports */
-import { ArrowLeft, Bug, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink, Loader2, RefreshCw, Search, Settings2, X } from 'lucide-react';
+import { ArrowLeft, Bug, ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, ExternalLink, List, Loader2, RefreshCw, Search, Settings2, X } from 'lucide-react';
 import clsx from 'clsx';
+import Fuse from 'fuse.js';
 
-import { BoardColorSettingsMenu } from '@/features/work-item/ui-azure-board-overlay/color-settings-menu';
+import { BoardColorSettingsMenu } from '@/features/work-item/ui-work-item-workspace/color-settings-menu';
 import {
   isWorkItemClosedState,
   pushWorkItemStack,
@@ -18,13 +19,13 @@ import {
   useWorkItemsByIds,
 } from '@/hooks/use-work-items';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
-import { resolveDetailsPaneEscape } from '@/features/work-item/ui-azure-board-overlay/details-pane-escape';
-import { BoardSplitPane } from '@/features/work-item/ui-azure-board-overlay/board-split-pane';
+import { useCommands } from '@/common/hooks/use-commands';
+import { resolveDetailsPaneEscape } from '@/features/work-item/ui-work-item-workspace/details-pane-escape';
+import { BoardSplitPane } from '@/features/work-item/ui-work-item-workspace/board-split-pane';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 
 import type {
-  AzureDevOpsBoardColumn,
   AzureDevOpsIteration,
   AzureDevOpsWorkItem,
 } from '@/lib/api';
@@ -32,15 +33,22 @@ import { formatRelativeTime } from '@/lib/time';
 import { Tooltip } from '@/common/ui/tooltip';
 import {
   DEFAULT_AZURE_BOARD_FILTERS,
+  DEFAULT_AZURE_BOARD_PANEL_WIDTH,
+  DEFAULT_WORK_ITEMS_VIEW_MODE,
   EMPTY_AZURE_BOARD_COLUMN_IDS,
   useAzureBoardStore,
+  workItemWorkspaceScopeKey,
 } from '@/stores/azure-board';
-import { useNewTaskDraftStore } from '@/stores/new-task-draft';
-import { useOverlaysStore } from '@/stores/overlays';
+import type {
+  AzureBoardFilters,
+  WorkItemsViewMode,
+  WorkItemWorkspaceSurface,
+} from '@/stores/azure-board';
 import { useToastStore } from '@/stores/toasts';
 import { useQueryClient } from '@tanstack/react-query';
 import { UserAvatar } from '@/common/ui/user-avatar';
-import { WorkItemBoard } from '@/features/work-item/ui-work-item-board';
+import { EMPTY_BOARD_COLUMNS, WorkItemBoard } from '@/features/work-item/ui-work-item-board';
+import { WorkItemList } from '@/features/work-item/ui-work-item-list';
 import { WorkItemPreview } from '@/features/work-item/ui-work-item-preview';
 import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
 import type { Project } from '@shared/types';
@@ -54,16 +62,49 @@ import {
 const EMPTY_SELECTED_WORK_ITEM_IDS: string[] = [];
 const EMPTY_WORK_ITEMS: AzureDevOpsWorkItem[] = [];
 const EMPTY_ITERATIONS: AzureDevOpsIteration[] = [];
-const EMPTY_BOARD_COLUMNS: AzureDevOpsBoardColumn[] = [];
-const BASE_WORK_ITEM_FILTERS = {
-  excludeWorkItemTypes: ['Test Suite', 'Test Plan'],
-};
+export const DEFAULT_WORKSPACE_EXCLUDE_WORK_ITEM_TYPES = [
+  'Test Suite',
+  'Test Plan',
+];
+/**
+ * Selection surfaces additionally hide the containers you never attach to a
+ * task (epics/features) and test cases, which are surfaced separately.
+ */
+export const WORK_ITEM_SELECTION_EXCLUDE_TYPES = [
+  ...DEFAULT_WORKSPACE_EXCLUDE_WORK_ITEM_TYPES,
+  'Test Case',
+  'Epic',
+  'Feature',
+];
+/** Selection surfaces open on the current iteration, like the old picker did. */
+export const CURRENT_ITERATION_DEFAULT_FILTERS = { iterations: ['__current__'] };
 
-export type ConfiguredAzureBoardProject = Project & {
+export type ConfiguredWorkItemProject = Project & {
   workItemProviderId: string;
   workItemProjectId: string;
   workItemProjectName: string;
 };
+
+/**
+ * Legacy alias kept so the Azure Board overlay reads naturally at its call site.
+ */
+export type ConfiguredAzureBoardProject = ConfiguredWorkItemProject;
+
+export type WorkItemWorkspaceSelection = {
+  selectedWorkItemIds: string[];
+  onToggleSelect: (workItem: AzureDevOpsWorkItem) => void;
+  onClearSelection?: () => void;
+};
+
+/**
+ * A bare numeric search (`123` or `#123`) is treated as a work item id lookup:
+ * the id is forwarded to the server verbatim (it ORs id against title) and the
+ * matching card is auto-highlighted so "type an id, press enter" keeps working.
+ */
+function getExactWorkItemIdSearch(search: string) {
+  const match = search.trim().match(/^#?(\d+)$/);
+  return match?.[1] ?? null;
+}
 
 function MultiFilterDropdown({
   label,
@@ -262,8 +303,8 @@ export function AzureWorkItemActions({
   onClose,
 }: {
   workItem: AzureDevOpsWorkItem;
-  onCreateTask: () => void;
-  onClose: () => void;
+  onCreateTask?: () => void;
+  onClose?: () => void;
 }) {
   const addToast = useToastStore((state) => state.addToast);
   const copyLink = async () => {
@@ -276,7 +317,9 @@ export function AzureWorkItemActions({
   };
 
   return <>
-    <button type="button" onClick={onCreateTask} className="text-ink-1 hover:bg-bg-3 px-2 py-1 text-xs font-medium" title="Create local task">Create task</button>
+    {onCreateTask && (
+      <button type="button" onClick={onCreateTask} className="text-ink-1 hover:bg-bg-3 px-2 py-1 text-xs font-medium" title="Create local task">Create task</button>
+    )}
     <IconButton
       size="sm"
       icon={<ExternalLink />}
@@ -291,27 +334,99 @@ export function AzureWorkItemActions({
       tooltip="Copy work item link"
       onClick={copyLink}
     />
-    <IconButton
-      size="sm"
-      icon={<X />}
-      tooltip="Close details pane"
-      onClick={onClose}
-    />
+    {onClose && (
+      <IconButton
+        size="sm"
+        icon={<X />}
+        tooltip="Close details pane"
+        onClick={onClose}
+      />
+    )}
   </>;
 }
 
-export function AzureBoardProjectContent({
+function ViewModeToggle({
+  viewMode,
+  onChange,
+}: {
+  viewMode: WorkItemsViewMode;
+  onChange: (viewMode: WorkItemsViewMode) => void;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-0.5">
+      <button
+        type="button"
+        aria-label="List view"
+        aria-pressed={viewMode === 'list'}
+        onClick={() => onChange('list')}
+        className={clsx(
+          'rounded p-1',
+          viewMode === 'list' ? 'bg-bg-3 text-ink-0' : 'text-ink-3 hover:text-ink-1',
+        )}
+      >
+        <List size={16} />
+      </button>
+      <button
+        type="button"
+        aria-label="Board view"
+        aria-pressed={viewMode === 'board'}
+        onClick={() => onChange('board')}
+        className={clsx(
+          'rounded p-1',
+          viewMode === 'board' ? 'bg-bg-3 text-ink-0' : 'text-ink-3 hover:text-ink-1',
+        )}
+      >
+        <Columns3 size={16} />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The shared Azure work item workspace: filter bar, board/list, resizable
+ * details pane with drill-down and related bugs.
+ *
+ * Rendered by the Azure Board overlay (browse mode) and by the new task overlay
+ * / task panel link modal (the same thing plus checkbox selection).
+ */
+export function WorkItemWorkspace({
   project,
+  surface,
   onClose,
   headerLeading,
+  headerActions,
   escapeInterceptorRef,
+  selection,
+  onCreateTask,
+  onHighlightChange,
+  search: controlledSearch,
+  onSearchChange,
+  defaultFilters,
+  excludeWorkItemTypes = DEFAULT_WORKSPACE_EXCLUDE_WORK_ITEM_TYPES,
 }: {
-  project: ConfiguredAzureBoardProject;
-  onClose: () => void;
-  headerLeading: ReactNode;
-  escapeInterceptorRef: RefObject<(() => boolean) | null>;
+  project: ConfiguredWorkItemProject;
+  /** Scopes persisted filters, collapsed columns, split width and view mode. */
+  surface: WorkItemWorkspaceSurface;
+  /** Omit to hide the header close button (embedded surfaces). */
+  onClose?: () => void;
+  headerLeading?: ReactNode;
+  /** Rendered at the right of the header, before the refresh button. */
+  headerActions?: ReactNode;
+  escapeInterceptorRef?: RefObject<(() => boolean) | null>;
+  /** Provide to turn on checkbox multi-select. */
+  selection?: WorkItemWorkspaceSelection;
+  /** Provide to show a "Create task" action in the details pane. */
+  onCreateTask?: (workItem: AzureDevOpsWorkItem) => void;
+  onHighlightChange?: (workItemId: string | null) => void;
+  /** Controlled search text. When provided the built-in search box is hidden. */
+  search?: string;
+  onSearchChange?: (search: string) => void;
+  /** Applied the first time this scope is used (e.g. default to the current iteration). */
+  defaultFilters?: Partial<AzureBoardFilters>;
+  excludeWorkItemTypes?: string[];
 }) {
   const queryClient = useQueryClient();
+  const scopeKey = workItemWorkspaceScopeKey({ surface, projectId: project.id });
   const [workItemStack, setWorkItemStack] = useState<number[]>([]);
   const [highlightedBoardWorkItemId, setHighlightedBoardWorkItemId] = useState<number | null>(null);
   const [bugsForWorkItemId, setBugsForWorkItemId] = useState<number | null>(null);
@@ -326,18 +441,65 @@ export function AzureBoardProjectContent({
   const contentRef = useRef<HTMLDivElement>(null);
   const detailsPaneRef = useRef<HTMLElement>(null);
   const workItemIdToRefocusRef = useRef<number | null>(null);
-  const projectFilters = useAzureBoardStore(
-    (state) => state.filtersByProject[project.id],
+  const scopeFilters = useAzureBoardStore(
+    (state) => state.filtersByScope[scopeKey],
   );
-  const filters = projectFilters ?? DEFAULT_AZURE_BOARD_FILTERS;
-  const setFilters = useAzureBoardStore((state) => state.setFilters);
-  const panelWidth = useAzureBoardStore((state) => state.panelWidth);
-  const setPanelWidth = useAzureBoardStore((state) => state.setPanelWidth);
-  const projectCollapsedColumnIds = useAzureBoardStore(
-    (state) => state.collapsedColumnIdsByProject[project.id],
+  const setFiltersAction = useAzureBoardStore((state) => state.setFilters);
+  // Seeded once per mount so a surface can start narrowed (e.g. the current
+  // iteration) without overriding whatever the user later picks.
+  const [seededDefaultFilters] = useState(() =>
+    defaultFilters
+      ? { ...DEFAULT_AZURE_BOARD_FILTERS, ...defaultFilters }
+      : DEFAULT_AZURE_BOARD_FILTERS,
+  );
+  const storedFilters = scopeFilters ?? seededDefaultFilters;
+  const setFilters = useCallback(
+    (update: Partial<AzureBoardFilters>) => {
+      setFiltersAction(scopeKey, { ...storedFilters, ...update });
+    },
+    [scopeKey, setFiltersAction, storedFilters],
+  );
+  // A controlled search box (the new task overlay owns its own input) replaces
+  // the persisted one so there is never a second search field on screen.
+  const isSearchControlled = controlledSearch !== undefined;
+  const filters = useMemo(
+    () =>
+      isSearchControlled
+        ? { ...storedFilters, search: controlledSearch }
+        : storedFilters,
+    [isSearchControlled, storedFilters, controlledSearch],
+  );
+  const setSearch = useCallback(
+    (search: string) => {
+      if (onSearchChange) {
+        onSearchChange(search);
+        return;
+      }
+      setFilters({ search });
+    },
+    [onSearchChange, setFilters],
+  );
+  const panelWidth = useAzureBoardStore(
+    (state) => state.panelWidthByScope[scopeKey] ?? DEFAULT_AZURE_BOARD_PANEL_WIDTH,
+  );
+  const setPanelWidthAction = useAzureBoardStore((state) => state.setPanelWidth);
+  const handlePanelWidthCommit = useCallback(
+    (width: number) => setPanelWidthAction(scopeKey, width),
+    [scopeKey, setPanelWidthAction],
+  );
+  const viewMode = useAzureBoardStore(
+    (state) => state.viewModeByScope[scopeKey] ?? DEFAULT_WORK_ITEMS_VIEW_MODE,
+  );
+  const setViewModeAction = useAzureBoardStore((state) => state.setViewMode);
+  const handleViewModeChange = useCallback(
+    (mode: WorkItemsViewMode) => setViewModeAction(scopeKey, mode),
+    [scopeKey, setViewModeAction],
+  );
+  const scopeCollapsedColumnIds = useAzureBoardStore(
+    (state) => state.collapsedColumnIdsByScope[scopeKey],
   );
   const collapsedColumnIds =
-    projectCollapsedColumnIds ?? EMPTY_AZURE_BOARD_COLUMN_IDS;
+    scopeCollapsedColumnIds ?? EMPTY_AZURE_BOARD_COLUMN_IDS;
   const toggleCollapsedColumn = useAzureBoardStore(
     (state) => state.toggleCollapsedColumn,
   );
@@ -359,11 +521,16 @@ export function AzureBoardProjectContent({
       project.workItemProjectName,
     ],
   );
-  const baseFilters = BASE_WORK_ITEM_FILTERS;
+  const baseFilters = useMemo(
+    () => ({ excludeWorkItemTypes }),
+    [excludeWorkItemTypes],
+  );
+  // Only feeds the filter dropdown options, so it rides its staleTime rather
+  // than refetching the whole project every time a surface mounts. The explicit
+  // refresh button still refetches it.
   const metadataQuery = useWorkItems({
     ...params,
     enabled: true,
-    refetchOnMount: 'always',
     filters: baseFilters,
   });
   const metadataItems = metadataQuery.data ?? EMPTY_WORK_ITEMS;
@@ -378,24 +545,38 @@ export function AzureBoardProjectContent({
         ? 'success'
         : iterationsQuery.status,
   });
+  // `#123` is a UI convenience; the server matches a bare id against System.Id.
+  const exactSearchWorkItemId = getExactWorkItemIdSearch(debouncedSearchText);
+  // Matched against the *undebounced* text too, so "type an id, hit enter"
+  // resolves on the keystroke when the item is already loaded instead of
+  // waiting 250ms plus a round-trip and acting on the previous highlight.
+  const liveSearchWorkItemId = getExactWorkItemIdSearch(filters.search);
+  // `no-match` means "Current" was selected but the project has no current
+  // iteration; we still fetch (unfiltered) so the surface is usable, and the
+  // banner explains why nothing is narrowed.
+  const shouldFetchItems =
+    iterationFilter.status === 'resolved' ||
+    iterationFilter.status === 'partial' ||
+    iterationFilter.status === 'no-match';
   const itemsQuery = useWorkItems({
     ...params,
-    enabled:
-      iterationFilter.status === 'resolved' || iterationFilter.status === 'partial',
+    enabled: shouldFetchItems,
     refetchOnMount: 'always',
     filters: {
       ...baseFilters,
-      searchText: debouncedSearchText || undefined,
+      // Must be `undefined`, not `''`: an empty string stays in the query key
+      // and splits this from the identical unfiltered metadata query, running
+      // the same unbounded project fetch twice.
+      searchText: exactSearchWorkItemId ?? (debouncedSearchText.trim() || undefined),
       workItemTypes:
         filters.workItemTypes.length > 0 ? filters.workItemTypes : undefined,
       iterationPaths:
         iterationFilter.paths.length > 0 ? iterationFilter.paths : undefined,
     },
   });
-  const items =
-    iterationFilter.status === 'resolved' || iterationFilter.status === 'partial'
-      ? (itemsQuery.data ?? EMPTY_WORK_ITEMS)
-      : EMPTY_WORK_ITEMS;
+  const items = shouldFetchItems
+    ? (itemsQuery.data ?? EMPTY_WORK_ITEMS)
+    : EMPTY_WORK_ITEMS;
   const columnsQuery = useBoardColumns({
     ...params,
     enabled: true,
@@ -405,7 +586,7 @@ export function AzureBoardProjectContent({
   const isLoading =
     iterationFilter.status === 'pending' ||
     (itemsQuery.isLoading && items.length === 0) ||
-    columnsQuery.isPending;
+    (viewMode === 'board' && columnsQuery.isPending);
   const {
     visibleItems,
     types,
@@ -417,6 +598,31 @@ export function AzureBoardProjectContent({
     () => buildAzureBoardBaseModel({ metadataItems, items, iterations, filters }),
     [metadataItems, items, iterations, filters],
   );
+  // The server already narrowed by `Contains`; this only RANKS what came back so
+  // the closest title match leads. It does not re-widen the set, so a typo that
+  // the server matched nothing for still returns nothing.
+  const rankedVisibleItems = useMemo(() => {
+    const query = filters.search.trim();
+    if (!query || getExactWorkItemIdSearch(query) || visibleItems.length === 0) {
+      return visibleItems;
+    }
+    const fuse = new Fuse(visibleItems, {
+      keys: ['fields.title', 'id'],
+      threshold: 0.4,
+      ignoreLocation: true,
+    });
+    const ranked = fuse.search(query).map((result) => result.item);
+    if (ranked.length === 0) return visibleItems;
+    const rankedIds = new Set(ranked.map((item) => item.id));
+    // Anything Fuse scored out still matched on the server, so keep it, just last.
+    return [...ranked, ...visibleItems.filter((item) => !rankedIds.has(item.id))];
+  }, [visibleItems, filters.search]);
+  const exactMatchWorkItemId =
+    [liveSearchWorkItemId, exactSearchWorkItemId].find(
+      (candidate) =>
+        candidate !== null &&
+        visibleItems.some((item) => item.id.toString() === candidate),
+    ) ?? null;
   const selectedWorkItemId = workItemStack.at(-1) ?? null;
   const rootWorkItemId = workItemStack[0] ?? null;
   const selectedListWorkItem =
@@ -462,6 +668,9 @@ export function AzureBoardProjectContent({
     () => iterations.find((iteration) => iteration.isCurrent)?.path,
     [iterations],
   );
+  const selectedWorkItemIds =
+    selection?.selectedWorkItemIds ?? EMPTY_SELECTED_WORK_ITEM_IDS;
+  const onToggleSelect = selection?.onToggleSelect;
   const handleBoardHighlight = useCallback((item: AzureDevOpsWorkItem) => {
     setBugsForWorkItemId(null);
     setIsRelatedBugsPanelOpen(false);
@@ -473,9 +682,9 @@ export function AzureBoardProjectContent({
   }, []);
   const handleToggleColumn = useCallback(
     (columnId: string) => {
-      toggleCollapsedColumn(project.id, columnId);
+      toggleCollapsedColumn(scopeKey, columnId);
     },
-    [project.id, toggleCollapsedColumn],
+    [scopeKey, toggleCollapsedColumn],
   );
   const handleOpenChildBugs = useCallback((item: AzureDevOpsWorkItem) => {
     setBugsForWorkItemId(item.id);
@@ -491,6 +700,56 @@ export function AzureBoardProjectContent({
       refreshingRef.current = false;
     };
   }, []);
+
+  // Typing an id jumps the highlight (and therefore the details pane and any
+  // "toggle highlighted" shortcut) straight to that card.
+  useEffect(() => {
+    if (exactMatchWorkItemId === null) return;
+    const workItemId = Number(exactMatchWorkItemId);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setHighlightedBoardWorkItemId(workItemId);
+      setWorkItemStack((stack) =>
+        stack.length === 1 && stack[0] === workItemId ? stack : [workItemId],
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [exactMatchWorkItemId]);
+
+  // Falls back to the first selected item so a keyboard toggle still has a
+  // target when a restored draft arrives with selections but no click yet.
+  // Suppressed while searching: there the user is aiming at a specific result,
+  // and silently retargeting to an unrelated selection is worse than no target.
+  const resolvedHighlightWorkItemId =
+    highlightedBoardWorkItemId?.toString() ??
+    (filters.search.trim()
+      ? null
+      : (selectedWorkItemIds.find((workItemId) =>
+          visibleItems.some((item) => item.id.toString() === workItemId),
+        ) ?? null));
+  useEffect(() => {
+    onHighlightChange?.(resolvedHighlightWorkItemId);
+  }, [resolvedHighlightWorkItemId, onHighlightChange]);
+  // Restores the chord the deleted picker owned. Scoped to the workspace and
+  // only bound while a work item is open, so it cannot shadow the feed/PR
+  // bindings of the same chord when no details pane is showing.
+  useCommands('work-item-workspace', [
+    selectedWorkItem && {
+      label: 'Open Work Item in Azure DevOps',
+      section: 'Work Items',
+      shortcut: 'cmd+shift+o',
+      handler: () => {
+        window.open(selectedWorkItem.url, '_blank', 'noopener,noreferrer');
+      },
+    },
+  ]);
+  // The details pane is unmounted during load and on a blocking error, so the
+  // stack alone is not enough to decide whether escape belongs to us.
+  const isDetailsPaneRendered =
+    selectedWorkItemId !== null && !isLoading && !blockingBoardError;
 
   useEffect(() => {
     if (
@@ -530,9 +789,7 @@ export function AzureBoardProjectContent({
       const [metadataResult, iterationsResult, itemsResult] = await Promise.all([
         metadataQuery.refetch(),
         iterationsQuery.refetch(),
-        iterationFilter.status === 'resolved' || iterationFilter.status === 'partial'
-          ? itemsQuery.refetch()
-          : Promise.resolve(null),
+        shouldFetchItems ? itemsQuery.refetch() : Promise.resolve(null),
         queryClient.refetchQueries({
           queryKey: ['work-item', params.providerId],
           type: 'active',
@@ -557,16 +814,6 @@ export function AzureBoardProjectContent({
     }
   };
 
-  const createTask = (item: AzureDevOpsWorkItem) => {
-    const draft = useNewTaskDraftStore.getState();
-    draft.setSelectedProjectId(project.id);
-    draft.setDraft(project.id, {
-      inputMode: 'search',
-      searchStep: 'compose',
-      workItemIds: [String(item.id)],
-    });
-    useOverlaysStore.getState().open('new-task');
-  };
   const openRelatedWorkItem = (workItemId: number) => {
     setWorkItemStack((stack) => pushWorkItemStack(stack, workItemId));
   };
@@ -579,10 +826,13 @@ export function AzureBoardProjectContent({
   };
   // Escape steps back one level (mirrors the details pane back button) and
   // only closes the pane at the root level. Returns false when the pane is
-  // closed so the overlay handles escape itself.
+  // closed so the host overlay handles escape itself.
   const handleDetailsPaneEscape = () => {
     const action = resolveDetailsPaneEscape({
-      isDetailsPaneOpen: selectedWorkItemId !== null,
+      // Must track what is actually RENDERED, not just the stack: the pane is
+      // unmounted while loading or on a blocking error, and claiming escape
+      // there would swallow it and strand a host that defers to us.
+      isDetailsPaneOpen: isDetailsPaneRendered,
       workItemStackDepth: workItemStack.length,
       hasRelatedBugsStory: bugsForWorkItem !== null && bugsForWorkItem !== undefined,
       isRelatedBugsPanelOpen,
@@ -613,6 +863,7 @@ export function AzureBoardProjectContent({
     handleDetailsPaneEscapeRef.current = handleDetailsPaneEscape;
   });
   useEffect(() => {
+    if (!escapeInterceptorRef) return;
     escapeInterceptorRef.current = () => handleDetailsPaneEscapeRef.current();
     return () => {
       escapeInterceptorRef.current = null;
@@ -621,34 +872,54 @@ export function AzureBoardProjectContent({
   return (
     <div ref={contentRef} className="relative flex min-h-0 flex-1 flex-col">
       <header className="border-line flex min-h-12 shrink-0 items-center gap-2 border-b px-4 py-2.5">
-        <div className="flex shrink-0 items-center gap-2">{headerLeading}</div>
+        {headerLeading && (
+          <div className="flex shrink-0 items-center gap-2">{headerLeading}</div>
+        )}
         <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
-          <div className="bg-bg-1 border-line flex min-w-40 max-w-80 flex-1 items-center gap-2 rounded-md border px-2.5 py-1.5">
-            <Search className="text-ink-3 h-3.5 w-3.5 shrink-0" />
-            <input aria-label="Search work items" value={filters.search} onChange={(event) => setFilters(project.id, { search: event.target.value })} placeholder="Search work items..." className="text-ink-1 min-w-0 flex-1 bg-transparent text-xs outline-none" />
-            {filters.search && <button type="button" onClick={() => setFilters(project.id, { search: '' })} className="text-ink-3 hover:text-ink-1" aria-label="Clear search"><X className="h-3 w-3" /></button>}
-          </div>
-          <MultiFilterDropdown label="Filter by assignees" allLabel="All assignees" countLabel="assignees" options={assignees.map((assignee) => ({ value: assignee, label: assignee, ownerName: assignee }))} selected={filters.assignees} onChange={(assignees) => setFilters(project.id, { assignees })} />
-          <MultiFilterDropdown label="Filter by work item types" allLabel="All types" countLabel="types" options={types.map((type) => ({ value: type, label: type }))} selected={filters.workItemTypes} onChange={(workItemTypes) => setFilters(project.id, { workItemTypes })} />
-          <MultiFilterDropdown label="Filter by iterations" allLabel="All iterations" countLabel="iterations" options={iterationOptions} selected={filters.iterations} onChange={(iterations) => setFilters(project.id, { iterations })} />
-          <MultiFilterDropdown label="Filter by tags" allLabel="All tags" countLabel="tags" options={tagOptions.map((tag) => ({ value: tag, label: tag }))} selected={filters.tags} onChange={(tags) => setFilters(project.id, { tags })} />
+          {!isSearchControlled && (
+            <div className="bg-bg-1 border-line flex min-w-40 max-w-80 flex-1 items-center gap-2 rounded-md border px-2.5 py-1.5">
+              <Search className="text-ink-3 h-3.5 w-3.5 shrink-0" />
+              <input aria-label="Search work items" value={filters.search} onChange={(event) => setSearch(event.target.value)} placeholder="Search work items..." className="text-ink-1 min-w-0 flex-1 bg-transparent text-xs outline-none" />
+              {filters.search && <button type="button" onClick={() => setSearch('')} className="text-ink-3 hover:text-ink-1" aria-label="Clear search"><X className="h-3 w-3" /></button>}
+            </div>
+          )}
+          <MultiFilterDropdown label="Filter by assignees" allLabel="All assignees" countLabel="assignees" options={assignees.map((assignee) => ({ value: assignee, label: assignee, ownerName: assignee }))} selected={filters.assignees} onChange={(assignees) => setFilters({ assignees })} />
+          <MultiFilterDropdown label="Filter by work item types" allLabel="All types" countLabel="types" options={types.map((type) => ({ value: type, label: type }))} selected={filters.workItemTypes} onChange={(workItemTypes) => setFilters({ workItemTypes })} />
+          <MultiFilterDropdown label="Filter by iterations" allLabel="All iterations" countLabel="iterations" options={iterationOptions} selected={filters.iterations} onChange={(iterations) => setFilters({ iterations })} />
+          <MultiFilterDropdown label="Filter by tags" allLabel="All tags" countLabel="tags" options={tagOptions.map((tag) => ({ value: tag, label: tag }))} selected={filters.tags} onChange={(tags) => setFilters({ tags })} />
+          {selectedWorkItemIds.length > 0 && (
+            <span className="text-ink-2 flex shrink-0 items-center gap-2 text-xs">
+              <span className="bg-acc/20 text-acc-ink rounded-full px-2 py-0.5 font-medium">
+                {selectedWorkItemIds.length} selected
+              </span>
+              {selection?.onClearSelection && (
+                <button type="button" className="hover:text-ink-1 underline" onClick={selection.onClearSelection}>
+                  Clear
+                </button>
+              )}
+            </span>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <Tooltip align="right" content="Board colours">
-            <button
-              ref={colorMenuTriggerRef}
-              type="button"
-              onClick={() => setIsColorMenuOpen((open) => !open)}
-              aria-label="Board colours"
-              aria-expanded={isColorMenuOpen}
-              className={clsx(
-                'hover:text-ink-1 rounded p-1',
-                isColorMenuOpen ? 'bg-bg-3 text-ink-0' : 'text-ink-3',
-              )}
-            >
-              <Settings2 size={17} />
-            </button>
-          </Tooltip>
+          {headerActions}
+          <ViewModeToggle viewMode={viewMode} onChange={handleViewModeChange} />
+          {viewMode === 'board' && (
+            <Tooltip align="right" content="Board colours">
+              <button
+                ref={colorMenuTriggerRef}
+                type="button"
+                onClick={() => setIsColorMenuOpen((open) => !open)}
+                aria-label="Board colours"
+                aria-expanded={isColorMenuOpen}
+                className={clsx(
+                  'hover:text-ink-1 rounded p-1',
+                  isColorMenuOpen ? 'bg-bg-3 text-ink-0' : 'text-ink-3',
+                )}
+              >
+                <Settings2 size={17} />
+              </button>
+            </Tooltip>
+          )}
           <Tooltip
             align="right"
             content={
@@ -674,9 +945,11 @@ export function AzureBoardProjectContent({
               <RefreshCw className={isRefreshing ? 'animate-spin' : undefined} size={17} />
             </button>
           </Tooltip>
-          <button type="button" onClick={onClose} className="text-ink-3 hover:text-ink-1 rounded p-1" aria-label="Close Azure Board">
-            <X size={17} />
-          </button>
+          {onClose && (
+            <button type="button" onClick={onClose} className="text-ink-3 hover:text-ink-1 rounded p-1" aria-label="Close Azure Board">
+              <X size={17} />
+            </button>
+          )}
         </div>
       </header>
           {isColorMenuOpen && (
@@ -719,7 +992,7 @@ export function AzureBoardProjectContent({
                     ? `Refresh failed: ${boardWarnings.join('; ')}`
                     : iterationFilter.status === 'partial'
                       ? 'Showing explicit iterations while current iteration is unresolved.'
-                      : 'No current iteration is configured.'}
+                      : 'No current iteration is configured — showing all iterations.'}
                 </span>
                 {boardWarnings.length > 0 && (
                   <button type="button" onClick={() => void refreshWorkItems()} className="text-acc-ink ml-auto underline">
@@ -730,28 +1003,46 @@ export function AzureBoardProjectContent({
             )}
             <BoardSplitPane
               initialBoardWidth={panelWidth}
-              onBoardWidthCommit={setPanelWidth}
+              onBoardWidthCommit={handlePanelWidthCommit}
               board={
-                <WorkItemBoard
-                  workItems={visibleItems}
-                  boardColumns={columns}
-                  highlightedWorkItemId={highlightedBoardWorkItemId?.toString() ?? null}
-                  selectedWorkItemIds={EMPTY_SELECTED_WORK_ITEM_IDS}
-                  providerId={params.providerId}
-                  search={filters.search}
-                  currentIterationPath={currentIterationPath}
-                  showSelection={false}
-                  onHighlight={handleBoardHighlight}
-                  onModifiedClick={handleBoardModifiedClick}
-                  collapsedColumnIds={collapsedColumnIds}
-                  onToggleColumn={handleToggleColumn}
-                  childBugProgressByWorkItemId={childBugProgressByWorkItemId}
-                  relatedBugWorkItemIds={relatedBugWorkItemIds}
-                  onOpenChildBugs={handleOpenChildBugs}
-                  variant="editorial"
-                  parserSetting={project.workItemTitleParser}
-                  colorSettings={colorSettings}
-                />
+                viewMode === 'list' ? (
+                  <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+                    <WorkItemList
+                      workItems={rankedVisibleItems}
+                      highlightedWorkItemId={resolvedHighlightWorkItemId}
+                      exactMatchWorkItemId={exactMatchWorkItemId}
+                      selectedWorkItemIds={selectedWorkItemIds}
+                      providerId={params.providerId}
+                      search={filters.search}
+                      showSelection={onToggleSelect !== undefined}
+                      onToggleSelect={onToggleSelect}
+                      onHighlight={handleBoardHighlight}
+                    />
+                  </div>
+                ) : (
+                  <WorkItemBoard
+                    workItems={rankedVisibleItems}
+                    boardColumns={columns}
+                    highlightedWorkItemId={resolvedHighlightWorkItemId}
+                    exactMatchWorkItemId={exactMatchWorkItemId}
+                    selectedWorkItemIds={selectedWorkItemIds}
+                    providerId={params.providerId}
+                    search={filters.search}
+                    currentIterationPath={currentIterationPath}
+                    showSelection={onToggleSelect !== undefined}
+                    onToggleSelect={onToggleSelect}
+                    onHighlight={handleBoardHighlight}
+                    onModifiedClick={handleBoardModifiedClick}
+                    collapsedColumnIds={collapsedColumnIds}
+                    onToggleColumn={handleToggleColumn}
+                    childBugProgressByWorkItemId={childBugProgressByWorkItemId}
+                    relatedBugWorkItemIds={relatedBugWorkItemIds}
+                    onOpenChildBugs={handleOpenChildBugs}
+                    variant="editorial"
+                    parserSetting={project.workItemTitleParser}
+                    colorSettings={colorSettings}
+                  />
+                )
               }
               details={selectedWorkItemId !== null ? (
                 <aside
@@ -819,7 +1110,7 @@ export function AzureBoardProjectContent({
                         <ArrowLeft size={14} />
                       </button> : undefined}
                       onOpenRelatedWorkItem={openRelatedWorkItem}
-                      headerActions={selectedWorkItem && <AzureWorkItemActions workItem={selectedWorkItem} onCreateTask={() => createTask(selectedWorkItem)} onClose={closeDetailsPane} />}
+                      headerActions={selectedWorkItem && <AzureWorkItemActions workItem={selectedWorkItem} onCreateTask={onCreateTask ? () => onCreateTask(selectedWorkItem) : undefined} onClose={closeDetailsPane} />}
                       />
                      </div> : selectedWorkItemId !== null ? (
                       <div className="flex h-full flex-col">

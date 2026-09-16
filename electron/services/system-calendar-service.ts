@@ -19,7 +19,9 @@ import {
   type CalendarEventRecord,
   clampCalendarLeadTimeMinutes,
   isCalendarAccessDeniedError,
+  isXcodeLicenseError,
   shouldSuppressCalendarMeetingAlert,
+  summarizeCalendarCommandError,
 } from './system-calendar-utils';
 import { notificationService } from './notification-service';
 
@@ -516,6 +518,28 @@ end tell
 `;
 }
 
+async function runSwiftScript(script: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('xcrun', ['swift', '-e', script], {
+      timeout: APPLE_SCRIPT_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+    });
+    return stdout;
+  } catch (error) {
+    if (isCalendarAccessDeniedError(error)) {
+      throw new Error(
+        'Calendar access not granted. Enable it in System Settings > Privacy & Security > Calendars.',
+      );
+    }
+    if (isXcodeLicenseError(error)) {
+      throw new Error(
+        'Xcode license not accepted, so calendar access is unavailable. Run "sudo xcodebuild -license accept" in a terminal, then try again.',
+      );
+    }
+    throw new Error(summarizeCalendarCommandError(error, script));
+  }
+}
+
 class SystemCalendarService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private isPolling = false;
@@ -794,20 +818,7 @@ class SystemCalendarService {
       includeOngoing,
       lookBehindMinutes,
     });
-    let stdout: string;
-    try {
-      ({ stdout } = await execFileAsync('xcrun', ['swift', '-e', script], {
-        timeout: APPLE_SCRIPT_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024,
-      }));
-    } catch (error) {
-      if (isCalendarAccessDeniedError(error)) {
-        throw new Error(
-          'Calendar access not granted. Enable it in System Settings > Privacy & Security > Calendars.',
-        );
-      }
-      throw error;
-    }
+    const stdout = await runSwiftScript(script);
     const events = parseSystemCalendarEvents(stdout);
     dbg.notification(
       'Fetched %d system calendar events for %d-minute lookahead',
@@ -822,13 +833,8 @@ class SystemCalendarService {
 
   private async logCalendarDiagnostics() {
     try {
-      const { stdout } = await execFileAsync(
-        'xcrun',
-        ['swift', '-e', buildSystemCalendarDiagnosticsSwiftScript()],
-        {
-          timeout: APPLE_SCRIPT_TIMEOUT_MS,
-          maxBuffer: 1024 * 1024,
-        },
+      const stdout = await runSwiftScript(
+        buildSystemCalendarDiagnosticsSwiftScript(),
       );
       const summaries = (
         JSON.parse(stdout) as Array<{ calendarName?: string; source?: string }>

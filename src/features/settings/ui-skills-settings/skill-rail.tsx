@@ -13,6 +13,7 @@ import { useSkillsRailWidth } from '@/stores/navigation';
 
 
 import { GroupHeader, SkillRow } from './skill-row';
+import { isSkillEnabled } from './utils-skill-enabled';
 
 export type RailMode = 'installed' | 'browse';
 
@@ -180,7 +181,7 @@ function InstalledList({
               key={skill.skillPath}
               label={skill.name}
               isActive={selectedPath === skill.skillPath}
-              isEnabled={Object.values(skill.enabledBackends).some(Boolean)}
+              isEnabled={isSkillEnabled(skill)}
               onClick={() => onSelect(skill.skillPath)}
             />
           ))}
@@ -195,7 +196,7 @@ function InstalledList({
               key={skill.skillPath}
               label={skill.name}
               isActive={selectedPath === skill.skillPath}
-              isEnabled={Object.values(skill.enabledBackends).some(Boolean)}
+              isEnabled={isSkillEnabled(skill)}
               onClick={() => onSelect(skill.skillPath)}
             />
           ))}
@@ -210,7 +211,7 @@ function InstalledList({
               key={skill.skillPath}
               label={skill.name}
               isActive={selectedPath === skill.skillPath}
-              isEnabled={Object.values(skill.enabledBackends).some(Boolean)}
+              isEnabled={isSkillEnabled(skill)}
               onClick={() => onSelect(skill.skillPath)}
             />
           ))}

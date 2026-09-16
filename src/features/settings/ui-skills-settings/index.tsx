@@ -26,6 +26,7 @@ import { LegacySkillMigrationDialog } from './legacy-skill-migration-dialog';
 import { RegistrySkillDetails } from './registry-skill-details';
 import { SkillDetails } from './skill-details';
 import { SkillEditor } from './skill-editor';
+import { sortEnabledFirst } from './utils-skill-enabled';
 
 
 
@@ -63,12 +64,17 @@ export function SkillsSettings() {
   ]);
 
   const { builtinSkills, mySkills, installedSkills } = useMemo(() => {
-    const builtin = (skills ?? []).filter((s) => s.source === 'builtin');
-    const my = (skills ?? []).filter((s) => s.editable);
-    const installed = (skills ?? []).filter(
+    const all = skills ?? [];
+    const builtin = all.filter((s) => s.source === 'builtin');
+    const my = all.filter((s) => s.editable);
+    const installed = all.filter(
       (s) => !s.editable && s.source !== 'builtin',
     );
-    return { builtinSkills: builtin, mySkills: my, installedSkills: installed };
+    return {
+      builtinSkills: sortEnabledFirst(builtin),
+      mySkills: sortEnabledFirst(my),
+      installedSkills: sortEnabledFirst(installed),
+    };
   }, [skills]);
 
   // Auto-select first skill when skills load and nothing is selected

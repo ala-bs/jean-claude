@@ -340,27 +340,46 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
       .map((group) => {
       const runTaskId = getProjectRootRunId(group.projectId);
       const statuses = runCommandRunning[runTaskId]?.commands ?? [];
+      // A `waitForExit` entry is a build/setup step: it is *supposed* to end up
+      // stopped while the group is up, so it can never be part of "is every
+      // member still running?".
+      const waitForExitIds = new Set(
+        group.stages.flatMap((stage) =>
+          stage.entries
+            .filter((entry) => entry.waitForExit)
+            .map((entry) => entry.commandId),
+        ),
+      );
       const members = group.commandIds.flatMap((commandId) => {
         const command = commandsById.get(commandId);
         if (!command || command.isHidden) return [];
+        const status = statuses.find((c) => c.id === commandId)?.status;
         return [
           {
             command,
             runTaskId,
             projectName:
               projectMap.get(group.projectId)?.name ?? 'Unknown Project',
-            isRunning:
-              statuses.find((c) => c.id === commandId)?.status === 'running',
+            isRunning: status === 'running',
+            // A step only counts as "finished on purpose" when it actually
+            // succeeded — an errored build step still needs a rerun.
+            isSettled: waitForExitIds.has(commandId) && status !== 'errored',
           },
         ];
       });
+      const runningCount = members.filter((member) => member.isRunning).length;
       return {
         group,
         runTaskId,
         projectName:
           projectMap.get(group.projectId)?.name ?? 'Unknown Project',
         members,
-        runningCount: members.filter((member) => member.isRunning).length,
+        runningCount,
+        // Nothing left to start: at least one member is up and every member
+        // that is meant to stay up is up.
+        isFullyUp:
+          runningCount > 0 &&
+          members.every((member) => member.isRunning || member.isSettled),
       };
       });
   }, [commandsById, favoriteGroups, projects, runCommandRunning]);
@@ -903,7 +922,35 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                             <button
                               type="button"
                               disabled={isStarting || !areCommandsLoaded}
-                              onClick={() => requestRunFavoriteGroup(row)}
+                              onClick={() => {
+                                // Fully running: the row click only selects.
+                                // Restarting (which stops the current run) is
+                                // the explicit ↻ button. A partially running
+                                // group still runs, so the click brings the
+                                // stopped members back up.
+                                const runningMember = row.members.find(
+                                  (member) => member.isRunning,
+                                );
+                                if (runningMember && row.isFullyUp) {
+                                  // Only expanded members are highlighted and
+                                  // arrow-navigable, so expand rather than
+                                  // select an invisible row.
+                                  setCollapsedGroupIds((prev) => {
+                                    if (!prev.has(row.group.id)) return prev;
+                                    const next = new Set(prev);
+                                    next.delete(row.group.id);
+                                    return next;
+                                  });
+                                  setSelectedKey(
+                                    makeKey(
+                                      row.runTaskId,
+                                      runningMember.command.id,
+                                    ),
+                                  );
+                                  return;
+                                }
+                                requestRunFavoriteGroup(row);
+                              }}
                               className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 px-2 py-2 text-left disabled:opacity-60"
                             >
                               {isStarting ? (

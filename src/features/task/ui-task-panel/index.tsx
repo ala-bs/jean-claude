@@ -66,6 +66,12 @@ import { formatModelName, getModelFromEntry } from '@/hooks/use-model';
 import { ComposerCollapsedBar } from '@/features/agent/ui-composer-collapsed-bar';
 
 import {
+  type ConfiguredWorkItemProject,
+  CURRENT_ITERATION_DEFAULT_FILTERS,
+  WORK_ITEM_SELECTION_EXCLUDE_TYPES,
+  WorkItemWorkspace,
+} from '@/features/work-item/ui-work-item-workspace';
+import {
   getDefaultInteractionModeForBackend,
   getInteractionModeOptions,
   type InteractionMode,
@@ -189,15 +195,14 @@ import { useOverlaysStore } from '@/stores/overlays';
 import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
 import { usePrWorkspaceActions } from '@/hooks/use-pr-workspace-actions';
 import { usePullBranch } from '@/hooks/use-worktree-diff';
+import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { useSkills } from '@/hooks/use-skills';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useTaskRootPath } from '@/hooks/use-task-root-path';
 import { useToastStore } from '@/stores/toasts';
 import { useWorkItemById } from '@/hooks/use-work-items';
-import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
 import { WorkItemChip } from '@/common/ui/work-item-chip';
-import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 import { WorktreeReviewView } from '@/features/agent/ui-worktree-review-view';
 
 import {
@@ -211,6 +216,7 @@ import { CommandLogsPane } from './command-logs-pane';
 import { CompleteTaskDialog } from './complete-task-dialog';
 import { DebugMessagesPane } from './debug-messages-pane';
 import { DeleteTaskDialog } from './delete-task-dialog';
+import { MobileDevPane } from './mobile-dev-pane';
 import { runPromptSubmission } from './utils-prompt-submit-error';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from './constants';
 import { TaskPendingNoteInput } from './task-pending-note-input';
@@ -1118,6 +1124,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const projectCommandAvailability = useProjectCommandAvailability(
     projectId ?? '',
   );
+  // Computed here (not next to `mobilePreviewEnabled`, which is defined after
+  // the `!project` guard) because `useCommands` runs before that guard.
+  const mobileDevPaneEnabled =
+    getTaskMobilePreviewRuntimeKey({
+      taskId,
+      mobilePreviewConfig: project?.mobilePreviewConfig,
+    }) !== null;
   const isMobilePreviewWorkspaceOpen = useMobilePreviewWorkspaceStore(
     (state) => state.isOpen,
   );
@@ -1179,6 +1192,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     openToolDiffPreview,
     openCommandLogs,
     selectCommandLogsTab,
+    openMobileDev,
     openSettings,
     openDebugMessages,
     closeRightPane,
@@ -1194,20 +1208,22 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     steps,
     showWorkspaceOverview,
   });
+  // Panes that are meaningless on the PR workspace overview: they are scoped to
+  // a task's worktree, which the overview does not have.
+  const isPaneHiddenOnPrWorkspaceOverview =
+    rightPane?.type === 'settings' ||
+    rightPane?.type === 'debugMessages' ||
+    rightPane?.type === 'mobileDev';
   const visibleRightPane =
-    isPrWorkspaceOverview &&
-    (rightPane?.type === 'settings' || rightPane?.type === 'debugMessages')
+    isPrWorkspaceOverview && isPaneHiddenOnPrWorkspaceOverview
       ? null
       : rightPane;
 
   useEffect(() => {
-    if (
-      isPrWorkspaceOverview &&
-      (rightPane?.type === 'settings' || rightPane?.type === 'debugMessages')
-    ) {
+    if (isPrWorkspaceOverview && isPaneHiddenOnPrWorkspaceOverview) {
       closeRightPane();
     }
-  }, [closeRightPane, isPrWorkspaceOverview, rightPane?.type]);
+  }, [closeRightPane, isPrWorkspaceOverview, isPaneHiddenOnPrWorkspaceOverview]);
   const { data: activeStep } = useStep(activeStepId ?? '');
   const handleAddBashToPermissions = useCallback(
     (command: string) => {
@@ -1411,10 +1427,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const stepStartJobIdsRef = useRef<Map<string, string>>(new Map());
   const [showWorkItemsEditor, setShowWorkItemsEditor] = useState(false);
   const [workItemsFilter, setWorkItemsFilter] = useState('');
-  const {
-    iterationFilter: workItemsIterationFilter,
-    setIterationFilter: setWorkItemsIterationFilter,
-  } = useWorkItemPickerIterationFilter(projectId);
   // Buffered selection state for work items modal (applied on submit)
   const [draftWorkItemIds, setDraftWorkItemIds] = useState<string[]>([]);
   const [draftWorkItemUrls, setDraftWorkItemUrls] = useState<string[]>([]);
@@ -1443,6 +1455,34 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     setDraftWorkItemIds([]);
     setDraftWorkItemUrls([]);
   }, []);
+
+  // Set by WorkItemWorkspace. Escape pops its details pane stack before the
+  // modal closes, which would otherwise discard the buffered selection.
+  const workItemEscapeInterceptorRef = useRef<(() => boolean) | null>(null);
+  const closeWorkItemsEditor = useCallback(() => {
+    setShowWorkItemsEditor(false);
+  }, []);
+  useRegisterKeyboardBindings(
+    'task-panel-work-items-editor',
+    showWorkItemsEditor
+      ? {
+          escape: () => {
+            if (workItemEscapeInterceptorRef.current?.()) return true;
+            closeWorkItemsEditor();
+            return true;
+          },
+        }
+      : {},
+  );
+
+  const workItemsSelection = useMemo(
+    () => ({
+      selectedWorkItemIds: draftWorkItemIds,
+      onToggleSelect: handleWorkItemToggle,
+      onClearSelection: handleClearWorkItems,
+    }),
+    [draftWorkItemIds, handleWorkItemToggle, handleClearWorkItems],
+  );
 
   const handleSubmitWorkItems = useCallback(() => {
     updateTask.mutate({
@@ -1535,7 +1575,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   // Auto-select an active step when none is selected
   useEffect(() => {
     if (!steps || steps.length === 0) return;
-    // If the currently selected step still exists, keep it
+    // If the currently selected step still exists, keep it. This selection is
+    // persisted, so on reopen the last focused step wins over the fallbacks
+    // below. Archived steps count: the flow bar lets you click one to read it.
     if (activeStepId && steps.some((s) => s.id === activeStepId)) return;
 
     // This effect also repairs a dangling selection (deleted step), so it must
@@ -2261,6 +2303,21 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       section: 'Task',
       handler: toggleReviewFiles,
     },
+    mobileDevPaneEnabled && {
+      label:
+        rightPane?.type === 'mobileDev'
+          ? 'Close Mobile Dev'
+          : 'Open Mobile Dev',
+      section: 'Task',
+      keywords: ['metro', 'simulator', 'emulator', 'device', 'mobile'],
+      handler: () => {
+        if (rightPane?.type === 'mobileDev') {
+          closeRightPane();
+        } else {
+          openMobileDev();
+        }
+      },
+    },
     {
       label:
         rightPane?.type === 'commandLogs'
@@ -2752,7 +2809,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             {hasWorkItemsLink && (
               <Modal
                 isOpen={showWorkItemsEditor}
-                onClose={() => setShowWorkItemsEditor(false)}
+                onClose={closeWorkItemsEditor}
+                closeOnEscape={false}
                 title="Linked Work Items"
                 size="xl"
               >
@@ -2769,19 +2827,17 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     />
                   </div>
 
-                  {/* Picker */}
-                  <div className="min-h-0 flex-1">
-                    <WorkItemPicker
-                      appProjectId={project.id}
-                      providerId={project.workItemProviderId!}
-                      projectId={project.workItemProjectId!}
-                      projectName={project.workItemProjectName!}
-                      selectedWorkItemIds={draftWorkItemIds}
-                      onToggleSelect={handleWorkItemToggle}
-                      onClearSelection={handleClearWorkItems}
-                      filter={workItemsFilter}
-                      iterationFilter={workItemsIterationFilter}
-                      onIterationFilterChange={setWorkItemsIterationFilter}
+                  {/* Board / list workspace */}
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <WorkItemWorkspace
+                      project={project as ConfiguredWorkItemProject}
+                      surface="task-panel"
+                      selection={workItemsSelection}
+                      escapeInterceptorRef={workItemEscapeInterceptorRef}
+                      search={workItemsFilter}
+                      onSearchChange={setWorkItemsFilter}
+                      defaultFilters={CURRENT_ITERATION_DEFAULT_FILTERS}
+                      excludeWorkItemTypes={WORK_ITEM_SELECTION_EXCLUDE_TYPES}
                     />
                   </div>
 
@@ -2893,6 +2949,21 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     checked={isTaskMobilePreviewOpen}
                   >
                     Mobile Preview
+                  </DropdownItem>
+                )}
+                {mobileDevPaneEnabled && (
+                  <DropdownItem
+                    icon={<Smartphone />}
+                    onClick={() => {
+                      if (rightPane?.type === 'mobileDev') {
+                        closeRightPane();
+                      } else {
+                        openMobileDev();
+                      }
+                    }}
+                    checked={rightPane?.type === 'mobileDev'}
+                  >
+                    Mobile Dev
                   </DropdownItem>
                 )}
 
@@ -3292,6 +3363,17 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             taskId={taskId}
             stepId={activeStepId}
             scrollToEntryId={rightPane.scrollToEntryId}
+            onClose={closeRightPane}
+          />
+        )}
+
+        {/* Lightweight mobile dev pane (metro + device, no preview) */}
+        {visibleRightPane?.type === 'mobileDev' && (
+          <MobileDevPane
+            taskId={taskId}
+            projectId={project.id}
+            projectPath={taskRootPath}
+            mobilePreviewConfig={project.mobilePreviewConfig}
             onClose={closeRightPane}
           />
         )}
