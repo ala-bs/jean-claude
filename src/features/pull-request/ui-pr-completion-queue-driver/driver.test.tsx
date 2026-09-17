@@ -133,7 +133,10 @@ vi.mock('@/hooks/use-projects', () => ({
 
 const {
   PrCompletionQueueDriver,
+  MAX_AUTO_REQUEUES_PER_POLICY,
   POLL_INTERVAL_MS,
+  READS_GRANTED_PER_FAILURE_RETRY,
+  REJECTED_POLICY_READS_BEFORE_TRUSTED,
   UNARMED_READS_BEFORE_TRUSTED,
 } = await import('.');
 const { usePrCompletionQueueStore } = await import(
@@ -163,7 +166,11 @@ function makePr(
   };
 }
 
-function enqueue(prId: number, projectId = 'p1') {
+function enqueue(
+  prId: number,
+  extraCompletionOptions: { autoCompleteIgnoreConfigIds?: number[] } = {},
+  projectId = 'p1',
+) {
   return usePrCompletionQueueStore.getState().enqueue({
     projectId,
     prId,
@@ -173,6 +180,7 @@ function enqueue(prId: number, projectId = 'p1') {
       mergeStrategy: 'squash',
       deleteSourceBranch: true,
       transitionWorkItems: false,
+      ...extraCompletionOptions,
     },
   });
 }
@@ -201,7 +209,10 @@ describe('PrCompletionQueueDriver', () => {
     armDeferred = null;
     setAutoComplete.mockClear();
     invalidatePr.mockClear();
-    requeueCi.mockClear();
+    // `mockReset`, not `mockClear`: one test makes every requeue throw via
+    // `mockImplementation`, which `mockClear` leaves installed for the rest of
+    // the file — a leaked throw silently changes the retry-budget assertions.
+    requeueCi.mockReset();
     policyEvaluations = [];
     policyFetchedAt = 0;
     usePrCompletionQueueStore.setState({ entries: [] });
@@ -469,7 +480,27 @@ describe('PrCompletionQueueDriver', () => {
     };
   }
 
-  it('does not skip the PR on a rejected policy read that predates arming', async () => {
+  /**
+   * Poll a still-rejected policy until the entry settles, and assert it does so
+   * within the window the constants promise.
+   *
+   * The whole point of the retry grace window is that it is a *window* and not
+   * a gate: however stuck the retry machinery gets, the head entry must always
+   * hand the queue over rather than stall its project forever.
+   */
+  async function pollRejectedUntilSettled(evaluationId: string, configId: number) {
+    const maxCountedReads =
+      REJECTED_POLICY_READS_BEFORE_TRUSTED +
+      MAX_AUTO_REQUEUES_PER_POLICY * READS_GRANTED_PER_FAILURE_RETRY;
+    for (let i = 0; i < maxCountedReads + 2; i += 1) {
+      if (!queuedPrIds().includes(101)) return;
+      setPolicyEvaluations([rejectedBuildPolicy(evaluationId, configId)]);
+      await render();
+    }
+    expect(queuedPrIds()).not.toContain(101);
+  }
+
+  it('re-runs a failed required build before giving up on the PR', async () => {
     // The PR details view already populated the shared evaluations cache with a
     // build that failed on an earlier iteration. That snapshot is served the
     // instant this entry arms, with no fetch of our own behind it.
@@ -478,18 +509,156 @@ describe('PrCompletionQueueDriver', () => {
     enqueue(102);
     await render();
     await acceptArm(101);
+    // The failure is retried, not acted on — most of them are flakes.
+    expect(requeueCi.mock.calls.map(([id]) => id)).toEqual(['e1']);
     expect(queuedPrIds()).toEqual([101, 102]);
 
-    // One genuine poll later it is still only one confirming read.
+    // The re-run starts and fails again: one retry left, so still no skip. A
+    // rejected read is only retried again once the previous run actually got
+    // going — otherwise the stale `rejected` snapshot would burn the whole
+    // budget in one poll.
+    setPolicyEvaluations([pendingBuildPolicy('e1', 1, { buildId: 9 })]);
+    await render();
     setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
     await render();
+    expect(requeueCi.mock.calls.map(([id]) => id)).toEqual(['e1', 'e1']);
     expect(queuedPrIds()).toEqual([101, 102]);
 
-    // The second confirming poll is what settles it — and it names the check.
-    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    setPolicyEvaluations([pendingBuildPolicy('e1', 1, { buildId: 10 })]);
     await render();
+
+    // Budget exhausted. The rejection is now real, and the entry settles —
+    // after the grace window the two re-runs bought, so a re-run still starting
+    // up is never mistaken for a settled failure.
+    await pollRejectedUntilSettled('e1', 1);
+    expect(requeueCi).toHaveBeenCalledTimes(2);
     expect(queuedPrIds()).toEqual([102]);
     expect(setAutoComplete).toHaveBeenCalledWith({ prId: 101, enabled: false });
+  });
+
+  it('does not skip the PR on the poll that dispatched its last re-run', async () => {
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    enqueue(101);
+    await render();
+    await acceptArm(101);
+
+    // Burn the budget: two failed runs, two re-runs dispatched.
+    for (let i = 0; i < MAX_AUTO_REQUEUES_PER_POLICY; i += 1) {
+      setPolicyEvaluations([pendingBuildPolicy('e1', 1, { buildId: 20 + i })]);
+      await render();
+      setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+      await render();
+    }
+    expect(requeueCi).toHaveBeenCalledTimes(MAX_AUTO_REQUEUES_PER_POLICY);
+
+    // Azure keeps serving the old rejection for a few polls while the re-run
+    // spins up. Settling here would skip the PR over a run still in flight —
+    // and that run is the one most likely to be the winning one.
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    await render();
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    await render();
+    expect(queuedPrIds()).toEqual([101]);
+
+    // The re-run lands green: the PR merges instead of being skipped.
+    setPolicyEvaluations([]);
+    await render();
+    setPr(101, makePr(101, { status: 'completed' }));
+    await render();
+    expect(queuedPrIds()).toEqual([]);
+  });
+
+  // Regression: settlement used to be *gated* on "no retry is possible", which
+  // handed every way the retry machinery can get stuck a permanent stall of the
+  // whole project queue. The two tests below are those ways.
+
+  it('gives up on the PR even when every requeue PATCH fails', async () => {
+    // Azure refuses the requeue on every poll — deleted build definition, or a
+    // PAT without queue-builds permission.
+    requeueCi.mockImplementation(() => {
+      throw new Error('403');
+    });
+    // Only one entry: the evaluations mock is shared across PRs, so a promoted
+    // second entry would arm against this same rejected policy and add requeue
+    // calls of its own to the count under test.
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    enqueue(101);
+    await render();
+    await acceptArm(101);
+
+    await pollRejectedUntilSettled('e1', 1);
+
+    // A refused retry still consumes budget: otherwise the entry never settles
+    // and Azure is PATCHed on every poll for as long as the PR stays armed.
+    expect(requeueCi).toHaveBeenCalledTimes(MAX_AUTO_REQUEUES_PER_POLICY);
+    expect(queuedPrIds()).toEqual([]);
+  });
+
+  it('gives up on the PR when a requeued policy never leaves the rejected state', async () => {
+    // Azure accepts the PATCH but never starts a build — a superseded
+    // iteration, say — so the evaluation dwells on `rejected` forever and the
+    // in-flight marker is never cleared, so no second retry is ever issued.
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    enqueue(101);
+    await render();
+    await acceptArm(101);
+
+    await pollRejectedUntilSettled('e1', 1);
+
+    // One dispatch only — the in-flight marker is never cleared because the
+    // status never changes — and the entry settles regardless.
+    expect(requeueCi).toHaveBeenCalledTimes(1);
+    expect(queuedPrIds()).toEqual([]);
+  });
+
+  it('never skips the PR for a failed optional check', async () => {
+    const optional = rejectedBuildPolicy('e1', 1);
+    setPolicyEvaluations([
+      {
+        ...optional,
+        isBlocking: false,
+        configuration: { ...optional.configuration, isBlocking: false },
+      },
+    ]);
+    enqueue(101);
+    enqueue(102);
+    await render();
+    await acceptArm(101);
+
+    for (let i = 0; i < 5; i += 1) {
+      const current = rejectedBuildPolicy('e1', 1);
+      setPolicyEvaluations([
+        {
+          ...current,
+          isBlocking: false,
+          configuration: { ...current.configuration, isBlocking: false },
+        },
+      ]);
+      await render();
+    }
+
+    // Azure would merge this PR happily, so the queue must not skip it — and it
+    // must not burn CI re-running a check that cannot block the merge.
+    expect(queuedPrIds()).toEqual([101, 102]);
+    expect(requeueCi).not.toHaveBeenCalled();
+  });
+
+  it('treats a policy waived for auto-complete as optional', async () => {
+    setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+    // The user pressed "Make optional" on config 1, so Azure was told to ignore
+    // it when deciding whether to merge.
+    enqueue(101, { autoCompleteIgnoreConfigIds: [1] });
+    enqueue(102);
+    await render();
+    await acceptArm(101);
+
+    for (let i = 0; i < 5; i += 1) {
+      setPolicyEvaluations([rejectedBuildPolicy('e1', 1)]);
+      await render();
+    }
+
+    expect(queuedPrIds()).toEqual([101, 102]);
+    expect(requeueCi).not.toHaveBeenCalled();
   });
 
   it('does not add up rejections from two different policies', async () => {

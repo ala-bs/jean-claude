@@ -153,6 +153,35 @@ describe('PrChecks optional policies', () => {
     expect(markup).not.toContain('Ignored');
   });
 
+  it('marks a failed optional check as optional and does not paint it as a hard failure', () => {
+    const markup = renderChecks([
+      buildEvaluation({
+        status: 'rejected',
+        isBlocking: false,
+        configuration: {
+          id: 7,
+          isEnabled: true,
+          isBlocking: false,
+          type: { id: 'build', displayName: 'Build' },
+          settings: { buildDefinitionId: 123, displayName: 'Optional build' },
+        },
+        context: { buildId: 456 },
+      }),
+    ]);
+
+    // It failed, it says so — but it cannot block the merge, so it is labelled
+    // optional and rendered muted instead of in the required-failure red.
+    expect(markup).toContain('Optional');
+    expect(markup).toContain('Failed');
+    expect(markup).not.toContain('text-status-fail');
+  });
+
+  it('labels an optional policy as optional even while its make-optional toggle is shown', () => {
+    renderInteractiveChecks({ onSetPolicyIgnored: vi.fn() });
+
+    expect(document.body.textContent).toContain('Optional');
+  });
+
   it('allows any Azure-optional policy type to be made optional', () => {
     const onSetPolicyIgnored = vi.fn();
     renderInteractiveChecks({ onSetPolicyIgnored });

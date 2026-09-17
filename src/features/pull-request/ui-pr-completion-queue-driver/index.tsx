@@ -20,6 +20,7 @@ import {
   useSetAutoComplete,
 } from '@/hooks/use-pull-requests';
 import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
+import type { AzureDevOpsPolicyEvaluation as AzurePolicyEvaluation } from '@/lib/api';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useProject } from '@/hooks/use-projects';
 import { useToastStore } from '@/stores/toasts';
@@ -82,6 +83,90 @@ export const MIN_COUNTED_READ_GAP_MS = POLL_INTERVAL_MS * 0.8;
  * separate a genuinely failed check from a stale snapshot.
  */
 export const REJECTED_POLICY_READS_BEFORE_TRUSTED = 2;
+
+/**
+ * How many times the queue re-runs a *failed* required build policy before it
+ * accepts the failure and skips the PR.
+ *
+ * Azure reports a policy as `rejected` for anything from a genuinely broken
+ * build to an agent that lost its pool slot, a flaky test, or a run that was
+ * cancelled when a previous merge moved the target branch. Those are the common
+ * case, and every one of them is fixed by simply running the pipeline again —
+ * which is exactly what the user did by hand ("retry a few times and it works").
+ * Bounded, so a pipeline that fails for a real reason still settles instead of
+ * rebuilding forever.
+ */
+export const MAX_AUTO_REQUEUES_PER_POLICY = 2;
+
+/**
+ * Extra confirming reads granted per failure re-run the queue has issued.
+ *
+ * A re-run needs time before Azure stops reporting the old failure: the PATCH
+ * is accepted, but the evaluation can dwell on `rejected` until the new build
+ * registers. Without this the poll that dispatched a re-run would immediately
+ * count as a confirming read, and the PR could be skipped while the re-run it
+ * just asked for was still executing.
+ *
+ * Deliberately a *window*, not a gate. Settlement must never be blocked on "a
+ * retry is outstanding": Azure can accept a requeue and still never start a
+ * build (superseded iteration, deleted definition), and an entry that waits for
+ * a transition that never comes stalls its whole project queue — there is no
+ * wall-clock timeout anywhere else to catch it. Worst case here is
+ * `REJECTED + MAX * GRANTED` counted polls (~2.5 min) before the PR is skipped.
+ */
+export const READS_GRANTED_PER_FAILURE_RETRY = 4;
+
+/** Azure statuses that mean "this pipeline ran, or tried to, and did not pass". */
+function isFailedStatus(status: AzurePolicyEvaluation['status']): boolean {
+  return status === 'rejected' || status === 'broken';
+}
+
+/**
+ * Is this policy one the queue must actually wait on?
+ *
+ * Azure marking it non-blocking is the usual reason, and is what the pre-diff
+ * check already covered. The `ignoredConfigIds` arm is a guard for one narrow
+ * case: the waiver list snapshotted onto the entry at enqueue time is built
+ * from policies that were non-blocking *then*, so if an admin flips one to
+ * blocking while the PR sits in the queue, Azure still merges without it (the
+ * PATCHed `autoCompleteIgnoreConfigIds` stands) and the queue must not skip the
+ * PR over a check Azure has been told to ignore.
+ */
+export function isBlockingForQueue(
+  evaluation: AzurePolicyEvaluation,
+  ignoredConfigIds?: number[],
+): boolean {
+  if (!evaluation.isBlocking) return false;
+  return !ignoredConfigIds?.includes(evaluation.configuration.id);
+}
+
+/**
+ * Should the queue ask Azure to (re-)run this policy's pipeline right now?
+ *
+ * "Any pipeline that is not running and not green" — never run, expired for an
+ * older commit, failed, or broken. A run already in flight and an approved run
+ * are left alone. Failures are only retried while the entry still has budget.
+ */
+export function shouldAutoRequeue({
+  evaluation,
+  failureRetries,
+  ignoredConfigIds,
+}: {
+  evaluation: AzurePolicyEvaluation;
+  /** Failure re-runs already issued for this policy during this entry's turn. */
+  failureRetries: number;
+  ignoredConfigIds?: number[];
+}): boolean {
+  if (!evaluation.configuration.settings.buildDefinitionId) return false;
+  if (!isBlockingForQueue(evaluation, ignoredConfigIds)) return false;
+  if (isFailedStatus(evaluation.status)) {
+    return failureRetries < MAX_AUTO_REQUEUES_PER_POLICY;
+  }
+  if (evaluation.status !== 'queued') return false;
+  // `queued` + a buildId means a run is already in flight — unless Azure
+  // flagged it expired, in which case that build is for an old commit.
+  return !evaluation.context?.buildId || !!evaluation.context.isExpired;
+}
 
 type Settlement = {
   outcome: 'succeeded' | 'failed';
@@ -389,18 +474,38 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
     setStatus,
   ]);
 
-  // Kick off the required CI the PR still owes, once it is this entry's turn.
-  // Azure leaves manual/expired build policies at `status: 'queued'` with no
-  // `context.buildId`; auto-complete will never fire until they actually run,
-  // so the queue would sit on the head entry forever waiting on a build nobody
-  // asked for.
+  // Kick off (or re-run) the required CI the PR still owes, once it is this
+  // entry's turn. Azure leaves manual/expired build policies at
+  // `status: 'queued'` with no `context.buildId`, and a failed run just sits
+  // there as `rejected`; in both cases auto-complete never fires, so the queue
+  // either stalls on the head entry or skips a PR whose pipeline only needed
+  // running again.
   const requeueMutation = useRequeuePolicyEvaluation(projectId, prId, repoInfo);
-  // Tracks evaluations we already asked Azure to run. Deliberately NOT a
-  // "requeued once, ever" list: the marker is dropped again as soon as the
-  // evaluation stops looking pending, so a policy that re-expires later (a push
-  // to the source branch while the PR sits armed) gets run again, and a requeue
-  // that errored is retried on the next poll instead of wedging the queue.
-  const requeuedEvaluationIdsRef = useRef<Set<string>>(new Set());
+  // Tracks evaluations we already asked Azure to run, keyed by *configuration*
+  // id — Azure can hand back a new `evaluationId` once a policy is re-run, and
+  // a per-evaluation key would reset the retry budget on every attempt.
+  // Deliberately NOT a "requeued once, ever" list: the marker is dropped again
+  // as soon as the evaluation stops looking like it needs a run, so a policy
+  // that re-expires later (a push to the source branch while the PR sits armed)
+  // gets run again, and a requeue that errored is retried on the next poll
+  // instead of wedging the queue.
+  const requeuedConfigIdsRef = useRef<Set<number>>(new Set());
+  // Failure retries issued per configuration during this entry's turn.
+  //
+  // Counts ONLY the `rejected`/`broken` re-runs, never the "start a build
+  // nobody started" or "the run expired, redo it" requeues — those are not
+  // retries of a failure, and letting them share the budget silently spent it
+  // before the first real failure (a manual-trigger policy that gets kicked off
+  // and then fails would have had one retry instead of two; two source-branch
+  // pushes would have left it none).
+  //
+  // Never decremented, not even when the PATCH fails. A refund would make the
+  // budget infinite: an evaluation Azure always refuses to requeue (deleted
+  // build definition, missing queue-builds permission) would be retried on
+  // every poll forever, and — because a retryable failure defers settlement —
+  // the entry would never settle and the whole project queue would stall behind
+  // it.
+  const failureRetriesRef = useRef<Map<number, number>>(new Map());
   const requeueRef = useRef(requeueMutation);
   useEffect(() => {
     requeueRef.current = requeueMutation;
@@ -408,30 +513,51 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
   useEffect(() => {
     if (!isArmed) return;
     for (const evaluation of evaluations) {
-      if (!evaluation.configuration.settings.buildDefinitionId) continue;
-      if (!evaluation.isBlocking) continue;
+      const configId = evaluation.configuration.id;
       const { evaluationId } = evaluation;
-      // `queued` + a buildId means a run is already in flight — unless Azure
-      // flagged it expired, in which case that build is for an old commit.
-      const isPendingRun =
-        evaluation.status === 'queued' &&
-        (!evaluation.context?.buildId || !!evaluation.context.isExpired);
-      if (!isPendingRun) {
-        requeuedEvaluationIdsRef.current.delete(evaluationId);
+      const retries = failureRetriesRef.current.get(configId) ?? 0;
+      if (
+        !shouldAutoRequeue({
+          evaluation,
+          failureRetries: retries,
+          ignoredConfigIds: entry.completionOptions?.autoCompleteIgnoreConfigIds,
+        })
+      ) {
+        requeuedConfigIdsRef.current.delete(configId);
         continue;
       }
-      if (requeuedEvaluationIdsRef.current.has(evaluationId)) continue;
-      requeuedEvaluationIdsRef.current.add(evaluationId);
+      if (requeuedConfigIdsRef.current.has(configId)) continue;
+      requeuedConfigIdsRef.current.add(configId);
+      if (isFailedStatus(evaluation.status)) {
+        failureRetriesRef.current.set(configId, retries + 1);
+        addToast({
+          // The toast store only knows success/error, and this is not a
+          // failure the user has to act on — the queue is handling it.
+          type: 'success',
+          message: `PR !${prId}: re-running failed check "${
+            evaluation.configuration.settings.displayName ??
+            evaluation.configuration.type.displayName
+          }" (run ${retries + 2} of ${MAX_AUTO_REQUEUES_PER_POLICY + 1})`,
+        });
+      }
       requeueRef.current.mutate(
         { evaluationId },
         {
+          // Only the in-flight marker is rolled back, so the next poll can try
+          // again — the spent retry stays spent (see `failureRetriesRef`).
           onError: () => {
-            requeuedEvaluationIdsRef.current.delete(evaluationId);
+            requeuedConfigIdsRef.current.delete(configId);
           },
         },
       );
     }
-  }, [evaluations, isArmed]);
+  }, [
+    addToast,
+    entry.completionOptions?.autoCompleteIgnoreConfigIds,
+    evaluations,
+    isArmed,
+    prId,
+  ]);
 
   // Watch the armed PR for a terminal state.
   const hasObservedArmedRef = useRef(false);
@@ -492,9 +618,21 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
       hasObservedArmedRef.current ||
       unarmedReadsRef.current >= UNARMED_READS_BEFORE_TRUSTED;
 
+    // Optional and user-waived policies never block the merge on Azure's side,
+    // so they can never skip the PR here either.
+    //
+    // A policy the queue is retrying is deliberately NOT excluded: excluding it
+    // coupled settlement to the retry machinery, and every way that machinery
+    // can get stuck (a PATCH Azure always refuses, an evaluation that dwells on
+    // `rejected` so the in-flight marker is never cleared) became a permanent
+    // stall of the entire project queue. Instead the retry buys a bounded grace
+    // window in the threshold below — progress is guaranteed either way.
     const rejectedPolicy = evaluations.find(
       (evaluation) =>
-        evaluation.isBlocking &&
+        isBlockingForQueue(
+          evaluation,
+          entry.completionOptions?.autoCompleteIgnoreConfigIds,
+        ) &&
         evaluation.status === 'rejected' &&
         !evaluation.context?.isExpired,
     );
@@ -511,6 +649,16 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
       lastRejectedEvaluationIdRef.current = rejectedEvaluationId;
       rejectedPolicyReadsRef.current = 0;
     }
+
+    // Each re-run the queue issued for this policy widens the window before its
+    // rejection is trusted, so a re-run in flight is never mistaken for a
+    // settled failure. Bounded, so the entry always settles eventually.
+    const rejectedPolicyReadsRequired =
+      REJECTED_POLICY_READS_BEFORE_TRUSTED +
+      (rejectedPolicy
+        ? (failureRetriesRef.current.get(rejectedPolicy.configuration.id) ?? 0) *
+          READS_GRANTED_PER_FAILURE_RETRY
+        : 0);
 
     // Same staleness trap as `mergeStatus`, but worse: this query is only
     // *enabled* when the entry arms, so the value present on the first pass is
@@ -533,7 +681,7 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
             `[pr-queue] !${prId}: blocking policy "${
               rejectedPolicy.configuration.settings.displayName ??
               rejectedPolicy.configuration.type.displayName
-            }" read as rejected (${rejectedPolicyReadsRef.current}/${REJECTED_POLICY_READS_BEFORE_TRUSTED} confirming reads)`,
+            }" read as rejected (${rejectedPolicyReadsRef.current}/${rejectedPolicyReadsRequired} confirming reads)`,
             rejectedPolicy,
           );
         }
@@ -541,7 +689,7 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
     }
     const hasRejectedBlockingPolicy =
       !!rejectedPolicy &&
-      rejectedPolicyReadsRef.current >= REJECTED_POLICY_READS_BEFORE_TRUSTED;
+      rejectedPolicyReadsRef.current >= rejectedPolicyReadsRequired;
 
     const settlement = resolveArmedPrSettlement({
       pr,
@@ -554,7 +702,16 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
         mergeBlockedReadsRef.current >= MERGE_BLOCKED_READS_BEFORE_TRUSTED,
     });
     if (settlement) settle(settlement);
-  }, [evaluations, evaluationsFetchedAt, isArmed, pr, prFetchedAt, prId, settle]);
+  }, [
+    entry.completionOptions?.autoCompleteIgnoreConfigIds,
+    evaluations,
+    evaluationsFetchedAt,
+    isArmed,
+    pr,
+    prFetchedAt,
+    prId,
+    settle,
+  ]);
 
   return null;
 }
