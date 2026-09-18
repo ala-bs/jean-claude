@@ -59,6 +59,7 @@ import {
   usePullRequest,
   usePullRequestPolicyEvaluations,
 } from '@/hooks/use-pull-requests';
+import type { MobilePreviewDeviceAssignment } from '@shared/mobile-simulator-types';
 import { useCompleteTask, useTask } from '@/hooks/use-tasks';
 import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
 import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-dialog';
@@ -466,6 +467,7 @@ export function FeedItemCard({
   onDragLeave,
   onDrop,
   onDragEnd,
+  mobileDeviceAssignments,
 }: {
   item: FeedItem;
   isSelected?: boolean;
@@ -479,6 +481,7 @@ export function FeedItemCard({
   onDragLeave?: () => void;
   onDrop?: (e: React.DragEvent) => void;
   onDragEnd?: () => void;
+  mobileDeviceAssignments?: readonly MobilePreviewDeviceAssignment[];
 }) {
   const navigate = useNavigate();
   const pin = useFeedStore((s) => s.pin);
@@ -904,7 +907,12 @@ export function FeedItemCard({
                 >
                   {itemTitle}
                 </span>
-                {isTask && <FeedItemDeviceBadge taskId={item.taskId} />}
+                {isTask && (
+                  <FeedItemDeviceBadge
+                    taskId={item.taskId}
+                    assignments={mobileDeviceAssignments}
+                  />
+                )}
                 {item.source === 'task' && needsAttention && (
                   <span
                     className={clsx(
@@ -1086,6 +1094,7 @@ export function FeedItemCard({
                 currentWorkItemId={currentWorkItemId}
                 isRunning={child.attention === 'running'}
                 isSelected={child.taskId === currentTaskId}
+                mobileDeviceAssignments={mobileDeviceAssignments}
               />
             ))}
 
@@ -1278,11 +1287,13 @@ function SubtaskRow({
   currentWorkItemId,
   isRunning,
   isSelected,
+  mobileDeviceAssignments,
 }: {
   child: FeedItem;
   currentWorkItemId?: string;
   isRunning: boolean;
   isSelected?: boolean;
+  mobileDeviceAssignments?: readonly MobilePreviewDeviceAssignment[];
 }) {
   const navigate = useNavigate();
   const childRunCommandStatus = useTaskMessagesStore((s) =>
@@ -1403,7 +1414,10 @@ function SubtaskRow({
           <span className="text-ink-2 min-w-0 flex-1 truncate text-[11.5px]">
             {child.title}
           </span>
-          <FeedItemDeviceBadge taskId={child.taskId} />
+          <FeedItemDeviceBadge
+            taskId={child.taskId}
+            assignments={mobileDeviceAssignments}
+          />
           {childNeedsAttention && (
             <span
               className={clsx(

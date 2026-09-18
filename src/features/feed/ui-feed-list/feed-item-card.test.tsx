@@ -158,7 +158,11 @@ describe('FeedItemCard mobile device badge', () => {
         },
       },
     });
-    await act(() => root.render(<FeedItemCard item={item()} />));
+    await act(() =>
+      root.render(
+        <FeedItemCard item={item()} mobileDeviceAssignments={[]} />,
+      ),
+    );
     expect(deviceBadge()?.textContent).toBe('iPhone 15 Pro');
     expect(deviceBadge()?.getAttribute('title')).toBe(
       'Mobile Dev · iOS · iPhone 15 Pro',
@@ -167,7 +171,12 @@ describe('FeedItemCard mobile device badge', () => {
     expect(container.textContent).toContain('Keep this title');
 
     await act(() =>
-      root.render(<FeedItemCard item={{ ...item(), taskId: 'other-task' }} />),
+      root.render(
+        <FeedItemCard
+          item={{ ...item(), taskId: 'other-task' }}
+          mobileDeviceAssignments={[]}
+        />,
+      ),
     );
     expect(deviceBadge()).toBeNull();
   });
@@ -182,7 +191,11 @@ describe('FeedItemCard mobile device badge', () => {
         },
       },
     });
-    await act(() => root.render(<FeedItemCard item={item()} />));
+    await act(() =>
+      root.render(
+        <FeedItemCard item={item()} mobileDeviceAssignments={[]} />,
+      ),
+    );
     expect(deviceBadge()?.getAttribute('title')).toBe(
       'Mobile Dev · Android · Pixel 8',
     );
@@ -196,7 +209,11 @@ describe('FeedItemCard mobile device badge', () => {
         'task-1': { platform: 'ios', deviceId: 'sim-1', deviceName: '' },
       },
     });
-    await act(() => root.render(<FeedItemCard item={item()} />));
+    await act(() =>
+      root.render(
+        <FeedItemCard item={item()} mobileDeviceAssignments={[]} />,
+      ),
+    );
     expect(deviceBadge()).toBeNull();
   });
 
@@ -224,6 +241,7 @@ describe('FeedItemCard mobile device badge', () => {
               },
             ],
           }}
+          mobileDeviceAssignments={[]}
         />,
       ),
     );

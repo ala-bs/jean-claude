@@ -1,5 +1,6 @@
 import { Smartphone } from 'lucide-react';
 
+import type { MobilePreviewDeviceAssignment } from '@shared/mobile-simulator-types';
 import { PLATFORM_LABELS } from '@shared/mobile-simulator-types';
 import { useMobileDevPaneStore } from '@/stores/mobile-dev-pane';
 
@@ -14,8 +15,10 @@ import { useMobileDevPaneStore } from '@/stores/mobile-dev-pane';
  */
 export function FeedItemDeviceBadge({
   taskId,
+  assignments,
 }: {
   taskId: string | undefined;
+  assignments: readonly MobilePreviewDeviceAssignment[] | undefined;
 }) {
   // Indexing inside the selector keeps the subscription narrow: the row only
   // re-renders when its own task's device changes, and the returned object
@@ -23,10 +26,23 @@ export function FeedItemDeviceBadge({
   const device = useMobileDevPaneStore((state) =>
     taskId ? (state.deviceByTaskId[taskId] ?? null) : null,
   );
+  const deviceAssignment = device
+    ? assignments?.find(
+        (assignment) =>
+          assignment.platform === device.platform &&
+          assignment.deviceId === device.deviceId,
+      )
+    : undefined;
 
   // The store's persisted-payload guard accepts an empty `deviceName`, which
   // would render as a bare bordered box with no text to explain it.
-  if (!device?.deviceName) return null;
+  if (
+    !device?.deviceName ||
+    !assignments ||
+    (deviceAssignment && deviceAssignment.taskId !== taskId)
+  ) {
+    return null;
+  }
 
   const platformLabel = PLATFORM_LABELS[device.platform];
 

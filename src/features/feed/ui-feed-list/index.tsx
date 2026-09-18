@@ -28,6 +28,7 @@ import type React from 'react';
 
 import { Dropdown, DropdownDivider, DropdownItem } from '@/common/ui/dropdown';
 import type { FeedItem } from '@shared/feed-types';
+import type { MobilePreviewDeviceAssignment } from '@shared/mobile-simulator-types';
 import { Modal } from '@/common/ui/modal';
 import { openPrLinkOnModifiedClick } from '@/lib/open-pr-link';
 import { ProjectLogo } from '@/features/project/ui-project-logo';
@@ -37,6 +38,7 @@ import { useCachedPullRequest } from '@/hooks/use-pull-requests';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useFeed } from '@/hooks/use-feed';
 import { useFeedStore } from '@/stores/feed';
+import { useMobilePreviewDeviceAssignments } from '@/hooks/use-mobile-preview';
 import { useNavigationStore } from '@/stores/navigation';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useUIStore } from '@/stores/ui';
@@ -251,6 +253,7 @@ function FeedCard({
   onDragOver,
   onDropItem,
   onDrop,
+  mobileDeviceAssignments,
   ...props
 }: {
   item: FeedItem;
@@ -266,6 +269,7 @@ function FeedCard({
   onDragLeave?: () => void;
   onDropItem?: (event: React.DragEvent, id: string) => void;
   onDrop?: (e: React.DragEvent) => void;
+  mobileDeviceAssignments?: readonly MobilePreviewDeviceAssignment[];
   onDragEnd?: () => void;
 }) {
   const handleDragStart = useCallback(() => {
@@ -310,6 +314,7 @@ function FeedCard({
       currentTaskId={selection.currentTaskId}
       currentWorkItemId={selection.currentWorkItemId}
       currentPrId={selection.currentPrId}
+      mobileDeviceAssignments={mobileDeviceAssignments}
       onDragStart={onDragStartItem ? handleDragStart : undefined}
       onDragOver={onDragOverItem || onDragOver ? handleDragOver : undefined}
       onDrop={onDropItem || onDrop ? handleDrop : undefined}
@@ -320,6 +325,7 @@ function FeedCard({
 const MemoFeedCard = memo(FeedCard, (prev, next) => {
   if (
     prev.item !== next.item ||
+    prev.mobileDeviceAssignments !== next.mobileDeviceAssignments ||
     prev.isDraggable !== next.isDraggable ||
     prev.onDragStartItem !== next.onDragStartItem ||
     prev.onDragOverItem !== next.onDragOverItem ||
@@ -343,6 +349,7 @@ function StackableZone({
   selection,
   onDragStart,
   onDragEnd,
+  mobileDeviceAssignments,
   sticky,
   collapsedOverlap = 28,
 }: {
@@ -353,6 +360,7 @@ function StackableZone({
   sticky?: boolean;
   /** Pixel amount stacked cards overlap when collapsed (default 28 ≈ Tailwind mt-7). */
   collapsedOverlap?: number;
+  mobileDeviceAssignments?: readonly MobilePreviewDeviceAssignment[];
 }) {
   const [expanded, setExpanded] = useState(false);
   const collapseTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -394,6 +402,7 @@ function StackableZone({
           <MemoFeedCard
             item={item}
             selection={selection}
+            mobileDeviceAssignments={mobileDeviceAssignments}
             isSelected={isFeedItemSelected(item, selection)}
             isDraggable
             onDragStartItem={onDragStart}
@@ -1121,6 +1130,8 @@ export function FeedList() {
     filteredOutCount,
     isFetching,
   } = useFeed();
+  const { data: mobileDeviceAssignments } =
+    useMobilePreviewDeviceAssignments();
   const reorderPinned = useFeedStore((s) => s.reorderPinned);
   const pinned = useFeedStore((s) => s.pinned);
   const openOverlay = useOverlaysStore((s) => s.open);
@@ -1708,6 +1719,7 @@ export function FeedList() {
               key={item.id}
               item={item}
               selection={selection}
+              mobileDeviceAssignments={mobileDeviceAssignments}
               isSelected={isFeedItemSelected(item, selection)}
               isDraggable
               onDragStartItem={handlePinnedDragStart}
@@ -1743,6 +1755,7 @@ export function FeedList() {
               key={item.id}
               item={item}
               selection={selection}
+              mobileDeviceAssignments={mobileDeviceAssignments}
               isSelected={isFeedItemSelected(item, selection)}
             />
           ))}
@@ -1760,6 +1773,7 @@ export function FeedList() {
               key={item.id}
               item={item}
               selection={selection}
+              mobileDeviceAssignments={mobileDeviceAssignments}
               isSelected={isFeedItemSelected(item, selection)}
               isDraggable
               onDragStartItem={setDraggedId}
@@ -1780,6 +1794,7 @@ export function FeedList() {
               key={item.id}
               item={item}
               selection={selection}
+              mobileDeviceAssignments={mobileDeviceAssignments}
               isSelected={isFeedItemSelected(item, selection)}
               isDraggable
               onDragStartItem={setDraggedId}
@@ -1830,6 +1845,7 @@ export function FeedList() {
         <StackableZone
           items={actionNeededItems}
           selection={selection}
+          mobileDeviceAssignments={mobileDeviceAssignments}
           onDragStart={setDraggedId}
           onDragEnd={handleDragEnd}
           sticky
@@ -1842,6 +1858,7 @@ export function FeedList() {
         <StackableZone
           items={activeTaskItems}
           selection={selection}
+          mobileDeviceAssignments={mobileDeviceAssignments}
           onDragStart={setDraggedId}
           onDragEnd={handleDragEnd}
         />
@@ -1855,6 +1872,7 @@ export function FeedList() {
               key={item.id}
               item={item}
               selection={selection}
+              mobileDeviceAssignments={mobileDeviceAssignments}
               isSelected={isFeedItemSelected(item, selection)}
               isDraggable
               onDragStartItem={setDraggedId}
@@ -1877,6 +1895,7 @@ export function FeedList() {
             key={item.id}
             item={item}
             selection={selection}
+            mobileDeviceAssignments={mobileDeviceAssignments}
             isSelected={isFeedItemSelected(item, selection)}
             isDraggable
             onDragStartItem={setDraggedId}
@@ -1906,6 +1925,7 @@ export function FeedList() {
                   key={item.id}
                   item={item}
                   selection={selection}
+                  mobileDeviceAssignments={mobileDeviceAssignments}
                   isSelected={isFeedItemSelected(item, selection)}
                 />
               ))}
