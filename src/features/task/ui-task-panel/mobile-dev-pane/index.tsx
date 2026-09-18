@@ -135,7 +135,8 @@ export function MobileDevPane({
   // inside an effect body is exactly the cascading-render pattern the React
   // compiler rejects. The effect already re-runs on the value it waits for
   // (`hasLiveDevServerPort`), so no render is needed to re-check it.
-  const isStartLaunchPendingRef = useRef(false);
+  const startLaunchDeviceKeyRef = useRef<string | null>(null);
+  const startOperationActiveRef = useRef(false);
   // The device whose app Start is currently deeplinking. Reload and Restart
   // gate on this for the same reason they gate on each other: killing or
   // re-pointing an app while another deeplink is in flight is the documented
@@ -529,6 +530,8 @@ export function MobileDevPane({
 
   const handleSelectDevice = useCallback(
     (deviceKey: string) => {
+      startLaunchDeviceKeyRef.current = null;
+      startOperationActiveRef.current = false;
       setBootError(null);
       setActionNotice(null);
       const device = findDeviceByKey(deviceKey);
@@ -578,7 +581,7 @@ export function MobileDevPane({
     refetchDevices,
   ]);
 
-  const handleToggleDevServer = useCallback(() => {
+  const handleToggleDevServer = useCallback(async () => {
     if (devServerRunning) {
       // The feed list badge reads `deviceByTaskId` directly, so a selection that
       // outlives Metro would keep advertising a device this task no longer runs
@@ -588,7 +591,7 @@ export function MobileDevPane({
       // (disabling Boot/Restart) while Metro is still very much alive.
       // A stop cancels any deeplink the previous Start was still waiting to
       // fire, otherwise it would land on the next run's port.
-      isStartLaunchPendingRef.current = false;
+      startLaunchDeviceKeyRef.current = null;
       void runCommands
         .stopCommand(devServerCommandId)
         .then(() => selectDevice(null));
@@ -596,9 +599,33 @@ export function MobileDevPane({
     }
     // Start means "run the app", not just "run Metro": the deeplink is what
     // points the dev client at this server.
-    isStartLaunchPendingRef.current = true;
-    void runCommands
-      .startAdHocCommand({
+    if (devServerStarting || isBooting || startOperationActiveRef.current) return;
+    startOperationActiveRef.current = true;
+    const startDeviceKey = activeDeviceKey;
+    startLaunchDeviceKeyRef.current = startDeviceKey || null;
+    setBootError(null);
+    try {
+      if (
+        activeDevice &&
+        activeDevice.state !== 'booted' &&
+        activeDevice.kind !== 'physical' &&
+        !isDeviceUnavailable
+      ) {
+        setBootError(null);
+        setBootingDeviceKey(startDeviceKey);
+        await api.mobilePreview.bootDevice({
+          platform: activeDevice.platform,
+          deviceId: activeDevice.id,
+        });
+        await refetchDevices();
+        if (activeDeviceKeyRef.current !== startDeviceKey) {
+          startLaunchDeviceKeyRef.current = null;
+          startOperationActiveRef.current = false;
+          return;
+        }
+      }
+
+      await runCommands.startAdHocCommand({
         runCommandId: devServerCommandId,
         // Must match the preview pane, which starts this same runCommandId --
         // otherwise the shared command's label flips depending on who started it.
@@ -606,25 +633,39 @@ export function MobileDevPane({
         command: devServerCommand,
         ports: [configuredDevServerPort],
         availablePort: { provider: 'args' },
-      })
-      .then(({ started }) => {
+      }).then(({ started }) => {
         // `runStart` RESOLVES with `started: false` on a ports-in-use conflict
         // and when a newer operation supersedes this one -- it only rejects on
         // a hard error. Leaving the flag set there would arm a deeplink that
         // fires much later, when this shared run command (the preview pane
         // starts the same `devServerCommandId`) next reports a live port.
-        if (!started) isStartLaunchPendingRef.current = false;
-      })
-      .catch(() => {
-        // Metro never came up, so there is nothing to attach to. The run
-        // command surfaces its own failure.
-        isStartLaunchPendingRef.current = false;
+        if (!started) {
+          startLaunchDeviceKeyRef.current = null;
+          startOperationActiveRef.current = false;
+        }
       });
+    } catch (error) {
+      startLaunchDeviceKeyRef.current = null;
+      startOperationActiveRef.current = false;
+      if (activeDeviceKeyRef.current === startDeviceKey || !startDeviceKey) {
+        setBootError(cleanIpcError(error));
+      }
+    } finally {
+      setBootingDeviceKey((current) =>
+        current === startDeviceKey ? null : current,
+      );
+    }
   }, [
+    activeDevice,
+    activeDeviceKey,
     configuredDevServerPort,
     devServerCommand,
     devServerCommandId,
     devServerRunning,
+    devServerStarting,
+    isBooting,
+    isDeviceUnavailable,
+    refetchDevices,
     runCommands,
     selectDevice,
   ]);
@@ -841,7 +882,8 @@ export function MobileDevPane({
   // reports it (see `resolveStartLaunchDecision`).
   useEffect(() => {
     const decision = resolveStartLaunchDecision({
-      isPending: isStartLaunchPendingRef.current,
+      isPending:
+        startLaunchDeviceKeyRef.current === (activeDeviceKey || null),
       hasLiveDevServerPort,
       isLoadingDevices,
       device: activeDevice,
@@ -853,7 +895,8 @@ export function MobileDevPane({
     if (decision.status === 'idle' || decision.status === 'waiting') return;
     // Cleared before the await so a slow deeplink cannot be fired twice by a
     // re-render, and so Stop is not needed to escape a stuck pending state.
-    isStartLaunchPendingRef.current = false;
+    startLaunchDeviceKeyRef.current = null;
+    startOperationActiveRef.current = false;
     // `activeDevice` is non-null for a 'launch' decision; re-checked for the
     // type narrowing.
     if (decision.status === 'skip' || !activeDevice) return;
