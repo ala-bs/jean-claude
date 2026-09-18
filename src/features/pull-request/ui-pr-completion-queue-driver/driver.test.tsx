@@ -107,17 +107,8 @@ vi.mock('@/hooks/use-pull-requests', () => ({
     dataUpdatedAt: policyFetchedAt,
   }),
   useRequeuePolicyEvaluation: () => ({
-    // Mirrors react-query: a rejected mutation surfaces through `onError`
-    // rather than throwing out of the caller.
-    mutate: (
-      params: { evaluationId: string },
-      options?: { onError?: (error: unknown) => void },
-    ) => {
-      try {
-        requeueCi(params.evaluationId);
-      } catch (error) {
-        options?.onError?.(error);
-      }
+    mutateAsync: async (params: { evaluationId: string }) => {
+      requeueCi(params.evaluationId);
     },
     isPending: false,
   }),
@@ -438,6 +429,27 @@ describe('PrCompletionQueueDriver', () => {
     policyEvaluations = [pendingBuildPolicy('e1', 1)];
     await render();
     expect(requeueCi).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears failed markers independently when multiple policies requeue', async () => {
+    requeueCi.mockImplementationOnce(() => {
+      throw new Error('first policy failed');
+    });
+    policyEvaluations = [
+      pendingBuildPolicy('e1', 1, { buildId: 7, isExpired: true }),
+      pendingBuildPolicy('e2', 2, { buildId: 8, isExpired: true }),
+    ];
+    enqueue(101);
+    await render();
+    await acceptArm(101);
+    expect(requeueCi.mock.calls.map(([id]) => id)).toEqual(['e1', 'e2']);
+
+    policyEvaluations = [
+      pendingBuildPolicy('e1', 1, { buildId: 7, isExpired: true }),
+      pendingBuildPolicy('e2', 2, { buildId: 8, isExpired: true }),
+    ];
+    await render();
+    expect(requeueCi.mock.calls.map(([id]) => id)).toEqual(['e1', 'e2', 'e1']);
   });
 
   it('runs the armed PR required CI, once per policy, and ignores the rest', async () => {

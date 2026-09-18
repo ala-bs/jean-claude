@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { resolveArmedPrSettlement, shouldAutoRequeue } from './index';
 import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
-import { resolveArmedPrSettlement } from './index';
 
 function makePr(
   overrides: Partial<AzureDevOpsPullRequestDetails> = {},
@@ -172,5 +172,30 @@ describe('resolveArmedPrSettlement', () => {
         hasConfirmedMergeBlocked: true,
       }),
     ).toBeNull();
+  });
+});
+
+describe('shouldAutoRequeue', () => {
+  const expiredRunningEvaluation = {
+    evaluationId: 'e1',
+    status: 'running' as const,
+    isBlocking: true,
+    configuration: {
+      id: 1,
+      isEnabled: true,
+      isBlocking: true,
+      type: { id: 'build', displayName: 'Build' },
+      settings: { buildDefinitionId: 42 },
+    },
+    context: { buildId: 7, isExpired: true },
+  };
+
+  it('requeues an expired pipeline even when Azure still reports it running', () => {
+    expect(
+      shouldAutoRequeue({
+        evaluation: expiredRunningEvaluation,
+        failureRetries: 0,
+      }),
+    ).toBe(true);
   });
 });

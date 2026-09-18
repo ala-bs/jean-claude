@@ -159,13 +159,22 @@ export function shouldAutoRequeue({
 }): boolean {
   if (!evaluation.configuration.settings.buildDefinitionId) return false;
   if (!isBlockingForQueue(evaluation, ignoredConfigIds)) return false;
+  // Azure can leave an expired pipeline in `running` (not only `queued`).
+  // Its build belongs to an older commit, so it must be queued again.
+  if (
+    evaluation.context?.isExpired &&
+    (evaluation.status === 'running' || evaluation.status === 'queued')
+  ) {
+    return true;
+  }
   if (isFailedStatus(evaluation.status)) {
     return failureRetries < MAX_AUTO_REQUEUES_PER_POLICY;
   }
   if (evaluation.status !== 'queued') return false;
   // `queued` + a buildId means a run is already in flight — unless Azure
-  // flagged it expired, in which case that build is for an old commit.
-  return !evaluation.context?.buildId || !!evaluation.context.isExpired;
+  // flagged it expired, handled above, in which case that build is for an old
+  // commit.
+  return !evaluation.context?.buildId;
 }
 
 type Settlement = {
@@ -540,16 +549,16 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
           }" (run ${retries + 2} of ${MAX_AUTO_REQUEUES_PER_POLICY + 1})`,
         });
       }
-      requeueRef.current.mutate(
-        { evaluationId },
-        {
+      // Use a separate promise for each policy. React Query replaces per-call
+      // callbacks when multiple mutate calls share one mutation observer, so a
+      // failed earlier PATCH could otherwise leave its marker stuck forever.
+      void requeueRef.current
+        .mutateAsync({ evaluationId })
+        .catch(() => {
           // Only the in-flight marker is rolled back, so the next poll can try
           // again — the spent retry stays spent (see `failureRetriesRef`).
-          onError: () => {
-            requeuedConfigIdsRef.current.delete(configId);
-          },
-        },
-      );
+          requeuedConfigIdsRef.current.delete(configId);
+        });
     }
   }, [
     addToast,
