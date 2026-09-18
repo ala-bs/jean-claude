@@ -170,7 +170,7 @@ export function InteractiveLog({
     <div className={clsx('flex min-h-0 flex-1 flex-col', className)}>
       <div
         ref={scrollRef}
-        data-command-log-content
+        data-command-log-content={isRunning ? true : undefined}
         tabIndex={0}
         onScroll={handleScroll}
         onClick={focusLog}

@@ -60,7 +60,11 @@ export function isTypingInInput(event: KeyboardEvent): boolean {
     tagName === 'input' || tagName === 'textarea' || tagName === 'select';
   // Monaco Editor uses internal elements that may not be standard inputs
   const isInMonaco = target.closest?.('.monaco-editor') != null;
-  return isEditable || isInput || isInMonaco;
+  // Interactive terminal logs are focusable divs, but should behave like
+  // inputs so overlay shortcuts do not consume terminal arrow keys.
+  const isInInteractiveLog =
+    target.closest?.('[data-command-log-content]') != null;
+  return isEditable || isInput || isInMonaco || isInInteractiveLog;
 }
 
 // Format for display (e.g., "cmd+shift+p" -> "⌘⇧P")
