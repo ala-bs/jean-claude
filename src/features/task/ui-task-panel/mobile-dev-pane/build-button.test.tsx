@@ -161,7 +161,7 @@ describe('MobileDevPane build button', () => {
     expect(mocks.startAdHocCommand).toHaveBeenCalledWith({
       runCommandId: IOS_BUILD_COMMAND_ID,
       name: 'iOS build',
-      command: 'npx expo run:ios --device IOS-1',
+      command: 'npx expo run:ios --device IOS-1 --no-bundler',
       ports: [],
     });
   });
