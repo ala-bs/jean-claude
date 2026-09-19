@@ -15,12 +15,21 @@ import {
 import type { PermissionScope } from './permission-types';
 import type { ProjectPriority } from './feed-types';
 import type { UsageProviderType } from './usage-types';
+import type { WorkItemDisplayConfig } from './work-item-display-config-types';
 import type { WorkItemTitleParserSetting } from './work-item-title-parser-types';
 
 export type {
   WorkItemTitleParserRule,
   WorkItemTitleParserSetting,
 } from './work-item-title-parser-types';
+
+export type {
+  WorkItemDisplayConfig,
+  WorkItemDetailLayout,
+  WorkItemRowConfig,
+  WorkItemTabConfig,
+  WorkItemTabId,
+} from './work-item-display-config-types';
 
 
 export type ProviderType = 'azure-devops' | 'github' | 'gitlab';
@@ -516,6 +525,7 @@ export interface Project {
   workItemProjectId: string | null;
   workItemProjectName: string | null;
   workItemTitleParser: WorkItemTitleParserSetting | null;
+  workItemDisplayConfig: WorkItemDisplayConfig | null;
   showWorkItemsInFeed: boolean;
   showPrsInFeed: boolean;
   autoPullSourceBranch: boolean;
@@ -558,6 +568,7 @@ export interface NewProject {
   workItemProjectId?: string | null;
   workItemProjectName?: string | null;
   workItemTitleParser?: WorkItemTitleParserSetting | null;
+  workItemDisplayConfig?: WorkItemDisplayConfig | null;
   showWorkItemsInFeed?: boolean;
   showPrsInFeed?: boolean;
   autoPullSourceBranch?: boolean;
@@ -600,6 +611,7 @@ export interface UpdateProject {
   workItemProjectId?: string | null;
   workItemProjectName?: string | null;
   workItemTitleParser?: WorkItemTitleParserSetting | null;
+  workItemDisplayConfig?: WorkItemDisplayConfig | null;
   showWorkItemsInFeed?: boolean;
   showPrsInFeed?: boolean;
   autoPullSourceBranch?: boolean;

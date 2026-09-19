@@ -3,6 +3,14 @@ import {
   markdownToBlockNoteJson,
 } from '@shared/feed-note-blocknote';
 import type { FeedItem, FeedItemAttention, FeedNote } from '@shared/feed-types';
+import {
+  FIELD_WORK_ITEM_TYPE,
+  getChangedDate,
+  getState,
+  getStringField,
+  getTitle,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
 import type { TaskStatus, TaskStep, TaskStepStatus } from '@shared/types';
 import type { AzureDevOpsPullRequest } from '@shared/azure-devops-types';
 import { getWorkItemSummaryExcerpt } from '@shared/work-item-summary';
@@ -487,7 +495,9 @@ async function enrichTaskFeedItemsWithWorkItemTypes({
             providerId,
             workItemId: numericWorkItemId,
           });
-          const type = workItem?.fields.workItemType ?? null;
+          const type = workItem
+            ? (getStringField(workItem, FIELD_WORK_ITEM_TYPE) ?? null)
+            : null;
           typeCache.set(cacheKey, type);
           return type;
         } catch (err) {
@@ -1094,24 +1104,23 @@ async function fetchWorkItemFeedItems(
           id: `work-item:${project.id}:${wi.id}`,
           source: 'work-item',
           attention: 'assigned-work-item',
-          timestamp: wi.fields.changedDate ?? new Date().toISOString(),
+          timestamp: getChangedDate(wi) ?? new Date().toISOString(),
           projectId: project.id,
           projectName: project.name,
           projectColor: project.color,
           projectLogoPath: project.logoPath,
           projectPriority:
             (project.workItemPriority as 'high' | 'normal' | 'low') ?? 'normal',
-          title: wi.fields.title,
-          subtitle: `${wi.fields.workItemType} #${wi.id}`,
+          title: getTitle(wi),
+          subtitle: `${getWorkItemType(wi)} #${wi.id}`,
           workItemId: wi.id,
           workItemUrl: wi.url,
-          workItemType: wi.fields.workItemType,
-          workItemState: wi.fields.state,
+          workItemType: getWorkItemType(wi),
+          workItemState: getState(wi),
           workItemSummary: workItemSummary || undefined,
           workItemSummaryStale:
             !!cachedSummary &&
-            cachedSummary.sourceChangedDate !==
-              (wi.fields.changedDate ?? null),
+            cachedSummary.sourceChangedDate !== (getChangedDate(wi) ?? null),
         });
       }
     } catch (err) {

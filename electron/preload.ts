@@ -517,18 +517,27 @@ contextBridge.exposeInMainWorld('api', {
         iterationPaths?: string[];
         assignedTo?: string;
       };
+      extraFieldRefNames?: string[];
     }) => ipcRenderer.invoke('azureDevOps:queryWorkItems', params),
     queryWorkItemOwners: (params: {
       providerId: string;
       projectName: string;
     }) => ipcRenderer.invoke('azureDevOps:queryWorkItemOwners', params),
-    getWorkItemById: (params: { providerId: string; workItemId: number }) =>
-      ipcRenderer.invoke('azureDevOps:getWorkItemById', params),
+    getWorkItemById: (params: {
+      providerId: string;
+      workItemId: number;
+      extraFieldRefNames?: string[];
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemById', params),
     getWorkItemsByIds: (params: {
       providerId: string;
       projectName: string;
       workItemIds: number[];
+      extraFieldRefNames?: string[];
     }) => ipcRenderer.invoke('azureDevOps:getWorkItemsByIds', params),
+    getWorkItemTypeFields: (params: {
+      providerId: string;
+      azureProjectId: string;
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemTypeFields', params),
     getPullRequestStatuses: (params: {
       providerId: string;
       linkedPrs: Array<{ prId: number; projectId: string; repoId: string }>;

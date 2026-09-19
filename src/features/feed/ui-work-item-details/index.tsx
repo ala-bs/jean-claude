@@ -1,8 +1,5 @@
 import {
-  BookOpen,
-  Bug,
   Check,
-  CheckSquare,
   ChevronDown,
   ChevronRight,
   ExternalLink,
@@ -31,12 +28,37 @@ import type {
   AzureDevOpsPullRequestStatus,
   AzureDevOpsWorkItem,
 } from '@/lib/api';
-import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
+import {
+  collectExtraFieldRefNames,
+  resolveDetailLayout,
+} from '@shared/work-item-display-config-types';
+import {
+  FIELD_ASSIGNED_TO,
+  FIELD_BOARD_COLUMN,
+  FIELD_ITERATION_PATH,
+  FIELD_PRIORITY,
+  FIELD_STATE,
+  FIELD_STORY_POINTS,
+  FIELD_TAGS,
+  getAcceptanceCriteriaHtml,
+  getAssignee,
+  getDescriptionHtml,
+  getIterationPath,
+  getPriority,
+  getReproStepsHtml,
+  getState,
+  getStoryPoints,
+  getStringField,
+  getTags,
+  getTeamProject,
+  getTitle,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
 import { FindInViewBar, useFindInView } from '@/common/ui/find-in-view';
 import {
-  getOwnerColor,
-  normalizeOwnerName,
-} from '@/features/work-item/utils-owner-color';
+  getOwnerOptions,
+  WorkItemOwnerEditor,
+} from '@/features/work-item/ui-work-item-field-editors/work-item-owner-editor';
 import {
   useAddWorkItemComment,
   useBoardColumns,
@@ -46,14 +68,18 @@ import {
   useRelatedTestCases,
   useUpdateWorkItemComment,
   useUpdateWorkItemField,
-  useUpdateWorkItemState,
   useWorkItemById,
   useWorkItemComments,
+  useWorkItemFieldMetadataMap,
   useWorkItemHistory,
   useWorkItemOwners,
   useWorkItemsByIds,
   useWorkItemStates,
 } from '@/hooks/use-work-items';
+import {
+  WorkItemStateBadge,
+  WorkItemStateEditor,
+} from '@/features/work-item/ui-work-item-field-editors/work-item-state-editor';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import { Chip } from '@/common/ui/chip';
 import { Kbd } from '@/common/ui/kbd';
@@ -61,15 +87,19 @@ import { Modal } from '@/common/ui/modal';
 import { PrDetail } from '@/features/pull-request/ui-pr-detail';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useProject } from '@/hooks/use-projects';
-import { UserAvatar } from '@/common/ui/user-avatar';
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
 import { WorkItemBoardColumnEditor } from '@/features/work-item/ui-work-item-board-column-editor';
 import { WorkItemComments } from '@/features/work-item/ui-work-item-comments';
+import { WorkItemExpandableTestCase } from '@/features/work-item/ui-work-item-expandable-test-case';
+import { WorkItemFieldRows } from '@/features/work-item/ui-work-item-field-rows';
 import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
 import { WorkItemHistory } from '@/features/work-item/ui-work-item-history';
-import { EditableMetadataValue as WorkItemMetadataEditor } from '@/features/work-item/ui-work-item-preview';
+import { WorkItemIterationEditor } from '@/features/work-item/ui-work-item-field-editors/work-item-iteration-editor';
+import { WorkItemMetadataValue } from '@/features/work-item/ui-work-item-field-editors/work-item-metadata-value';
+import { WorkItemTabButton } from '@/features/work-item/ui-work-item-tab-button';
 import { WorkItemTagEditor } from '@/features/work-item/ui-work-item-tag-editor';
+import { WorkItemTypeIcon } from '@/features/work-item/ui-work-item-shared';
 
 type DetailsTab = 'comments' | 'history' | 'test-cases';
 
@@ -79,378 +109,6 @@ type LinkDetailModal =
       type: 'pull-request';
       pr: NonNullable<AzureDevOpsWorkItem['linkedPrs']>[number];
     };
-
-function WorkItemTypeIcon({
-  type,
-  size = 'md',
-}: {
-  type: string;
-  size?: 'sm' | 'md' | 'lg';
-}) {
-  const sizeClass =
-    size === 'lg' ? 'h-6 w-6' : size === 'md' ? 'h-4 w-4' : 'h-3.5 w-3.5';
-  switch (type) {
-    case 'Bug':
-      return <Bug className={`${sizeClass} text-status-fail shrink-0`} />;
-    case 'User Story':
-    case 'Feature':
-      return <BookOpen className={`${sizeClass} text-acc-ink shrink-0`} />;
-    case 'Task':
-      return (
-        <CheckSquare className={`${sizeClass} text-status-done shrink-0`} />
-      );
-    default:
-      return <FileText className={`${sizeClass} text-ink-2 shrink-0`} />;
-  }
-}
-
-function getStateColor(state: string): {
-  color: 'neutral' | 'blue' | 'yellow' | 'green';
-  ringClass: string;
-} {
-  if (state === 'Active') {
-    return { color: 'blue', ringClass: 'ring-1 ring-acc/30' };
-  } else if (state === 'New') {
-    return { color: 'yellow', ringClass: 'ring-1 ring-status-run/30' };
-  } else if (state === 'Resolved' || state === 'Done' || state === 'Closed') {
-    return { color: 'green', ringClass: 'ring-1 ring-status-done/30' };
-  }
-  return { color: 'neutral', ringClass: '' };
-}
-
-function StateBadge({ state }: { state: string }) {
-  const { color, ringClass } = getStateColor(state);
-  return (
-    <Chip size="sm" color={color} className={ringClass}>
-      {state}
-    </Chip>
-  );
-}
-
-function EditableStateBadge({
-  state,
-  states: availableStates,
-  providerId,
-  workItemId,
-}: {
-  state: string;
-  states: string[];
-  providerId: string;
-  workItemId: number;
-}) {
-  const updateState = useUpdateWorkItemState();
-  const { color, ringClass } = getStateColor(state);
-  const dropdownRef = useRef<{ toggle: () => void } | null>(null);
-  const states = availableStates.includes(state)
-    ? availableStates
-    : [state, ...availableStates];
-
-  const handleSelect = useCallback(
-    (s: string) => {
-      dropdownRef.current?.toggle();
-      if (s !== state) {
-        updateState.mutate({ providerId, workItemId, state: s });
-      }
-    },
-    [state, providerId, workItemId, updateState],
-  );
-
-  return (
-    <Dropdown
-      dropdownRef={dropdownRef}
-      trigger={
-        <button
-          type="button"
-          className="flex cursor-pointer items-center gap-1"
-        >
-          <Chip
-            size="sm"
-            color={color}
-            className={clsx(
-              ringClass,
-              '[&>span]:flex [&>span]:items-center [&>span]:gap-1',
-            )}
-            icon={
-              updateState.isPending ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : undefined
-            }
-          >
-            {state}
-            <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
-          </Chip>
-        </button>
-      }
-    >
-      {states.map((s) => (
-        <DropdownItem
-          key={s}
-          onClick={() => handleSelect(s)}
-          checked={s === state}
-        >
-          {s}
-        </DropdownItem>
-      ))}
-    </Dropdown>
-  );
-}
-
-export function getOwnerOptions(
-  owners: Array<{ displayName: string; value: string }>,
-  currentOwner?: string,
-  currentOwnerValue?: string,
-  currentUser?: { displayName?: string | null; uniqueName?: string | null },
-): Array<{ displayName: string; value: string }> {
-  const ownersByKey = new Map<
-    string,
-    { displayName: string; value: string }
-  >();
-  const currentValue = currentOwnerValue?.trim() || currentOwner?.trim();
-  if (currentOwner?.trim() && currentValue) {
-    ownersByKey.set(normalizeOwnerName(currentValue), {
-      displayName: currentOwner.trim(),
-      value: currentValue,
-    });
-  }
-  for (const owner of owners) {
-    const displayName = owner.displayName.trim();
-    const value = owner.value.trim();
-    if (!displayName || !value) continue;
-    const normalized = normalizeOwnerName(value);
-    if (!ownersByKey.has(normalized)) {
-      ownersByKey.set(normalized, { displayName, value });
-    }
-  }
-  const currentKey = currentValue ? normalizeOwnerName(currentValue) : null;
-  const meName = currentUser?.displayName?.trim() || '';
-  const meValue = currentUser?.uniqueName?.trim() || meName;
-  // Owners are keyed by unique name (email) when available, display name otherwise,
-  // so also match on display name to avoid listing the same person twice.
-  const meNameKey = meName ? normalizeOwnerName(meName) : null;
-  let meKey = meValue ? normalizeOwnerName(meValue) : null;
-  if (meKey && !ownersByKey.has(meKey) && meNameKey) {
-    const byName = [...ownersByKey.entries()].find(
-      ([, owner]) => normalizeOwnerName(owner.displayName) === meNameKey,
-    );
-    if (byName) meKey = byName[0];
-  }
-  if (meKey && !ownersByKey.has(meKey)) {
-    ownersByKey.set(meKey, { displayName: meName || meValue, value: meValue });
-  }
-  let me = meKey ? ownersByKey.get(meKey) : undefined;
-  let current =
-    currentKey && currentKey !== meKey ? ownersByKey.get(currentKey) : undefined;
-  // Same person reached through both value spaces (email vs display name):
-  // keep a single entry, preferring the one the work item is actually set to
-  // so the dropdown still shows it as selected.
-  if (
-    me &&
-    current &&
-    normalizeOwnerName(current.displayName) ===
-      normalizeOwnerName(me.displayName)
-  ) {
-    me = current;
-    current = undefined;
-  }
-  const pinnedKeys = new Set([meKey, currentKey].filter(Boolean) as string[]);
-  const ownersList = [...ownersByKey.entries()]
-    .filter(([key]) => !pinnedKeys.has(key))
-    .map(([, owner]) => owner);
-  ownersList.sort((a, b) => a.displayName.localeCompare(b.displayName));
-  return [
-    { displayName: 'Unassigned', value: '' },
-    ...(me ? [me] : []),
-    ...(current ? [current] : []),
-    ...ownersList,
-  ];
-}
-
-function EditableOwner({
-  owner,
-  ownerValue,
-  options,
-  disabled,
-  error,
-  onRetry,
-  providerId,
-  workItemId,
-}: {
-  owner?: string;
-  ownerValue?: string;
-  options: Array<{ displayName: string; value: string }>;
-  disabled: boolean;
-  error: string | null;
-  onRetry: () => void;
-  providerId: string;
-  workItemId: number;
-}) {
-  const updateField = useUpdateWorkItemField();
-  const dropdownRef = useRef<{ toggle: () => void } | null>(null);
-  const currentOwner = owner ?? '';
-  const currentOwnerValue = ownerValue ?? currentOwner;
-
-  const handleSelect = useCallback(
-    (nextOwner: { displayName: string; value: string }) => {
-      dropdownRef.current?.toggle();
-      if (nextOwner.value === currentOwnerValue) return;
-      updateField.mutate({
-        providerId,
-        workItemId,
-        field: 'System.AssignedTo',
-        value: nextOwner.value,
-      });
-    },
-    [currentOwnerValue, providerId, updateField, workItemId],
-  );
-
-  return (
-    <div className="flex items-center gap-1.5 text-xs">
-      <span className="text-ink-3">Assigned to:</span>
-      <Dropdown
-        dropdownRef={dropdownRef}
-        className="min-w-52"
-        trigger={
-          <button
-            type="button"
-            disabled={disabled || updateField.isPending || options.length <= 1}
-            className="text-ink-1 hover:text-acc-ink flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors disabled:cursor-default disabled:opacity-60"
-            aria-label={`Edit owner. Current owner: ${currentOwner || 'Unassigned'}`}
-          >
-            {currentOwner && (
-              <UserAvatar
-                name={currentOwner}
-                color={getOwnerColor(currentOwner)}
-              />
-            )}
-            <span className="max-w-36 truncate">
-              {currentOwner || 'Unassigned'}
-            </span>
-            {updateField.isPending ? (
-              <Loader2 className="text-ink-3 h-3 w-3 animate-spin" />
-            ) : (
-              <ChevronDown className="text-ink-3 h-3 w-3" />
-            )}
-          </button>
-        }
-      >
-        {options.map((option) => (
-          <DropdownItem
-            key={option.value || '__unassigned__'}
-            checked={option.value === currentOwnerValue}
-            onClick={() => handleSelect(option)}
-          >
-            <span className="flex items-center gap-2">
-              {option.value && (
-                <UserAvatar
-                  name={option.displayName}
-                  color={getOwnerColor(option.displayName)}
-                />
-              )}
-              <span>{option.displayName}</span>
-              {option.value && option.value !== option.displayName && (
-                <span className="text-ink-3">{option.value}</span>
-              )}
-            </span>
-          </DropdownItem>
-        ))}
-      </Dropdown>
-      {error && (
-        <button
-          type="button"
-          className="text-status-fail hover:underline"
-          title={error}
-          onClick={onRetry}
-        >
-          Retry owners
-        </button>
-      )}
-    </div>
-  );
-}
-
-function EditableIteration({
-  iterationPath,
-  options,
-  disabled,
-  providerId,
-  workItemId,
-}: {
-  iterationPath?: string;
-  options: Array<{ name: string; path: string; isCurrent: boolean }>;
-  disabled: boolean;
-  providerId: string;
-  workItemId: number;
-}) {
-  const updateField = useUpdateWorkItemField();
-  const dropdownRef = useRef<{ toggle: () => void } | null>(null);
-  const currentPath = iterationPath ?? '';
-  const currentName =
-    options.find((option) => option.path === currentPath)?.name ??
-    currentPath.split('\\').at(-1) ??
-    'Unknown';
-
-  const handleSelect = useCallback(
-    (nextPath: string) => {
-      dropdownRef.current?.toggle();
-      if (nextPath === currentPath) return;
-      updateField.mutate({
-        providerId,
-        workItemId,
-        field: 'System.IterationPath',
-        value: nextPath,
-      });
-    },
-    [currentPath, providerId, updateField, workItemId],
-  );
-
-  return (
-    <div className="flex items-center gap-1.5 text-xs">
-      <span className="text-ink-3">Iteration:</span>
-      <Dropdown
-        dropdownRef={dropdownRef}
-        className="min-w-52"
-        trigger={
-          <button
-            type="button"
-            disabled={disabled || updateField.isPending || options.length === 0}
-            className="text-ink-1 hover:text-acc-ink flex min-w-0 max-w-56 items-center gap-1 rounded px-1 py-0.5 transition-colors disabled:cursor-default disabled:opacity-60"
-            aria-label={`Edit iteration. Current iteration: ${currentName}`}
-          >
-            <span className="truncate">{currentName}</span>
-            {updateField.isPending ? (
-              <Loader2 className="text-ink-3 h-3 w-3 shrink-0 animate-spin" />
-            ) : (
-              <ChevronDown className="text-ink-3 h-3 w-3 shrink-0" />
-            )}
-          </button>
-        }
-      >
-        {options.map((option) => (
-          <DropdownItem
-            key={option.path}
-            checked={option.path === currentPath}
-            onClick={() => handleSelect(option.path)}
-          >
-            <span
-              className={clsx(
-                'flex min-w-0 flex-col',
-                option.isCurrent && 'text-acc-ink',
-              )}
-            >
-              <span>{option.name}</span>
-              {option.name !== option.path && (
-                <span className="text-ink-3 truncate text-xs">{option.path}</span>
-              )}
-              {option.isCurrent && (
-                <span className="text-acc-ink/70 text-[10px]">Current</span>
-              )}
-            </span>
-          </DropdownItem>
-        ))}
-      </Dropdown>
-    </div>
-  );
-}
 
 export function WorkItemDetails({
   projectId,
@@ -471,6 +129,17 @@ export function WorkItemDetails({
     maxWidth: maxCommentsPaneWidth,
   } = useWorkItemCommentsPaneWidth();
 
+  // Per-project display config. A `null` config resolves to this surface's own
+  // hardcoded default, so an unconfigured project renders exactly as before.
+  const displayConfig = project?.workItemDisplayConfig ?? null;
+  const extraFieldRefNames = useMemo(
+    () => collectExtraFieldRefNames(displayConfig),
+    [displayConfig],
+  );
+  const fieldMetadata = useWorkItemFieldMetadataMap({
+    providerId: providerId ?? undefined,
+    azureProjectId: project?.workItemProjectId ?? undefined,
+  });
   const {
     data: workItem,
     isLoading,
@@ -479,8 +148,10 @@ export function WorkItemDetails({
   } = useWorkItemById({
     providerId,
     workItemId,
+    extraFieldRefNames,
   });
-  const projectName = workItem?.fields.teamProject ?? configuredProjectName;
+  const projectName =
+    (workItem ? getTeamProject(workItem) : undefined) ?? configuredProjectName;
   const { data: boardColumns = [] } = useBoardColumns({
     providerId: providerId ?? '',
     projectId: project?.workItemProjectId ?? '',
@@ -490,19 +161,22 @@ export function WorkItemDetails({
   const { data: availableStates = [] } = useWorkItemStates({
     providerId,
     projectName,
-    workItemType: workItem?.fields.workItemType ?? null,
+    workItemType: (workItem ? getWorkItemType(workItem) : '') || null,
   });
   const ownerQuery = useWorkItemOwners({
     providerId,
     projectName,
   });
   const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
+  const assignee = workItem ? getAssignee(workItem) : undefined;
+  const assigneeDisplayName = assignee?.displayName;
+  const assigneeUniqueName = assignee?.uniqueName;
   const ownerOptions = useMemo(
     () =>
       getOwnerOptions(
         ownerQuery.data ?? [],
-        workItem?.fields.assignedTo,
-        workItem?.fields.assignedToUniqueName,
+        assigneeDisplayName,
+        assigneeUniqueName,
         currentUser
           ? {
               displayName: currentUser.displayName,
@@ -510,20 +184,16 @@ export function WorkItemDetails({
             }
           : undefined,
       ),
-    [
-      ownerQuery.data,
-      workItem?.fields.assignedTo,
-      workItem?.fields.assignedToUniqueName,
-      currentUser,
-    ],
+    [ownerQuery.data, assigneeDisplayName, assigneeUniqueName, currentUser],
   );
   const { data: iterations } = useIterations({
     providerId: providerId ?? '',
     projectName: projectName ?? '',
   });
+  const workItemIterationPath = workItem ? getIterationPath(workItem) : undefined;
   const iterationOptions = useMemo(() => {
     const options = [...(iterations ?? [])];
-    const currentPath = workItem?.fields.iterationPath;
+    const currentPath = workItemIterationPath;
     if (currentPath && !options.some((option) => option.path === currentPath)) {
       options.unshift({
         id: currentPath,
@@ -535,7 +205,7 @@ export function WorkItemDetails({
       });
     }
     return options.reverse();
-  }, [iterations, workItem?.fields.iterationPath]);
+  }, [iterations, workItemIterationPath]);
   const {
     data: comments = [],
     isLoading: isLoadingComments,
@@ -583,6 +253,25 @@ export function WorkItemDetails({
     projectName,
     workItemIds: linkedWorkItemIds,
   });
+  // Tag autocomplete (decision 30). The board's `tagOptions` come from a whole
+  // loaded board model, which this modal never fetches; the only tag corpus
+  // available here without adding a query is the work item itself plus the
+  // items it already loads (linked work items and related test cases).
+  const tagSuggestions = useMemo(() => {
+    const byKey = new Map<string, string>();
+    const sources = [
+      ...(workItem ? [workItem] : []),
+      ...linkedWorkItems,
+      ...relatedTestCases,
+    ];
+    for (const item of sources) {
+      for (const tag of getTags(item)) {
+        const key = tag.toLocaleLowerCase();
+        if (!byKey.has(key)) byKey.set(key, tag);
+      }
+    }
+    return [...byKey.values()].sort((a, b) => a.localeCompare(b));
+  }, [workItem, linkedWorkItems, relatedTestCases]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const handleRefresh = useCallback(() => {
@@ -713,27 +402,94 @@ export function WorkItemDetails({
     );
   }
 
-  const { fields } = workItem;
-  const hasReproSteps = fields.workItemType === 'Bug' && !!fields.reproSteps;
-  const hasContent =
-    !!fields.description || !!fields.acceptanceCriteria || hasReproSteps;
+  const workItemType = getWorkItemType(workItem);
+  const title = getTitle(workItem);
+  const state = getState(workItem);
+  const ownerDisplayName = getAssignee(workItem)?.displayName;
+  const ownerUniqueName = getAssignee(workItem)?.uniqueName;
+  const storyPoints = getStoryPoints(workItem);
+  const priority = getPriority(workItem);
+  const iterationPath = getIterationPath(workItem);
+  const tagsValue = getStringField(workItem, FIELD_TAGS) ?? '';
+  const detailLayout = resolveDetailLayout(
+    displayConfig,
+    workItemType,
+    'feed-modal',
+  );
+  // Unknown ids stay visible: a config that predates a tab must not hide it.
+  const isTabVisible = (tabId: string) =>
+    detailLayout.tabs.find((tab) => tab.id === tabId)?.visible !== false;
+  const description = isTabVisible('description')
+    ? getDescriptionHtml(workItem)
+    : undefined;
+  const acceptanceCriteria = isTabVisible('acceptanceCriteria')
+    ? getAcceptanceCriteriaHtml(workItem)
+    : undefined;
+  const reproSteps = isTabVisible('reproSteps')
+    ? getReproStepsHtml(workItem)
+    : undefined;
+  const hasReproSteps = workItemType === 'Bug' && !!reproSteps;
+  const hasContent = !!description || !!acceptanceCriteria || hasReproSteps;
+  const showCommentsTab = isTabVisible('comments');
+  const showHistoryTab = isTabVisible('history');
+  const showTestCasesTab = hasTestCases && isTabVisible('testCases');
+  // A tab the config hides must not stay selected. Derived rather than fixed in
+  // an effect: everything here runs after the loading/error bail-outs, so a
+  // hook at this point would change the render's hook count.
+  const visibleTabs = (
+    [
+      showCommentsTab ? 'comments' : null,
+      showHistoryTab ? 'history' : null,
+      showTestCasesTab ? 'test-cases' : null,
+    ] as const
+  ).filter((tab): tab is DetailsTab => tab !== null);
+  // `null` when the config hides every tab: falling back to the selected tab
+  // would render its pane under an empty strip — i.e. show exactly the tab the
+  // config hid.
+  const effectiveTab: DetailsTab | null = visibleTabs.includes(activeTab)
+    ? activeTab
+    : (visibleTabs[0] ?? null);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="border-glass-border/50 shrink-0 border-b px-6 py-4">
         <div className="flex items-center gap-3">
-          <WorkItemTypeIcon type={fields.workItemType} size="lg" />
+          <WorkItemTypeIcon type={workItemType} size="lg" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-ink-2 text-sm font-medium">
                 #{workItem.id}
               </span>
               <span className="text-ink-4 text-xs">&bull;</span>
-              <span className="text-ink-2 text-xs">{fields.workItemType}</span>
+              <span className="text-ink-2 text-xs">{workItemType}</span>
             </div>
-            <h1 className="text-ink-0 mt-1 text-lg font-semibold">
-              {fields.title}
-            </h1>
+            {/* Inline title editing (decision 30). `className` carries the
+                heading typography so the editor's default `text-sm` doesn't
+                shrink it. */}
+            {providerId ? (
+              <div className="mt-1 flex min-w-0">
+                <WorkItemMetadataValue
+                  key={`${workItem.id}:title:${title}`}
+                  value={title}
+                  label="Title"
+                  className="text-ink-0 block min-w-0 flex-1 rounded text-left text-lg font-semibold"
+                  fullWidth
+                  validate={(value) =>
+                    value.trim() ? null : 'Title cannot be empty'
+                  }
+                  onSave={(value) =>
+                    updateField.mutateAsync({
+                      providerId,
+                      workItemId: workItem.id,
+                      field: 'System.Title',
+                      value,
+                    })
+                  }
+                />
+              </div>
+            ) : (
+              <h1 className="text-ink-0 mt-1 text-lg font-semibold">{title}</h1>
+            )}
           </div>
           <button
             type="button"
@@ -788,98 +544,144 @@ export function WorkItemDetails({
           )}
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          {providerId ? (
-            <EditableStateBadge
-              state={fields.state}
-              states={availableStates.map((s) => s.name)}
-              providerId={providerId}
-              workItemId={workItem.id}
-            />
-          ) : (
-            <StateBadge state={fields.state} />
-          )}
-          {providerId && project.workItemProjectId && projectName && boardColumns.length > 0 && (
-            <WorkItemBoardColumnEditor
-              key={`${workItem.id}:column`}
-              workItem={workItem}
-              providerId={providerId}
-              projectId={project.workItemProjectId}
-              projectName={projectName}
-              columns={boardColumns}
-              variant="details"
-            />
-          )}
-          {providerId ? (
-            <EditableOwner
-              owner={fields.assignedTo}
-              ownerValue={fields.assignedToUniqueName}
-              options={ownerOptions}
-              disabled={ownerQuery.data === undefined}
-              error={ownerQuery.error?.message ?? null}
-              onRetry={() => void ownerQuery.refetch()}
-              providerId={providerId}
-              workItemId={workItem.id}
-            />
-          ) : (
-            <div className="flex items-center gap-1.5 text-xs">
-              <span className="text-ink-3">Assigned to:</span>
-              <span className="text-ink-1">
-                {fields.assignedTo ?? 'Unassigned'}
-              </span>
-            </div>
-          )}
-          {providerId && (
-            <div className="flex items-center gap-1.5 text-xs">
-              <span className="text-ink-3">Story points:</span>
-              <WorkItemMetadataEditor
-                key={`${workItem.id}:story-points:${fields.storyPoints ?? ''}`}
-                value={String(fields.storyPoints ?? '')}
-                label="Story points"
-                emptyLabel="None"
-                validate={(value) => {
-                  if (value === '') return null;
-                  const points = Number(value);
-                  return Number.isInteger(points) && points >= 0
-                    ? null
-                    : 'Story points must be a non-negative integer';
-                }}
-                onSave={(value) =>
-                  updateField.mutateAsync({
-                    providerId,
-                    workItemId: workItem.id,
-                    field: 'Microsoft.VSTS.Scheduling.StoryPoints',
-                    value: value === '' ? null : Number(value),
-                  })
-                }
-              />
-            </div>
-          )}
-          {providerId && projectName && (
-            <EditableIteration
-              iterationPath={fields.iterationPath}
-              options={iterationOptions}
-              disabled={iterations === undefined}
-              providerId={providerId}
-              workItemId={workItem.id}
-            />
-          )}
-          {providerId && (
-            <WorkItemTagEditor
-              key={`${workItem.id}:tags:${fields.tags ?? ''}`}
-              value={fields.tags ?? ''}
-              suggestions={[]}
-              onSave={(value) =>
-                updateField.mutateAsync({
-                  providerId,
-                  workItemId: workItem.id,
-                  field: 'System.Tags',
-                  value,
-                })
-              }
-            />
-          )}
-        </div>
+        {/* Config-driven metadata region. Each row hosts this panel's own
+            inline editor, so ordering/visibility is configurable without
+            changing any editing behaviour (decision 22). */}
+        <WorkItemFieldRows
+          workItem={workItem}
+          rows={detailLayout.rows}
+          metadata={fieldMetadata}
+          variant="detail"
+          containerClassName="mt-3 flex flex-wrap items-center gap-3"
+          layout="inline"
+          editors={{
+            [FIELD_STATE]: () =>
+              providerId ? (
+                <WorkItemStateEditor
+                  state={state}
+                  states={availableStates.map((s) => s.name)}
+                  providerId={providerId}
+                  workItemId={workItem.id}
+                />
+              ) : (
+                <WorkItemStateBadge state={state} />
+              ),
+            [FIELD_BOARD_COLUMN]: () =>
+              providerId && project.workItemProjectId && projectName && boardColumns.length > 0 ? (
+                <WorkItemBoardColumnEditor
+                  key={`${workItem.id}:column`}
+                  workItem={workItem}
+                  providerId={providerId}
+                  projectId={project.workItemProjectId}
+                  projectName={projectName}
+                  columns={boardColumns}
+                  variant="details"
+                />
+              ) : null,
+            [FIELD_ASSIGNED_TO]: () =>
+              providerId ? (
+                <WorkItemOwnerEditor
+                  owner={ownerDisplayName}
+                  ownerValue={ownerUniqueName}
+                  options={ownerOptions}
+                  disabled={ownerQuery.data === undefined}
+                  error={ownerQuery.error?.message ?? null}
+                  onRetry={() => void ownerQuery.refetch()}
+                  providerId={providerId}
+                  workItemId={workItem.id}
+                />
+              ) : (
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-ink-1" title="Assigned to">
+                    {ownerDisplayName ?? 'Unassigned'}
+                  </span>
+                </div>
+              ),
+            [FIELD_STORY_POINTS]: () =>
+              providerId ? (
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-ink-3">Story points:</span>
+                  <WorkItemMetadataValue
+                    key={`${workItem.id}:story-points:${storyPoints ?? ''}`}
+                    value={String(storyPoints ?? '')}
+                    label="Story points"
+                    emptyLabel="None"
+                    validate={(value) => {
+                      if (value === '') return null;
+                      const points = Number(value);
+                      return Number.isInteger(points) && points >= 0
+                        ? null
+                        : 'Story points must be a non-negative integer';
+                    }}
+                    onSave={(value) =>
+                      updateField.mutateAsync({
+                        providerId,
+                        workItemId: workItem.id,
+                        field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+                        value: value === '' ? null : Number(value),
+                      })
+                    }
+                  />
+                </div>
+              ) : null,
+            // Decision 30: the modal gains Priority editing, with the same
+            // 1–4 integer validation the preview uses.
+            [FIELD_PRIORITY]: () =>
+              providerId ? (
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-ink-3">Priority:</span>
+                  <WorkItemMetadataValue
+                    key={`${workItem.id}:priority:${priority ?? ''}`}
+                    value={String(priority ?? '')}
+                    label="Priority"
+                    emptyLabel="None"
+                    validate={(value) => {
+                      const nextPriority = Number(value);
+                      return Number.isInteger(nextPriority) &&
+                        nextPriority >= 1 &&
+                        nextPriority <= 4
+                        ? null
+                        : 'Priority must be an integer from 1 to 4';
+                    }}
+                    onSave={(value) =>
+                      updateField.mutateAsync({
+                        providerId,
+                        workItemId: workItem.id,
+                        field: FIELD_PRIORITY,
+                        value: Number(value),
+                      })
+                    }
+                  />
+                </div>
+              ) : null,
+            [FIELD_ITERATION_PATH]: () =>
+              providerId && projectName ? (
+                <WorkItemIterationEditor
+                  iterationPath={iterationPath}
+                  options={iterationOptions}
+                  disabled={iterations === undefined}
+                  providerId={providerId}
+                  workItemId={workItem.id}
+                />
+              ) : null,
+            [FIELD_TAGS]: () =>
+              providerId ? (
+                <WorkItemTagEditor
+                  key={`${workItem.id}:tags:${tagsValue}`}
+                  value={tagsValue}
+                  suggestions={tagSuggestions}
+                  onSave={(value) =>
+                    updateField.mutateAsync({
+                      providerId,
+                      workItemId: workItem.id,
+                      field: 'System.Tags',
+                      value,
+                    })
+                  }
+                />
+              ) : null,
+          }}
+        />
       </div>
 
       <div
@@ -920,15 +722,15 @@ export function WorkItemDetails({
                 projectName,
                 workItemId: workItem.id,
               }}
-              workItemTitle={fields.title}
+              workItemTitle={title}
               className="mb-5"
             />
           )}
           {hasContent ? (
             <div className="w-full">
-              {fields.description && (
+              {description && (
                 <AzureHtmlContent
-                  html={fields.description}
+                  html={description}
                   providerId={providerId ?? undefined}
                   className="text-ink-1 text-sm"
                   imageClassName="max-h-96 w-auto object-contain"
@@ -936,13 +738,13 @@ export function WorkItemDetails({
                 />
               )}
 
-              {fields.acceptanceCriteria && (
-                <div className={fields.description ? 'mt-6' : undefined}>
+              {acceptanceCriteria && (
+                <div className={description ? 'mt-6' : undefined}>
                   <h2 className="text-ink-0 mb-2 text-sm font-semibold">
                     Acceptance Criteria
                   </h2>
                   <AzureHtmlContent
-                    html={fields.acceptanceCriteria}
+                    html={acceptanceCriteria}
                     providerId={providerId ?? undefined}
                     className="text-ink-1 text-sm"
                     imageClassName="max-h-96 w-auto object-contain"
@@ -954,7 +756,7 @@ export function WorkItemDetails({
               {hasReproSteps && (
                 <div
                   className={
-                    fields.description || fields.acceptanceCriteria
+                    description || acceptanceCriteria
                       ? 'mt-6'
                       : undefined
                   }
@@ -963,7 +765,7 @@ export function WorkItemDetails({
                     Repro Steps
                   </h2>
                   <AzureHtmlContent
-                    html={fields.reproSteps!}
+                    html={reproSteps!}
                     providerId={providerId ?? undefined}
                     className="text-ink-1 text-sm"
                     imageClassName="max-h-96 w-auto object-contain"
@@ -1008,23 +810,27 @@ export function WorkItemDetails({
           />
 
           <div className="border-glass-border flex gap-0 border-b px-3">
-            <FeedTabButton
-              active={activeTab === 'comments'}
-              onClick={() => setActiveTab('comments')}
-              icon={<MessagesSquare className="h-3.5 w-3.5" />}
-              label="Comments"
-              count={comments.length}
-            />
-            <FeedTabButton
-              active={activeTab === 'history'}
-              onClick={() => setActiveTab('history')}
-              icon={<History className="h-3.5 w-3.5" />}
-              label="History"
-              count={history.length}
-            />
-            {hasTestCases && (
-              <FeedTabButton
-                active={activeTab === 'test-cases'}
+            {showCommentsTab && (
+              <WorkItemTabButton
+                active={effectiveTab === 'comments'}
+                onClick={() => setActiveTab('comments')}
+                icon={<MessagesSquare className="h-3.5 w-3.5" />}
+                label="Comments"
+                count={comments.length}
+              />
+            )}
+            {showHistoryTab && (
+              <WorkItemTabButton
+                active={effectiveTab === 'history'}
+                onClick={() => setActiveTab('history')}
+                icon={<History className="h-3.5 w-3.5" />}
+                label="History"
+                count={history.length}
+              />
+            )}
+            {showTestCasesTab && (
+              <WorkItemTabButton
+                active={effectiveTab === 'test-cases'}
                 onClick={() => setActiveTab('test-cases')}
                 icon={<FlaskConical className="h-3.5 w-3.5" />}
                 label="Test Cases"
@@ -1034,7 +840,7 @@ export function WorkItemDetails({
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            {activeTab === 'comments' && (
+            {effectiveTab === 'comments' && (
               <WorkItemComments
                 comments={comments}
                 isLoading={isLoadingComments}
@@ -1061,7 +867,7 @@ export function WorkItemDetails({
               />
             )}
 
-            {activeTab === 'history' && (
+            {effectiveTab === 'history' && (
               <WorkItemHistory
                 history={history}
                 isLoading={isLoadingHistory}
@@ -1072,17 +878,18 @@ export function WorkItemDetails({
               />
             )}
 
-            {activeTab === 'test-cases' && (
+            {effectiveTab === 'test-cases' && (
               <div className="flex flex-col gap-2">
                 {isLoadingTestCases ? (
                   <p className="text-ink-3 text-sm">Loading test cases...</p>
                 ) : (
                   relatedTestCases.map((tc) => (
-                    <ExpandableTestCase
+                    <WorkItemExpandableTestCase
                       key={tc.id}
                       testCase={tc}
                       providerId={providerId ?? undefined}
-                    />
+                      variant="comfortable"
+                      />
                   ))
                 )}
               </div>
@@ -1326,12 +1133,12 @@ function LinkedWorkItemChip({
   onOpen: () => void;
 }) {
   const title = workItem
-    ? `#${workItem.id} ${workItem.fields.title}`
+    ? `#${workItem.id} ${getTitle(workItem)}`
     : `#${workItemId}`;
   const content = (
     <>
       {workItem ? (
-        <WorkItemTypeIcon type={workItem.fields.workItemType} size="sm" />
+        <WorkItemTypeIcon type={getWorkItemType(workItem)} size="md" />
       ) : isLoading ? (
         <Loader2 className="text-ink-3 h-3.5 w-3.5 shrink-0 animate-spin" />
       ) : (
@@ -1341,7 +1148,7 @@ function LinkedWorkItemChip({
         #{workItemId}
       </span>
       {workItem && (
-        <span className="min-w-0 truncate">{workItem.fields.title}</span>
+        <span className="min-w-0 truncate">{getTitle(workItem)}</span>
       )}
     </>
   );
@@ -1444,136 +1251,4 @@ function LinkedDetailModal({
   }
 
   return null;
-}
-
-function ExpandableTestCase({
-  testCase,
-  providerId,
-}: {
-  testCase: AzureDevOpsWorkItem;
-  providerId?: string;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const description = testCase.fields.description || testCase.fields.reproSteps;
-  const hasSteps = testCase.testSteps && testCase.testSteps.length > 0;
-  const hasContent = !!description || hasSteps;
-
-  return (
-    <div
-      className="rounded-md border"
-      style={{
-        borderColor: 'oklch(1 0 0 / 0.06)',
-        background: 'oklch(1 0 0 / 0.02)',
-      }}
-    >
-      <button
-        type="button"
-        className="flex w-full items-center gap-2.5 px-3 py-2 text-left"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <ChevronRight
-          className={`text-ink-3 h-3 w-3 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
-        />
-        <FlaskConical className="h-3.5 w-3.5 shrink-0 text-purple-400" />
-        <span className="text-ink-2 text-xs font-medium">#{testCase.id}</span>
-        <span className="text-ink-1 min-w-0 truncate text-sm">
-          {testCase.fields.title}
-        </span>
-        <span className="text-ink-3 ml-auto shrink-0 text-xs">
-          {testCase.fields.state}
-        </span>
-      </button>
-      {expanded && (
-        <div
-          className="border-t px-3 py-2"
-          style={{ borderColor: 'oklch(1 0 0 / 0.06)' }}
-        >
-          {description && (
-            <AzureHtmlContent
-              html={description}
-              providerId={providerId}
-              className="text-ink-2 text-sm"
-            />
-          )}
-          {hasSteps && (
-            <div className="mt-1">
-              {testCase.testSteps!.map((step, i) => (
-                <div
-                  key={i}
-                  className="border-b py-2 last:border-b-0"
-                  style={{ borderColor: 'oklch(1 0 0 / 0.04)' }}
-                >
-                  <div className="flex gap-2">
-                    <span className="text-ink-3 w-5 shrink-0 text-xs">
-                      {i + 1}.
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <AzureHtmlContent
-                        html={step.action}
-                        providerId={providerId}
-                        className="text-ink-1 text-sm"
-                      />
-                      {step.expectedResult && (
-                        <div className="text-ink-3 mt-0.5">
-                          <span className="text-xs font-medium">
-                            Expected:{' '}
-                          </span>
-                          <AzureHtmlContent
-                            html={step.expectedResult}
-                            providerId={providerId}
-                            className="text-ink-3 inline text-sm"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          {!hasContent && (
-            <p className="text-ink-3 text-sm italic">No description.</p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function FeedTabButton({
-  active,
-  onClick,
-  icon,
-  label,
-  count,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: ReactNode;
-  label: string;
-  count: number;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
-        active
-          ? 'border-accent-1 text-ink-1'
-          : 'text-ink-3 hover:text-ink-2 border-transparent'
-      }`}
-    >
-      {icon}
-      {label}
-      {count > 0 && (
-        <span
-          className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] ${
-            active ? 'bg-accent-1/10 text-accent-1' : 'bg-ink-4/20 text-ink-3'
-          }`}
-        >
-          {count}
-        </span>
-      )}
-    </button>
-  );
 }

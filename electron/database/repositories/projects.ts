@@ -4,6 +4,10 @@ import {
   isMobilePreviewProjectConfig,
 } from '@shared/types';
 import {
+  isWorkItemDisplayConfig,
+  type WorkItemDisplayConfig,
+} from '@shared/work-item-display-config-types';
+import {
   isWorkItemTitleParserSetting,
   type WorkItemTitleParserSetting,
 } from '@shared/work-item-title-parser-types';
@@ -64,6 +68,43 @@ export function serializeWorkItemTitleParserUpdate(
     : { workItemTitleParser: serializeWorkItemTitleParser(setting) };
 }
 
+export function parseWorkItemDisplayConfig(
+  value: string | null,
+): WorkItemDisplayConfig | null {
+  if (value === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (isWorkItemDisplayConfig(parsed)) return parsed;
+    console.warn(
+      '[projects] Ignoring invalid workItemDisplayConfig — falling back to the default layout',
+    );
+    return null;
+  } catch {
+    console.warn(
+      '[projects] Ignoring malformed workItemDisplayConfig JSON — falling back to the default layout',
+    );
+    return null;
+  }
+}
+
+export function serializeWorkItemDisplayConfig(
+  config: WorkItemDisplayConfig | null,
+): string | null {
+  if (config === null) return null;
+  if (!isWorkItemDisplayConfig(config)) {
+    throw new TypeError('Invalid work item display config');
+  }
+  return JSON.stringify(config);
+}
+
+export function serializeWorkItemDisplayConfigUpdate(
+  config: WorkItemDisplayConfig | null | undefined,
+): { workItemDisplayConfig?: string | null } {
+  return config === undefined
+    ? {}
+    : { workItemDisplayConfig: serializeWorkItemDisplayConfig(config) };
+}
+
 function parseProjectRow(row: ProjectRow) {
   let aiSkillSlots = null;
   if (row.aiSkillSlots) {
@@ -75,6 +116,9 @@ function parseProjectRow(row: ProjectRow) {
     }
   }
   const workItemTitleParser = parseWorkItemTitleParser(row.workItemTitleParser);
+  const workItemDisplayConfig = parseWorkItemDisplayConfig(
+    row.workItemDisplayConfig,
+  );
   let protectedBranches: string[] = [];
   if (row.protectedBranches) {
     try {
@@ -123,6 +167,7 @@ function parseProjectRow(row: ProjectRow) {
     aiSkillSlots,
     mobilePreviewConfig,
     workItemTitleParser,
+    workItemDisplayConfig,
     protectedBranches,
     favoriteBranches,
   };
@@ -177,6 +222,7 @@ export const ProjectRepository = {
       aiSkillSlots,
       mobilePreviewConfig,
       workItemTitleParser,
+      workItemDisplayConfig,
       protectedBranches,
       favoriteBranches,
       ...rest
@@ -201,6 +247,9 @@ export const ProjectRepository = {
         workItemTitleParser: serializeWorkItemTitleParser(
           workItemTitleParser ?? null,
         ),
+        workItemDisplayConfig: serializeWorkItemDisplayConfig(
+          workItemDisplayConfig ?? null,
+        ),
         protectedBranches: sanitizeBranchList(protectedBranches),
         favoriteBranches: sanitizeBranchList(favoriteBranches),
       })
@@ -222,6 +271,7 @@ export const ProjectRepository = {
       aiSkillSlots,
       mobilePreviewConfig,
       workItemTitleParser,
+      workItemDisplayConfig,
       protectedBranches,
       favoriteBranches,
       ...rest
@@ -257,6 +307,7 @@ export const ProjectRepository = {
             : null,
         }),
         ...serializeWorkItemTitleParserUpdate(workItemTitleParser),
+        ...serializeWorkItemDisplayConfigUpdate(workItemDisplayConfig),
         ...(protectedBranches !== undefined && {
           protectedBranches: sanitizeBranchList(protectedBranches),
         }),

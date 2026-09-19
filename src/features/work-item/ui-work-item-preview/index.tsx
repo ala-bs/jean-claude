@@ -1,15 +1,33 @@
 import {
-  ChevronDown,
   ChevronRight,
   ExternalLink,
   FileText,
   FlaskConical,
   History,
   Link2,
-  Loader2,
   MessagesSquare,
   RefreshCw,
 } from 'lucide-react';
+import {
+  FIELD_ASSIGNED_TO,
+  FIELD_BOARD_COLUMN,
+  FIELD_ITERATION_PATH,
+  FIELD_PRIORITY,
+  FIELD_STATE,
+  FIELD_STORY_POINTS,
+  FIELD_TAGS,
+  getAcceptanceCriteriaHtml,
+  getAssignee,
+  getDescriptionHtml,
+  getIterationPath,
+  getPriority,
+  getReproStepsHtml,
+  getState,
+  getStoryPoints,
+  getStringField,
+  getTitle,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
 import {
   memo,
   type ReactNode,
@@ -25,20 +43,16 @@ import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-
 
 
 import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
-import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
-import { getAssigneeDropdownOptions } from '@/lib/work-item-assignee-options';
-import { getOwnerColor } from '@/features/work-item/utils-owner-color';
 
-const EMPTY_STRING_ARRAY: string[] = [];
 import {
   useAddWorkItemComment,
   useCurrentAzureUser,
   useRelatedTestCases,
   useUpdateWorkItemComment,
   useUpdateWorkItemField,
-  useUpdateWorkItemState,
   useWorkItemComments,
   useWorkItemHistory,
+  useWorkItemOwners,
   useWorkItemsByIds,
   useWorkItemStates,
 } from '@/hooks/use-work-items';
@@ -49,7 +63,6 @@ import { useWorkItemModalStore } from '@/stores/work-item-modal';
 import { Kbd } from '@/common/ui/kbd';
 import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
-import { UserAvatar } from '@/common/ui/user-avatar';
 import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
 import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
 
@@ -57,15 +70,27 @@ import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-gene
 
 import {
   addOpenedCommentsWorkItemId,
-  beginMetadataEdit,
-  beginMetadataSave,
-  cancelMetadataEdit,
-  finishMetadataSave,
   getWorkItemPreviewQueryPolicy,
 } from './query-policy';
+import { useProject } from '@/hooks/use-projects';
+import { useWorkItemFieldMetadataMap } from '@/hooks/use-work-items';
+import {
+  collectExtraFieldRefNames,
+  resolveDetailLayout,
+} from '@shared/work-item-display-config-types';
+import { WorkItemFieldRows } from '../ui-work-item-field-rows';
 import { WorkItemBoardColumnEditor } from '../ui-work-item-board-column-editor';
 import { WorkItemComments } from '../ui-work-item-comments';
 import { WorkItemHistory } from '../ui-work-item-history';
+import { WorkItemExpandableTestCase } from '../ui-work-item-expandable-test-case';
+import {
+  getOwnerOptions,
+  WorkItemOwnerEditor,
+} from '../ui-work-item-field-editors/work-item-owner-editor';
+import { WorkItemIterationEditor } from '../ui-work-item-field-editors/work-item-iteration-editor';
+import { WorkItemMetadataValue } from '../ui-work-item-field-editors/work-item-metadata-value';
+import { WorkItemStateEditor } from '../ui-work-item-field-editors/work-item-state-editor';
+import { WorkItemTabButton } from '../ui-work-item-tab-button';
 import { WorkItemTagEditor } from '../ui-work-item-tag-editor';
 import { WorkItemTypeIcon } from '../ui-work-item-shared';
 type DetailsTab = 'content' | 'comments' | 'history' | 'test-cases';
@@ -85,7 +110,6 @@ export const WorkItemPreview = memo(function WorkItemPreview({
   showCommentsAside = false,
   readOnly = false,
   editableMetadata = false,
-  assigneeOptions = EMPTY_STRING_ARRAY,
   iterationOptions = [],
   boardColumns = [],
   tagOptions = [],
@@ -105,8 +129,12 @@ export const WorkItemPreview = memo(function WorkItemPreview({
   showCommentsAside?: boolean;
   readOnly?: boolean;
   editableMetadata?: boolean;
-  assigneeOptions?: string[];
-  iterationOptions?: Array<{ value: string; label: string }>;
+  iterationOptions?: Array<{
+    value: string;
+    label: string;
+    /** Marks the active sprint so the shared dropdown can flag it. */
+    isCurrent?: boolean;
+  }>;
   boardColumns?: AzureDevOpsBoardColumn[];
   tagOptions?: string[];
   showRelatedWorkItems?: boolean;
@@ -122,9 +150,11 @@ export const WorkItemPreview = memo(function WorkItemPreview({
   const [openedCommentsWorkItemIds, setOpenedCommentsWorkItemIds] = useState(
     () => new Set<number>(),
   );
-  const [currentState, setCurrentState] = useState(
-    workItem?.fields.state ?? '',
-  );
+  const workItemState = workItem ? getState(workItem) : '';
+  const assigneeName = workItem ? getAssignee(workItem)?.displayName : undefined;
+  const assigneeUniqueName = workItem
+    ? getAssignee(workItem)?.uniqueName
+    : undefined;
   const {
     width: commentsPaneWidth,
     setWidth: setCommentsPaneWidth,
@@ -133,7 +163,6 @@ export const WorkItemPreview = memo(function WorkItemPreview({
   } = useWorkItemCommentsPaneWidth();
   const [containerWidth, setContainerWidth] = useState(() => window.innerWidth);
   const commentsPaneRef = useRef<HTMLDivElement>(null);
-  const workItemIdRef = useRef(workItemId);
   const contentPaneRef = useRef<HTMLDivElement>(null);
   // The full details modal renders its own find bar on top of this pane; only
   // one ⌘F owner may be active at a time (bindings are LIFO, not scoped).
@@ -157,11 +186,31 @@ export const WorkItemPreview = memo(function WorkItemPreview({
     onWidthChange: setCommentsPaneWidth,
     resizeTargetRef: commentsPaneRef,
   });
+  // Per-project display config. A `null` config resolves to each surface's own
+  // hardcoded default, so an unconfigured project renders exactly as before.
+  // Resolved here, above the `!workItem` bail-out, because the tab visibility
+  // it yields also has to gate the comment/history queries below.
+  const { data: project } = useProject(projectId ?? '');
+  const displayConfig = project?.workItemDisplayConfig ?? null;
+  // The preview has two variants with different hardcoded defaults, so each
+  // asks for its own surface (decision 24).
+  const detailLayout = resolveDetailLayout(
+    displayConfig,
+    workItem ? getWorkItemType(workItem) : '',
+    isEditorial ? 'preview-editorial' : 'preview-readonly',
+  );
+  // Unknown ids stay visible: a config that predates a tab must not hide it.
+  const isTabVisible = (tabId: string) =>
+    detailLayout.tabs.find((tab) => tab.id === tabId)?.visible !== false;
+  // The aside is the comments tab in another layout, so the config has to gate
+  // it too — otherwise hiding Comments removes the tab but leaves the aside
+  // rendering (and fetching) the very comments it hid.
+  const showCommentsAsidePane = showCommentsAside && isTabVisible('comments');
   const queryPolicy = getWorkItemPreviewQueryPolicy({
     variant,
-    showCommentsAside,
-    commentsTabActive: activeTab === 'comments',
-    historyTabActive: activeTab === 'history',
+    showCommentsAside: showCommentsAsidePane,
+    commentsTabActive: activeTab === 'comments' && isTabVisible('comments'),
+    historyTabActive: activeTab === 'history' && isTabVisible('history'),
     workItemId,
     openedCommentsWorkItemIds,
   });
@@ -198,27 +247,46 @@ export const WorkItemPreview = memo(function WorkItemPreview({
       workItemId,
       enabled: queryPolicy.relatedTestCases,
     });
-  const { data: availableStates = [], isLoading: isLoadingStates } =
+  const { data: availableStates = [] } =
     useWorkItemStates({
       providerId: providerId ?? null,
       projectName: projectName ?? null,
-      workItemType: workItem?.fields.workItemType ?? null,
+      workItemType: workItem ? getWorkItemType(workItem) : null,
     });
   const { data: currentAzureUser } = useCurrentAzureUser(providerId ?? null);
-  // Board/preview assignee lists are display-name based (unlike the details
-  // panel, which keys owners by unique name) — keep the two value spaces apart.
+  // Shared owner option model (decision 28): keyed by uniqueName/email with an
+  // explicit "Unassigned" entry. Sourced from the owners query, not from the
+  // display-name `assigneeOptions` prop — mixing the two value spaces listed
+  // the current owner twice and made the display-name copy write a display
+  // name into System.AssignedTo.
+  const { data: workItemOwners } = useWorkItemOwners({
+    providerId: providerId ?? null,
+    projectName: projectName ?? null,
+  });
   const ownerDropdownOptions = useMemo(
     () =>
-      getAssigneeDropdownOptions({
-        currentUserName: currentAzureUser?.displayName,
-        assignedTo: workItem?.fields.assignedTo,
-        assigneeOptions,
+      getOwnerOptions(workItemOwners ?? [], assigneeName, assigneeUniqueName, {
+        displayName: currentAzureUser?.displayName,
+        uniqueName: currentAzureUser?.emailAddress,
       }),
-    [currentAzureUser?.displayName, workItem?.fields.assignedTo, assigneeOptions],
+    [
+      workItemOwners,
+      assigneeName,
+      assigneeUniqueName,
+      currentAzureUser?.displayName,
+      currentAzureUser?.emailAddress,
+    ],
+  );
+  const fieldMetadata = useWorkItemFieldMetadataMap({
+    providerId,
+    azureProjectId: workItemProjectId,
+  });
+  const extraFieldRefNames = useMemo(
+    () => collectExtraFieldRefNames(displayConfig),
+    [displayConfig],
   );
   const addComment = useAddWorkItemComment();
   const updateComment = useUpdateWorkItemComment();
-  const updateState = useUpdateWorkItemState();
   const updateField = useUpdateWorkItemField();
   const relatedIds = showRelatedWorkItems
     ? [
@@ -236,6 +304,7 @@ export const WorkItemPreview = memo(function WorkItemPreview({
       providerId: providerId ?? null,
       projectName: projectName ?? null,
       workItemIds: [...new Set(relatedIds)],
+      extraFieldRefNames,
     });
 
   const queryClient = useQueryClient();
@@ -282,11 +351,6 @@ export const WorkItemPreview = memo(function WorkItemPreview({
   }, [activeTab, workItemId]);
 
   useEffect(() => {
-    startTransition(() => setCurrentState(workItem?.fields.state ?? ''));
-    workItemIdRef.current = workItem?.id ?? null;
-  }, [workItem?.id, workItem?.fields.state]);
-
-  useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
@@ -299,6 +363,20 @@ export const WorkItemPreview = memo(function WorkItemPreview({
     return () => resizeObserver.disconnect();
   }, [containerRef]);
 
+  // Must stay above the `!workItem` bail-out below: a hook called after an
+  // early return changes the hook count between renders, and this component
+  // legitimately renders with a null work item (the work-activity overlay, and
+  // a 404 from getWorkItemById both produce one).
+  const iterationEditorOptions = useMemo(
+    () =>
+      iterationOptions.map((iteration) => ({
+        name: iteration.label,
+        path: iteration.value,
+        isCurrent: iteration.isCurrent ?? false,
+      })),
+    [iterationOptions],
+  );
+
   if (!workItem) {
     return (
       <div className="flex h-full min-h-37.5 items-center justify-center px-6">
@@ -307,11 +385,38 @@ export const WorkItemPreview = memo(function WorkItemPreview({
     );
   }
 
-  const { id, fields } = workItem;
-  const { workItemType, assignedTo } = fields;
-  const hasReproSteps = workItemType === 'Bug' && !!fields.reproSteps;
-  const hasContent = !!fields.description || !!fields.acceptanceCriteria || hasReproSteps;
-  const showTestCases = hasTestCases && !isEditorial;
+  const { id } = workItem;
+  const workItemType = getWorkItemType(workItem);
+  const assignedTo = assigneeName;
+  const title = getTitle(workItem);
+  const description = isTabVisible('description')
+    ? getDescriptionHtml(workItem)
+    : undefined;
+  const acceptanceCriteria = isTabVisible('acceptanceCriteria')
+    ? getAcceptanceCriteriaHtml(workItem)
+    : undefined;
+  const reproSteps = isTabVisible('reproSteps')
+    ? getReproStepsHtml(workItem)
+    : undefined;
+  const iterationPath = getIterationPath(workItem);
+  const storyPoints = getStoryPoints(workItem);
+  const priority = getPriority(workItem);
+  const tags = getStringField(workItem, FIELD_TAGS);
+  const hasReproSteps = workItemType === 'Bug' && !!reproSteps;
+  const hasContent = !!description || !!acceptanceCriteria || hasReproSteps;
+  const showCommentsTab = !showCommentsAsidePane && isTabVisible('comments');
+  const showHistoryTab = isTabVisible('history');
+  const showTestCases =
+    hasTestCases && !isEditorial && isTabVisible('testCases');
+  // A tab the config hides must not stay selected — derived rather than
+  // corrected in an effect, because everything here runs after the `!workItem`
+  // bail-out and a hook below it would change the render's hook count.
+  const effectiveTab =
+    (activeTab === 'comments' && !showCommentsTab) ||
+    (activeTab === 'history' && !showHistoryTab) ||
+    (activeTab === 'test-cases' && !showTestCases)
+      ? 'content'
+      : activeTab;
   const summaryRequest = canShowWorkItemSummary({
     projectId,
     providerId,
@@ -346,14 +451,14 @@ export const WorkItemPreview = memo(function WorkItemPreview({
             <div className="mt-1 flex items-start gap-1.5">
               {headerLeading}
               {canEditMetadata && providerId ? (
-                <EditableMetadataValue
-                  key={`${id}:title:${fields.title}`}
-                  value={fields.title}
+                <WorkItemMetadataValue
+                  key={`${id}:title:${title}`}
+                  value={title}
                   label="Title"
                   className="text-ink-0 block min-w-0 flex-1 text-left text-sm font-semibold leading-snug"
                   displayValue={parserSetting ? (
                     <ParsedWorkItemTitle
-                      title={fields.title}
+                      title={title}
                       parserSetting={parserSetting}
                       titleClassName="text-ink-0 text-sm font-semibold leading-snug"
                       titleElement="span"
@@ -366,11 +471,11 @@ export const WorkItemPreview = memo(function WorkItemPreview({
                 />
               ) : (
                 parserSetting ? <div className="min-w-0 flex-1"><ParsedWorkItemTitle
-                  title={fields.title}
+                  title={title}
                   parserSetting={parserSetting}
                   titleClassName="text-ink-0 text-sm font-medium"
                   titleElement="h3"
-                /></div> : <h3 className="text-ink-0 min-w-0 flex-1 text-sm font-medium">{fields.title}</h3>
+                /></div> : <h3 className="text-ink-0 min-w-0 flex-1 text-sm font-medium">{title}</h3>
               )}
             </div>
           </div>
@@ -394,116 +499,130 @@ export const WorkItemPreview = memo(function WorkItemPreview({
         <div className="min-w-0">
           {isEditorial && (
             <div className="mt-2 space-y-2">
-              <div className="flex flex-wrap gap-2">
-                <MetadataDropdown
-                  key={`${id}:owner`}
-                  label="Owner"
-                  value={assignedTo ?? ''}
-                  emptyLabel="Unassigned"
-                  options={ownerDropdownOptions}
-                  colorizeOwners
-                  disabled={!canEditMetadata || !providerId}
-                  onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.AssignedTo', value })}
-                />
-                <MetadataDropdown
-                  key={`${id}:state`}
-                  label="State"
-                  value={currentState}
-                  options={[...new Set([currentState, ...availableStates.map((state) => state.name)])]}
-                  disabled={!canEditMetadata || !providerId}
-                  onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.State', value })}
-                />
-                {canEditMetadata && providerId && workItemProjectId && projectName && boardColumns.length > 0 && (
-                  <WorkItemBoardColumnEditor
-                    key={`${id}:column`}
-                    workItem={workItem}
-                    providerId={providerId}
-                    projectId={workItemProjectId}
-                    projectName={projectName}
-                    columns={boardColumns}
-                  />
-                )}
-                {fields.iterationPath && (
-                  <MetadataDropdown
-                    key={`${id}:iteration`}
-                    label="Iteration"
-                    value={fields.iterationPath}
-                    options={[
-                      fields.iterationPath,
-                      ...iterationOptions
-                        .map((iteration) => iteration.value)
-                        .filter((path) => path !== fields.iterationPath),
-                    ]}
-                    optionLabels={{
-                      [fields.iterationPath]:
-                        fields.iterationPath.split(/[\\/]/).at(-1) ?? fields.iterationPath,
-                      ...Object.fromEntries(
-                        iterationOptions.map((iteration) => [iteration.value, iteration.label]),
-                      ),
-                    }}
-                    disabled={!canEditMetadata || !providerId}
-                    onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.IterationPath', value })}
-                  />
-                )}
-                {canEditMetadata && providerId && (
-                  <div className="border-glass-border bg-glass-light text-ink-1 focus-within:border-acc-line flex min-h-8 items-center gap-2 rounded-md border px-3 py-1 text-xs transition-colors">
-                    <span className="text-ink-3">Story points</span>
-                    <EditableMetadataValue
-                      key={`${id}:story-points:${fields.storyPoints ?? ''}`}
-                      value={String(fields.storyPoints ?? '')}
-                      label="Story points"
-                      emptyLabel="None"
-                      className="hover:text-acc-ink"
-                      validate={(value) => {
-                        if (value === '') return null;
-                        const points = Number(value);
-                        return Number.isInteger(points) && points >= 0
-                          ? null
-                          : 'Story points must be a non-negative integer';
-                      }}
-                      onSave={(value) => updateField.mutateAsync({
-                        providerId,
-                        workItemId: id,
-                        field: 'Microsoft.VSTS.Scheduling.StoryPoints',
-                        value: value === '' ? null : Number(value),
-                      })}
+              {/* Config-driven metadata region. Each row hosts the panel's own
+                  inline editor, so ordering/visibility is configurable without
+                  changing any editing behaviour (decision 22). */}
+              <WorkItemFieldRows
+                workItem={workItem}
+                rows={detailLayout.rows}
+                metadata={fieldMetadata}
+                variant="detail"
+                containerClassName="flex flex-wrap gap-2"
+                layout="inline"
+                editors={{
+                  [FIELD_ASSIGNED_TO]: () =>
+                    providerId ? (
+                      <WorkItemOwnerEditor
+                        key={`${id}:owner`}
+                        owner={assignedTo}
+                        ownerValue={assigneeUniqueName}
+                        options={ownerDropdownOptions}
+                        disabled={!canEditMetadata}
+                        error={null}
+                        onRetry={() => {}}
+                        providerId={providerId}
+                        workItemId={id}
+                      />
+                    ) : null,
+                  [FIELD_STATE]: () => (
+                    <WorkItemStateEditor
+                      key={`${id}:state`}
+                      state={workItemState}
+                      states={availableStates.map((state) => state.name)}
+                      providerId={canEditMetadata ? providerId : undefined}
+                      workItemId={id}
                     />
-                  </div>
-                )}
-                {canEditMetadata && providerId && (
-                  <div className="border-glass-border bg-glass-light text-ink-1 focus-within:border-acc-line flex min-h-8 items-center gap-2 rounded-md border px-3 py-1 text-xs transition-colors">
-                    <span className="text-ink-3">Priority</span>
-                    <EditableMetadataValue
-                      key={`${id}:priority:${fields.priority ?? ''}`}
-                      value={String(fields.priority ?? '')}
-                      label="Priority"
-                      emptyLabel="None"
-                      className="hover:text-acc-ink"
-                      validate={(value) => {
-                        const priority = Number(value);
-                        return Number.isInteger(priority) && priority >= 1 && priority <= 4
-                          ? null
-                          : 'Priority must be an integer from 1 to 4';
-                      }}
-                      onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'Microsoft.VSTS.Common.Priority', value: Number(value) })}
-                    />
-                  </div>
-                )}
-              </div>
-              {providerId && canEditMetadata && (
-                <WorkItemTagEditor
-                  key={`${id}:tags:${fields.tags ?? ''}`}
-                  value={fields.tags ?? ''}
-                  suggestions={tagOptions}
-                  onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Tags', value })}
-                />
-              )}
+                  ),
+                  [FIELD_BOARD_COLUMN]: () =>
+                    canEditMetadata && providerId && workItemProjectId && projectName && boardColumns.length > 0 ? (
+                      <WorkItemBoardColumnEditor
+                        key={`${id}:column`}
+                        workItem={workItem}
+                        providerId={providerId}
+                        projectId={workItemProjectId}
+                        projectName={projectName}
+                        columns={boardColumns}
+                      />
+                    ) : null,
+                  // Decision 30: shown even when the item has no iteration.
+                  [FIELD_ITERATION_PATH]: () =>
+                    providerId ? (
+                      <WorkItemIterationEditor
+                        key={`${id}:iteration`}
+                        iterationPath={iterationPath}
+                        options={iterationEditorOptions}
+                        disabled={!canEditMetadata}
+                        providerId={providerId}
+                        workItemId={id}
+                      />
+                    ) : null,
+                  [FIELD_STORY_POINTS]: () =>
+                    canEditMetadata && providerId ? (
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <span className="text-ink-3">Story points:</span>
+                        <WorkItemMetadataValue
+                          key={`${id}:story-points:${storyPoints ?? ''}`}
+                          value={String(storyPoints ?? '')}
+                          label="Story points"
+                          emptyLabel="None"
+                          className="hover:text-acc-ink"
+                          validate={(value) => {
+                            if (value === '') return null;
+                            const points = Number(value);
+                            return Number.isInteger(points) && points >= 0
+                              ? null
+                              : 'Story points must be a non-negative integer';
+                          }}
+                          onSave={(value) => updateField.mutateAsync({
+                            providerId,
+                            workItemId: id,
+                            field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+                            value: value === '' ? null : Number(value),
+                          })}
+                        />
+                      </div>
+                    ) : null,
+                  [FIELD_PRIORITY]: () =>
+                    canEditMetadata && providerId ? (
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <span className="text-ink-3">Priority:</span>
+                        <WorkItemMetadataValue
+                          key={`${id}:priority:${priority ?? ''}`}
+                          value={String(priority ?? '')}
+                          label="Priority"
+                          emptyLabel="None"
+                          className="hover:text-acc-ink"
+                          validate={(value) => {
+                            const priority = Number(value);
+                            return Number.isInteger(priority) && priority >= 1 && priority <= 4
+                              ? null
+                              : 'Priority must be an integer from 1 to 4';
+                          }}
+                          onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'Microsoft.VSTS.Common.Priority', value: Number(value) })}
+                        />
+                      </div>
+                    ) : null,
+                  // `w-full` reproduces the tag editor's own line below the
+                  // wrapping metadata row.
+                  [FIELD_TAGS]: () =>
+                    providerId && canEditMetadata ? (
+                      <div className="w-full">
+                        <WorkItemTagEditor
+                          key={`${id}:tags:${tags ?? ''}`}
+                          value={tags ?? ''}
+                          suggestions={tagOptions}
+                          onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Tags', value })}
+                        />
+                      </div>
+                    ) : null,
+                }}
+              />
             </div>
           )}
           {!isEditorial && providerId && !canEditMetadata && (
             <WorkItemTagEditor
-              key={`${id}:tags:${fields.tags ?? ''}`}
-              value={fields.tags ?? ''}
+              key={`${id}:tags:${tags ?? ''}`}
+              value={tags ?? ''}
               suggestions={tagOptions}
               readOnly
               onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Tags', value })}
@@ -512,15 +631,17 @@ export const WorkItemPreview = memo(function WorkItemPreview({
         </div>
       </div>}
        <div className={isEditorial ? 'border-line flex gap-1 border-b px-3 pt-2' : 'border-glass-border flex gap-0 border-b'}>
-        <TabButton
-          active={activeTab === 'content'}
+        <WorkItemTabButton
+          dense
+          active={effectiveTab === 'content'}
           onClick={() => setActiveTab('content')}
           icon={<FileText className="h-3.5 w-3.5" />}
           label="Content"
         />
-        {!showCommentsAside && (
-          <TabButton
-            active={activeTab === 'comments'}
+        {showCommentsTab && (
+          <WorkItemTabButton
+            dense
+            active={effectiveTab === 'comments'}
             onClick={() => {
               setOpenedCommentsWorkItemIds((openedIds) =>
                 addOpenedCommentsWorkItemId(openedIds, id),
@@ -536,16 +657,20 @@ export const WorkItemPreview = memo(function WorkItemPreview({
             }
           />
         )}
-        <TabButton
-          active={activeTab === 'history'}
-          onClick={() => setActiveTab('history')}
-          icon={<History className="h-3.5 w-3.5" />}
-          label="History"
-          count={history.length}
-        />
+        {showHistoryTab && (
+          <WorkItemTabButton
+            dense
+            active={effectiveTab === 'history'}
+            onClick={() => setActiveTab('history')}
+            icon={<History className="h-3.5 w-3.5" />}
+            label="History"
+            count={history.length}
+          />
+        )}
         {showTestCases && (
-          <TabButton
-            active={activeTab === 'test-cases'}
+          <WorkItemTabButton
+            dense
+            active={effectiveTab === 'test-cases'}
             onClick={() => setActiveTab('test-cases')}
             icon={<FlaskConical className="h-3.5 w-3.5" />}
             label="Test Cases"
@@ -574,7 +699,7 @@ export const WorkItemPreview = memo(function WorkItemPreview({
         <div
           ref={containerRef}
           className={`${isEditorial ? 'grid px-4 py-3' : 'mt-3 grid'} min-h-0 flex-1 gap-0 overflow-hidden ${
-           showCommentsAside
+           showCommentsAsidePane
              ? 'xl:grid-cols-[minmax(0,1fr)_4px_auto]'
              : 'grid-cols-1'
          } ${isDragging ? 'select-none' : ''}`}
@@ -602,58 +727,61 @@ export const WorkItemPreview = memo(function WorkItemPreview({
             ref={contentPaneRef}
             className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto xl:pr-4"
           >
-          {activeTab === 'content' && (
+          {effectiveTab === 'content' && (
             <div>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-                {!isEditorial && <>
-                <div className="flex items-center gap-1">
-                  <span className="text-ink-3">Assigned:</span>
-                  {canEditMetadata && providerId ? <EditableMetadataValue key={`${id}:assignee:${assignedTo ?? ''}`} value={assignedTo ?? ''} label="Assignee" emptyLabel="Unassigned" onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.AssignedTo', value })} /> : <span className="text-ink-1">{assignedTo ?? 'Unassigned'}</span>}
-                </div>
-
-                <div className="flex items-center gap-1">
-                  <span className="text-ink-3">State:</span>
-                  {providerId && canEditMetadata ? (
-                    <EditableMetadataValue
-                      key={`${id}:state:${currentState}`}
-                      value={currentState}
-                      label="State"
-                      options={availableStates.map((state) => state.name)}
-                      onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.State', value })}
-                    />
-                  ) : providerId && !readOnly ? (
-                    <EditableStateValue
-                      state={currentState}
-                      states={availableStates.map((s) => s.name)}
-                      isPending={updateState.isPending}
-                      isLoading={isLoadingStates}
-                      onChange={(nextState) => {
-                        const previousState = currentState;
-                        setCurrentState(nextState);
-                        updateState.mutate(
-                          { providerId, workItemId: id, state: nextState },
-                          {
-                            onError: () => {
-                              if (workItemIdRef.current === id) {
-                                setCurrentState(previousState);
-                              }
-                            },
-                          },
-                        );
-                      }}
-                    />
-                  ) : (
-                    <span className="text-ink-1">{currentState}</span>
-                  )}
-                </div>
-                </>}
-                {!isEditorial && canEditMetadata && providerId && (
-                  <>
-                    <div className="flex items-center gap-1"><span className="text-ink-3">Priority:</span><EditableMetadataValue key={`${id}:priority:${fields.priority ?? ''}`} value={String(fields.priority ?? '')} label="Priority" emptyLabel="None" validate={(value) => { const priority = Number(value); return Number.isInteger(priority) && priority >= 1 && priority <= 4 ? null : 'Priority must be an integer from 1 to 4'; }} onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'Microsoft.VSTS.Common.Priority', value: Number(value) })} /></div>
-                    <WorkItemTagEditor key={`${id}:tags:${fields.tags ?? ''}`} value={fields.tags ?? ''} suggestions={tagOptions} onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Tags', value })} />
-                  </>
-                )}
-              </div>
+              {isEditorial ? (
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs" />
+              ) : (
+                <WorkItemFieldRows
+                  workItem={workItem}
+                  rows={detailLayout.rows}
+                  metadata={fieldMetadata}
+                  variant="detail"
+                  containerClassName="flex flex-wrap gap-x-4 gap-y-1 text-xs"
+                  layout="inline"
+                  editors={{
+                    [FIELD_ASSIGNED_TO]: () =>
+                      canEditMetadata && providerId ? (
+                        <WorkItemOwnerEditor
+                          key={`${id}:assignee`}
+                          owner={assignedTo}
+                          ownerValue={assigneeUniqueName}
+                          options={ownerDropdownOptions}
+                          disabled={false}
+                          error={null}
+                          onRetry={() => {}}
+                          providerId={providerId}
+                          workItemId={id}
+                        />
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <span className="text-ink-3">Assigned:</span>
+                          <span className="text-ink-1">{assignedTo ?? 'Unassigned'}</span>
+                        </div>
+                      ),
+                    [FIELD_STATE]: () => (
+                      <div className="flex items-center gap-1">
+                        <span className="text-ink-3">State:</span>
+                        <WorkItemStateEditor
+                          key={`${id}:state`}
+                          state={workItemState}
+                          states={availableStates.map((state) => state.name)}
+                          providerId={providerId && !readOnly ? providerId : undefined}
+                          workItemId={id}
+                        />
+                      </div>
+                    ),
+                    [FIELD_PRIORITY]: () =>
+                      canEditMetadata && providerId ? (
+                        <div className="flex items-center gap-1"><span className="text-ink-3">Priority:</span><WorkItemMetadataValue key={`${id}:priority:${priority ?? ''}`} value={String(priority ?? '')} label="Priority" emptyLabel="None" validate={(value) => { const priority = Number(value); return Number.isInteger(priority) && priority >= 1 && priority <= 4 ? null : 'Priority must be an integer from 1 to 4'; }} onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'Microsoft.VSTS.Common.Priority', value: Number(value) })} /></div>
+                      ) : null,
+                    [FIELD_TAGS]: () =>
+                      canEditMetadata && providerId ? (
+                        <WorkItemTagEditor key={`${id}:tags:${tags ?? ''}`} value={tags ?? ''} suggestions={tagOptions} onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Tags', value })} />
+                      ) : null,
+                  }}
+                />
+              )}
 
               {showRelatedWorkItems && relatedIds.length > 0 && (
                 <RelatedWorkItems
@@ -669,7 +797,7 @@ export const WorkItemPreview = memo(function WorkItemPreview({
               {summaryRequest && (
                 <WorkItemGeneratedSummary
                   request={summaryRequest}
-                  workItemTitle={fields.title}
+                  workItemTitle={title}
                   className="mt-3"
                 />
               )}
@@ -678,9 +806,9 @@ export const WorkItemPreview = memo(function WorkItemPreview({
                 <div className="border-glass-border my-3 border-t" />
               )}
 
-              {fields.description && (
+              {description && (
                 <AzureHtmlContent
-                  html={fields.description}
+                  html={description}
                   providerId={providerId}
                   className="text-ink-2 text-xs"
                   imageClassName="max-h-72 w-auto object-contain"
@@ -688,13 +816,13 @@ export const WorkItemPreview = memo(function WorkItemPreview({
                 />
               )}
 
-              {fields.acceptanceCriteria && (
-                <div className={fields.description ? 'mt-4' : undefined}>
+              {acceptanceCriteria && (
+                <div className={description ? 'mt-4' : undefined}>
                   <h4 className="text-ink-1 mb-1.5 text-xs font-medium">
                     Acceptance Criteria
                   </h4>
                   <AzureHtmlContent
-                    html={fields.acceptanceCriteria}
+                    html={acceptanceCriteria}
                     providerId={providerId}
                     className="text-ink-2 text-xs"
                     imageClassName="max-h-72 w-auto object-contain"
@@ -706,7 +834,7 @@ export const WorkItemPreview = memo(function WorkItemPreview({
               {hasReproSteps && (
                 <div
                   className={
-                    fields.description || fields.acceptanceCriteria
+                    description || acceptanceCriteria
                       ? 'mt-4'
                       : undefined
                   }
@@ -715,7 +843,7 @@ export const WorkItemPreview = memo(function WorkItemPreview({
                     Repro Steps
                   </h4>
                   <AzureHtmlContent
-                    html={fields.reproSteps!}
+                    html={reproSteps!}
                     providerId={providerId}
                     className="text-ink-2 text-xs"
                     imageClassName="max-h-72 w-auto object-contain"
@@ -731,7 +859,7 @@ export const WorkItemPreview = memo(function WorkItemPreview({
             </div>
           )}
 
-          {activeTab === 'comments' && (
+          {effectiveTab === 'comments' && (
             <WorkItemComments
               comments={comments}
               isLoading={isLoadingComments}
@@ -768,7 +896,7 @@ export const WorkItemPreview = memo(function WorkItemPreview({
             />
           )}
 
-          {activeTab === 'history' && (
+          {effectiveTab === 'history' && (
             <WorkItemHistory
               history={history}
               isLoading={isLoadingHistory}
@@ -777,7 +905,7 @@ export const WorkItemPreview = memo(function WorkItemPreview({
             />
           )}
 
-          {activeTab === 'test-cases' && (
+          {effectiveTab === 'test-cases' && (
             <div className="flex flex-col gap-1 pb-2">
               {relatedTestCasesError ? (
                 <div>
@@ -796,7 +924,7 @@ export const WorkItemPreview = memo(function WorkItemPreview({
                 <p className="text-ink-3 text-xs">Loading test cases...</p>
               ) : (
                 relatedTestCases.map((tc) => (
-                  <ExpandableTestCase
+                  <WorkItemExpandableTestCase
                     key={tc.id}
                     testCase={tc}
                     providerId={providerId}
@@ -808,7 +936,7 @@ export const WorkItemPreview = memo(function WorkItemPreview({
           </div>
         </div>
 
-        {showCommentsAside && (
+        {showCommentsAsidePane && (
           <>
             <div
               role="separator"
@@ -959,7 +1087,7 @@ function RelatedWorkItems({
                   return item ? (
                     parserSetting ? <div key={id} onClick={() => onOpen?.(id)}>
                       <ParsedWorkItemTitle
-                        title={item.fields.title}
+                        title={getTitle(item)}
                         parserSetting={parserSetting}
                         compact
                         className="border-glass-border bg-bg-1/60 hover:bg-glass-medium w-full rounded-md border transition-colors"
@@ -974,10 +1102,10 @@ function RelatedWorkItems({
                           }}
                           className="flex w-full min-w-0 items-center gap-2 px-2.5 py-2 text-left disabled:cursor-default"
                         >
-                          <WorkItemTypeIcon type={item.fields.workItemType} size="sm" />
+                          <WorkItemTypeIcon type={getWorkItemType(item)} size="sm" />
                           <span className="text-ink-3 text-[10px]">#{id}</span>
                            <span className="min-w-0 flex-1">{title}</span>
-                          <span className="text-ink-3 text-[10px]">{item.fields.state}</span>
+                          <span className="text-ink-3 text-[10px]">{getState(item)}</span>
                         </button>}
                       />
                     </div> : <button
@@ -987,10 +1115,10 @@ function RelatedWorkItems({
                       onClick={() => onOpen?.(id)}
                       className="border-glass-border bg-bg-1/60 hover:bg-glass-medium flex w-full min-w-0 items-center gap-2 rounded-md border px-2.5 py-2 text-left transition-colors disabled:cursor-default"
                     >
-                      <WorkItemTypeIcon type={item.fields.workItemType} size="sm" />
+                      <WorkItemTypeIcon type={getWorkItemType(item)} size="sm" />
                       <span className="text-ink-3 text-[10px]">#{id}</span>
-                      <span className="text-ink-1 min-w-0 flex-1 truncate text-xs">{item.fields.title}</span>
-                      <span className="text-ink-3 text-[10px]">{item.fields.state}</span>
+                      <span className="text-ink-1 min-w-0 flex-1 truncate text-xs">{getTitle(item)}</span>
+                      <span className="text-ink-3 text-[10px]">{getState(item)}</span>
                     </button>
                   ) : (
                     <div
@@ -1011,393 +1139,5 @@ function RelatedWorkItems({
         </div>
       )}
     </section>
-  );
-}
-
-function MetadataDropdown({
-  label,
-  value,
-  emptyLabel = label,
-  options,
-  optionLabels = {},
-  colorizeOwners = false,
-  disabled,
-  onSave,
-}: {
-  label: string;
-  value: string;
-  emptyLabel?: string;
-  options: string[];
-  optionLabels?: Record<string, string>;
-  colorizeOwners?: boolean;
-  disabled?: boolean;
-  onSave: (value: string) => Promise<unknown>;
-}) {
-  const dropdownRef = useRef<{ toggle: () => void } | null>(null);
-  const [displayValue, setDisplayValue] = useState(value);
-  const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const syncedValueRef = useRef(value);
-  const lifecycleRef = useRef({
-    generation: 0,
-    cancelled: false,
-    inFlight: false,
-  });
-
-  useEffect(() => {
-    beginMetadataEdit(lifecycleRef.current);
-    syncedValueRef.current = value;
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled) return;
-      setDisplayValue(value);
-      setIsSaving(false);
-      setError(null);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [value]);
-
-  const select = async (nextValue: string) => {
-    dropdownRef.current?.toggle();
-    if (
-      nextValue === displayValue ||
-      (syncedValueRef.current !== value && nextValue === value)
-    ) return;
-    const generation = beginMetadataSave(lifecycleRef.current);
-    if (generation === null) return;
-    const previousValue = displayValue;
-    setDisplayValue(nextValue);
-    setError(null);
-    setIsSaving(true);
-    try {
-      await onSave(nextValue);
-      if (finishMetadataSave(lifecycleRef.current, generation)) {
-        setIsSaving(false);
-      }
-    } catch (saveError) {
-      if (finishMetadataSave(lifecycleRef.current, generation)) {
-        setDisplayValue(previousValue);
-        setError(saveError instanceof Error ? saveError.message : 'Save failed');
-        setIsSaving(false);
-      }
-    }
-  };
-
-  const displayLabel = optionLabels[displayValue] ?? (displayValue || emptyLabel);
-  return (
-    <div className="relative min-w-0">
-      <Dropdown
-        dropdownRef={dropdownRef}
-        className="min-w-52"
-        trigger={
-          <button
-            type="button"
-            disabled={disabled || isSaving || options.length <= 1}
-            className="border-glass-border bg-glass-light hover:bg-glass-medium focus:border-acc-line text-ink-1 flex h-8 min-w-0 items-center gap-2 rounded-md border px-3 text-xs transition-colors focus:outline-none disabled:cursor-default disabled:opacity-50"
-            aria-label={`Edit ${label.toLocaleLowerCase()}`}
-          >
-            <span className="text-ink-3">{label}</span>
-            {colorizeOwners && displayValue && <UserAvatar
-              name={displayValue}
-              color={getOwnerColor(displayValue)}
-            />}
-            <span className="max-w-32 truncate">{displayLabel}</span>
-            {isSaving
-              ? <Loader2 className="text-ink-3 ml-auto h-3 w-3 animate-spin" />
-              : !disabled && <ChevronDown className="text-ink-3 ml-auto h-3 w-3" />}
-          </button>
-        }
-      >
-        {options.map((option) => {
-          const optionLabel = optionLabels[option] ?? (option || emptyLabel);
-          return (
-            <DropdownItem
-              key={option || '__empty__'}
-              checked={option === displayValue}
-              onClick={() => void select(option)}
-            >
-              <span className="flex items-center gap-2">
-                {colorizeOwners && option && <UserAvatar
-                  name={option}
-                  color={getOwnerColor(option)}
-                />}
-                {optionLabel}
-              </span>
-            </DropdownItem>
-          );
-        })}
-      </Dropdown>
-      {error && <span role="alert" className="text-status-fail absolute top-full left-0 z-10 mt-1 text-[10px]">{error}</span>}
-    </div>
-  );
-}
-
-export function EditableMetadataValue({
-  value,
-  label,
-  emptyLabel = label,
-  options,
-  className = 'text-ink-1 hover:text-acc-ink rounded px-1 py-0.5 text-xs',
-  fullWidth = false,
-  displayValue,
-  validate,
-  onSave,
-}: {
-  value: string;
-  label: string;
-  emptyLabel?: string;
-  options?: string[];
-  className?: string;
-  fullWidth?: boolean;
-  displayValue?: ReactNode;
-  validate?: (value: string) => string | null;
-  onSave: (value: string) => Promise<unknown>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-  const [error, setError] = useState<string | null>(null);
-  const lifecycleRef = useRef({
-    generation: 0,
-    cancelled: false,
-    inFlight: false,
-  });
-  const selectCommitRef = useRef(false);
-  const save = async (nextValue = draft) => {
-    const generation = beginMetadataSave(lifecycleRef.current);
-    if (generation === null) return;
-    const normalized = nextValue.trim();
-    if (normalized === value) {
-      if (finishMetadataSave(lifecycleRef.current, generation)) setEditing(false);
-      return;
-    }
-    const validationError = validate?.(normalized);
-    if (validationError) {
-      if (finishMetadataSave(lifecycleRef.current, generation)) {
-        setError(validationError);
-      }
-      return;
-    }
-    try {
-      await onSave(normalized);
-      if (finishMetadataSave(lifecycleRef.current, generation)) {
-        setError(null);
-        setEditing(false);
-      }
-    } catch (saveError) {
-      if (finishMetadataSave(lifecycleRef.current, generation)) {
-        setError(saveError instanceof Error ? saveError.message : 'Save failed');
-      }
-    }
-  };
-
-  if (!editing) {
-    const beginEdit = () => {
-      beginMetadataEdit(lifecycleRef.current);
-      setDraft(value);
-      setError(null);
-      setEditing(true);
-    };
-    if (displayValue) {
-      return <button type="button" className={className} onClick={beginEdit}>{displayValue}</button>;
-    }
-    return <button type="button" className={className} onClick={beginEdit}>{value || emptyLabel}</button>;
-  }
-
-  const inputClassName = `bg-bg-2 text-ink-1 min-w-0 rounded border border-white/10 px-1.5 py-1 text-xs outline-none${fullWidth ? ' w-full' : ''}`;
-  return (
-    <span className={`inline-flex min-w-0 flex-col${fullWidth ? ' flex-1' : ''}`}>
-      {options ? <select autoFocus aria-label={label} aria-invalid={!!error} value={draft} className={inputClassName} onChange={(event) => { selectCommitRef.current = true; setDraft(event.target.value); void save(event.target.value).finally(() => { selectCommitRef.current = false; }); }} onBlur={() => { if (!selectCommitRef.current) setEditing(false); }} onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); cancelMetadataEdit(lifecycleRef.current); setDraft(value); setError(null); setEditing(false); } }}>{options.map((option) => <option key={option}>{option}</option>)}</select> : <input autoFocus aria-label={label} aria-invalid={!!error} value={draft} className={inputClassName} onChange={(event) => setDraft(event.target.value)} onBlur={() => void save()} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { event.stopPropagation(); cancelMetadataEdit(lifecycleRef.current); setDraft(value); setError(null); setEditing(false); } }} />}
-      {error && <span role="alert" className="mt-0.5 text-[10px] leading-tight text-red-400">{error}</span>}
-    </span>
-  );
-}
-
-function EditableStateValue({
-  state,
-  states: availableStates,
-  isPending,
-  isLoading,
-  onChange,
-}: {
-  state: string;
-  states: string[];
-  isPending: boolean;
-  isLoading: boolean;
-  onChange: (state: string) => void;
-}) {
-  const dropdownRef = useRef<{ toggle: () => void } | null>(null);
-  const states = availableStates.includes(state)
-    ? availableStates
-    : [state, ...availableStates];
-
-  const handleSelect = useCallback(
-    (nextState: string) => {
-      dropdownRef.current?.toggle();
-      if (nextState !== state) onChange(nextState);
-    },
-    [onChange, state],
-  );
-
-  return (
-    <Dropdown
-      dropdownRef={dropdownRef}
-      trigger={
-        <button
-          type="button"
-          disabled={isPending || states.length <= 1}
-          className="text-ink-1 hover:text-acc-ink flex items-center gap-1 rounded px-1 py-0.5 text-xs transition-colors disabled:opacity-60"
-        >
-          {(isPending || isLoading) && (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          )}
-          {state}
-          {states.length > 1 && <ChevronDown className="h-3 w-3 opacity-60" />}
-        </button>
-      }
-    >
-      {states.map((nextState) => (
-        <DropdownItem
-          key={nextState}
-          onClick={() => handleSelect(nextState)}
-          checked={nextState === state}
-        >
-          {nextState}
-        </DropdownItem>
-      ))}
-    </Dropdown>
-  );
-}
-
-function ExpandableTestCase({
-  testCase,
-  providerId,
-}: {
-  testCase: AzureDevOpsWorkItem;
-  providerId?: string;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const description = testCase.fields.description || testCase.fields.reproSteps;
-  const hasSteps = testCase.testSteps && testCase.testSteps.length > 0;
-  const hasContent = !!description || hasSteps;
-
-  return (
-    <div
-      className="rounded-md border"
-      style={{
-        borderColor: 'oklch(1 0 0 / 0.06)',
-        background: 'oklch(1 0 0 / 0.02)',
-      }}
-    >
-      <button
-        type="button"
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <ChevronRight
-          className={`text-ink-3 h-3 w-3 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
-        />
-        <FlaskConical className="h-3.5 w-3.5 shrink-0 text-purple-400" />
-        <span className="text-ink-2 text-xs font-medium">#{testCase.id}</span>
-        <span className="text-ink-1 min-w-0 truncate text-xs">
-          {testCase.fields.title}
-        </span>
-        <span className="text-ink-3 ml-auto shrink-0 text-[11px]">
-          {testCase.fields.state}
-        </span>
-      </button>
-      {expanded && (
-        <div
-          className="border-t px-3 py-2"
-          style={{ borderColor: 'oklch(1 0 0 / 0.06)' }}
-        >
-          {description && (
-            <AzureHtmlContent
-              html={description}
-              providerId={providerId}
-              className="text-ink-2 text-xs"
-            />
-          )}
-          {hasSteps && (
-            <div className="mt-1">
-              {testCase.testSteps!.map((step, i) => (
-                <div
-                  key={i}
-                  className="border-b py-1.5 last:border-b-0"
-                  style={{ borderColor: 'oklch(1 0 0 / 0.04)' }}
-                >
-                  <div className="flex gap-2">
-                    <span className="text-ink-3 w-4 shrink-0 text-[10px]">
-                      {i + 1}.
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <AzureHtmlContent
-                        html={step.action}
-                        providerId={providerId}
-                        className="text-ink-1 text-xs"
-                      />
-                      {step.expectedResult && (
-                        <div className="text-ink-3 mt-0.5">
-                          <span className="text-[10px] font-medium">
-                            Expected:{' '}
-                          </span>
-                          <AzureHtmlContent
-                            html={step.expectedResult}
-                            providerId={providerId}
-                            className="text-ink-3 inline text-xs"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          {!hasContent && (
-            <p className="text-ink-3 text-xs italic">No description.</p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  icon,
-  label,
-  count,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: ReactNode;
-  label: string;
-  count?: number;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-xs font-medium transition-colors ${
-        active
-          ? 'border-accent-1 text-ink-1'
-          : 'text-ink-3 hover:text-ink-2 border-transparent'
-      }`}
-    >
-      {icon}
-      {label}
-      {count != null && count > 0 && (
-        <span
-          className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] ${
-            active ? 'bg-accent-1/10 text-accent-1' : 'bg-ink-4/20 text-ink-3'
-          }`}
-        >
-          {count}
-        </span>
-      )}
-    </button>
   );
 }

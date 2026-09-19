@@ -63,11 +63,11 @@ describe('board column optimistic cache updates', () => {
     id: 42,
     url: 'https://example/42',
     fields: {
-      title: 'Original title',
-      workItemType: 'Bug',
-      state: 'Active',
-      boardColumn: 'Doing',
-      boardColumnDone: false,
+      'System.Title': 'Original title',
+      'System.WorkItemType': 'Bug',
+      'System.State': 'Active',
+      'System.BoardColumn': 'Doing',
+      'System.BoardColumnDone': false,
     },
   };
   const update = {
@@ -82,10 +82,10 @@ describe('board column optimistic cache updates', () => {
     expect(applyWorkItemBoardColumnUpdate(item, update)).toMatchObject({
       id: 42,
       fields: {
-        title: 'Original title',
-        state: 'Closed',
-        boardColumn: 'Done',
-        boardColumnDone: true,
+        'System.Title': 'Original title',
+        'System.State': 'Closed',
+        'System.BoardColumn': 'Done',
+        'System.BoardColumnDone': true,
       },
     });
     expect(
@@ -97,16 +97,16 @@ describe('board column optimistic cache updates', () => {
     const optimistic = applyWorkItemBoardColumnUpdate(item, update);
     const current = {
       ...optimistic,
-      fields: { ...optimistic.fields, title: 'Newer title' },
+      fields: { ...optimistic.fields, 'System.Title': 'Newer title' },
     };
     expect(
       rollbackWorkItemBoardColumnUpdate(current, item, update),
     ).toMatchObject({
       fields: {
-        title: 'Newer title',
-        state: 'Active',
-        boardColumn: 'Doing',
-        boardColumnDone: false,
+        'System.Title': 'Newer title',
+        'System.State': 'Active',
+        'System.BoardColumn': 'Doing',
+        'System.BoardColumnDone': false,
       },
     });
   });
@@ -116,8 +116,8 @@ describe('board column optimistic cache updates', () => {
       ...item,
       fields: {
         ...item.fields,
-        state: 'Resolved',
-        boardColumn: 'Testing',
+        'System.State': 'Resolved',
+        'System.BoardColumn': 'Testing',
       },
     };
     expect(rollbackWorkItemBoardColumnUpdate(newer, item, update)).toBe(newer);
@@ -127,15 +127,15 @@ describe('board column optimistic cache updates', () => {
     const optimistic = applyWorkItemBoardColumnUpdate(item, update);
     const current = {
       ...optimistic,
-      fields: { ...optimistic.fields, state: 'Resolved' },
+      fields: { ...optimistic.fields, 'System.State': 'Resolved' },
     };
     expect(
       rollbackWorkItemBoardColumnUpdate(current, item, update),
     ).toMatchObject({
       fields: {
-        state: 'Resolved',
-        boardColumn: 'Doing',
-        boardColumnDone: false,
+        'System.State': 'Resolved',
+        'System.BoardColumn': 'Doing',
+        'System.BoardColumnDone': false,
       },
     });
   });

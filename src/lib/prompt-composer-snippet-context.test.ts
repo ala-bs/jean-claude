@@ -19,10 +19,10 @@ describe('buildWorkItemSnippetContext', () => {
         id: 123,
         url: 'https://example.test/work-items/123',
         fields: {
-          title: 'Fix composer snippets',
-          workItemType: 'Bug',
-          state: 'Active',
-          description: '<p>Replace <b>vars</b></p>',
+          'System.Title': 'Fix composer snippets',
+          'System.WorkItemType': 'Bug',
+          'System.State': 'Active',
+          'System.Description': '<p>Replace <b>vars</b></p>',
         },
       },
     ];
@@ -90,9 +90,9 @@ describe('buildWorkItemSnippetContext', () => {
         id: 123,
         url: 'https://example.test/work-items/123',
         fields: {
-          title: 'Fix composer snippets',
-          workItemType: 'Bug',
-          state: 'Active',
+          'System.Title': 'Fix composer snippets',
+          'System.WorkItemType': 'Bug',
+          'System.State': 'Active',
         },
       },
     ];

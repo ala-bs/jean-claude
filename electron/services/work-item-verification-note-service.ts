@@ -3,7 +3,15 @@ import type {
   VerificationTestCase,
   VerificationWorkItem,
 } from '@shared/work-item-verification-note-types';
+import {
+  getDescriptionHtml,
+  getReproStepsHtml,
+  getState,
+  getTitle,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
 import { simplifyWorkItemHtml } from '@shared/work-item-html';
+import type { WorkItemFieldsHolder } from '@shared/work-item-field-types';
 
 import { dbg } from '../lib/debug';
 
@@ -199,22 +207,15 @@ export async function generateWorkItemVerificationNote({
   return normalizeNote(parsed);
 }
 
-export function toVerificationWorkItem(workItem: {
-  id: number;
-  fields: {
-    title: string;
-    workItemType: string;
-    state: string;
-    description?: string;
-    reproSteps?: string;
-  };
-}): VerificationWorkItem {
+export function toVerificationWorkItem(
+  workItem: WorkItemFieldsHolder & { id: number },
+): VerificationWorkItem {
   return {
     id: workItem.id,
-    title: workItem.fields.title,
-    workItemType: workItem.fields.workItemType,
-    state: workItem.fields.state,
-    description: workItem.fields.description,
-    reproSteps: workItem.fields.reproSteps,
+    title: getTitle(workItem),
+    workItemType: getWorkItemType(workItem),
+    state: getState(workItem),
+    description: getDescriptionHtml(workItem),
+    reproSteps: getReproStepsHtml(workItem),
   };
 }

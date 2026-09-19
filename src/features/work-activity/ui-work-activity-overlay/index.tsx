@@ -15,6 +15,7 @@ import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import FocusLock from 'react-focus-lock';
 
+import { getTitle, getWorkItemType } from '@shared/work-item-field-types';
 import {
   getWeekRange,
   groupWorkActivityEvents,
@@ -908,12 +909,15 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                         const isPreviewed =
                           previewWorkItem?.id === workItem.id &&
                           previewWorkItem.providerId === workItem.providerId;
-                        const previewedTitle = isPreviewed
-                          ? previewWorkItemDetails?.fields.title
-                          : undefined;
-                        const previewedType = isPreviewed
-                          ? previewWorkItemDetails?.fields.workItemType
-                          : undefined;
+                        const previewedTitle =
+                          isPreviewed && previewWorkItemDetails
+                            ? getTitle(previewWorkItemDetails) || undefined
+                            : undefined;
+                        const previewedType =
+                          isPreviewed && previewWorkItemDetails
+                            ? getWorkItemType(previewWorkItemDetails) ||
+                              undefined
+                            : undefined;
                         return (
                           <button
                             type="button"
@@ -1001,13 +1005,19 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
               previewWorkItem ? (
                 <span className="flex min-w-0 items-center gap-2">
                   <WorkItemTypeIcon
-                    type={previewWorkItemDetails?.fields.workItemType ?? ''}
+                    type={
+                      previewWorkItemDetails
+                        ? getWorkItemType(previewWorkItemDetails)
+                        : ''
+                    }
                   />
                   <span className="text-ink-2 shrink-0 text-sm font-medium">
                     {getWorkItemLabel(previewWorkItem.id)}
                   </span>
                   <span className="text-ink-1 min-w-0 truncate text-sm">
-                    {previewWorkItemDetails?.fields.title ?? 'Work item'}
+                    {(previewWorkItemDetails
+                      ? getTitle(previewWorkItemDetails)
+                      : undefined) ?? 'Work item'}
                   </span>
                 </span>
               ) : undefined

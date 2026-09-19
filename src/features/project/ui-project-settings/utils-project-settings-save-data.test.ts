@@ -7,6 +7,7 @@ import {
   getProjectSettingsSaveData,
   type ProjectSettingsSave,
 } from './utils-project-settings-save-data';
+import { DEFAULT_WORK_ITEM_DISPLAY_CONFIG } from '@shared/work-item-display-config-types';
 import { STARTER_WORK_ITEM_TITLE_PARSER_SETTING } from '@shared/work-item-title-parser-types';
 
 function deferred<T>() {
@@ -66,6 +67,34 @@ describe('getProjectSettingsSaveData', () => {
     ).toEqual({
       workItemTitleParser: STARTER_WORK_ITEM_TITLE_PARSER_SETTING,
     });
+  });
+
+  it('keeps work item display config when user edited it', () => {
+    expect(
+      getProjectSettingsSaveData({
+        data: {
+          name: 'Jean Claude',
+          workItemDisplayConfig: DEFAULT_WORK_ITEM_DISPLAY_CONFIG,
+        },
+        dirtyFields: new Set(['workItemDisplayConfig']),
+      }),
+    ).toEqual({
+      workItemDisplayConfig: DEFAULT_WORK_ITEM_DISPLAY_CONFIG,
+    });
+  });
+
+  it('omits an untouched work item display config from the payload', () => {
+    const saveData = getProjectSettingsSaveData({
+      data: {
+        name: 'Jean Claude',
+        workItemDisplayConfig: DEFAULT_WORK_ITEM_DISPLAY_CONFIG,
+      },
+      dirtyFields: new Set(['name']),
+    });
+
+    expect(saveData).toEqual({ name: 'Jean Claude' });
+    expect('workItemDisplayConfig' in saveData).toBe(false);
+    expect(saveData.workItemDisplayConfig).toBeUndefined();
   });
 
   it('flushes latest dirty data immediately when disposed before debounce', () => {

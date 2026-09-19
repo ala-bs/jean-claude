@@ -158,6 +158,7 @@ import { getBranchFromWorktreePath } from '@/lib/worktree';
 import { getContextWindowForModel } from '@/lib/model-context-window';
 import { getDefaultModelForBackend } from '@/lib/default-models';
 import { getPrWorkspaceDeletionDestination } from '@/lib/pr-workspace-navigation';
+import { getWorkItemType } from '@shared/work-item-field-types';
 import { Input } from '@/common/ui/input';
 import { Kbd } from '@/common/ui/kbd';
 import { MessageInput } from '@/features/agent/ui-message-input';
@@ -1011,7 +1012,7 @@ function TaskHeaderWorkItemChip({
   return (
     <WorkItemChip
       label={`#${workItemId}`}
-      type={workItem?.fields.workItemType}
+      type={workItem ? getWorkItemType(workItem) : undefined}
       size="xs"
       onClick={
         workItemUrl ? () => window.open(workItemUrl, '_blank') : undefined

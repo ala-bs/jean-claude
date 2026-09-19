@@ -2,6 +2,13 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import clsx from 'clsx';
 
 
+import {
+  getAssignee,
+  getState,
+  getTitle,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
+
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useCurrentAzureUser } from '@/hooks/use-work-items';
@@ -94,6 +101,7 @@ export function WorkItemList({
 }) {
   const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
+  const currentUserUniqueName = currentUser?.emailAddress?.toLowerCase();
 
   // Group work items so children appear after their parents
   const { groupedItems, parentIdsInList } = useMemo(() => {
@@ -204,6 +212,19 @@ export function WorkItemList({
         // Check if this item has a parent that is in the current list
         const hasParentInList =
           workItem.parentId && parentIdsInList.has(workItem.parentId);
+        const assignee = getAssignee(workItem);
+        // Identity match prefers uniqueName (the Azure UPN/email); display
+        // names are not unique and can collide between two real people. Falls
+        // back to the display name when the identity carries no uniqueName —
+        // normalizeFieldValue only sets it when Azure supplies one, and
+        // without the fallback nothing is ever highlighted as yours.
+        const isAssignedToCurrentUser =
+          assignee?.uniqueName && currentUserUniqueName
+            ? assignee.uniqueName.toLowerCase() === currentUserUniqueName
+            : !!assignee?.displayName &&
+              !!currentUser?.displayName &&
+              assignee.displayName.toLowerCase() ===
+                currentUser.displayName.toLowerCase();
 
         return (
           <div
@@ -253,7 +274,7 @@ export function WorkItemList({
             )}
 
             {/* Type icon */}
-            <WorkItemTypeIcon type={workItem.fields.workItemType} />
+            <WorkItemTypeIcon type={getWorkItemType(workItem)} />
 
             {/* Work item ID */}
             <span className="text-ink-3 shrink-0 text-xs">
@@ -269,7 +290,7 @@ export function WorkItemList({
             {/* Title (truncated) */}
             <span className="text-ink-1 min-w-0 flex-1 truncate text-sm">
               <HighlightedSearchText
-                text={workItem.fields.title}
+                text={getTitle(workItem)}
                 search={search}
               />
             </span>
@@ -278,26 +299,22 @@ export function WorkItemList({
             <span
               className={clsx(
                 'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium',
-                getStatusColor(workItem.fields.state),
+                getStatusColor(getState(workItem)),
               )}
             >
-              {workItem.fields.state}
+              {getState(workItem)}
             </span>
 
             {/* Owner avatar */}
-            {workItem.fields.assignedTo && (
+            {assignee && (
               <UserAvatar
-                name={workItem.fields.assignedTo}
+                name={assignee.displayName}
                 title={
-                  currentUser?.displayName &&
-                  workItem.fields.assignedTo === currentUser.displayName
-                    ? `${workItem.fields.assignedTo} (you)`
-                    : workItem.fields.assignedTo
+                  isAssignedToCurrentUser
+                    ? `${assignee.displayName} (you)`
+                    : assignee.displayName
                 }
-                highlight={
-                  !!currentUser?.displayName &&
-                  workItem.fields.assignedTo === currentUser.displayName
-                }
+                highlight={isAssignedToCurrentUser}
               />
             )}
           </div>

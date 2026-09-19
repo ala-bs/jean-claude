@@ -2,6 +2,27 @@
 
 import { createHash } from 'crypto';
 
+import type {
+  AzureFieldRefName,
+  WorkItemFieldMetadata,
+  WorkItemFieldType,
+  WorkItemFieldValue,
+} from '@shared/work-item-field-types';
+import {
+  CORE_FIELD_METADATA,
+  CORE_FIELD_REFNAMES,
+  FIELD_ACCEPTANCE_CRITERIA,
+  FIELD_ASSIGNED_TO,
+  FIELD_DESCRIPTION,
+  FIELD_REPRO_STEPS,
+  FIELD_STEPS,
+  getIdentityField,
+  getStringField,
+  getTeamProject,
+  getWorkItemType,
+  normalizeFieldValue,
+} from '@shared/work-item-field-types';
+
 
 import type {
   AzureBuildDefinition,
@@ -99,31 +120,120 @@ export interface TestStep {
 export interface AzureDevOpsWorkItem {
   id: number;
   url: string;
-  fields: {
-    title: string;
-    workItemType: string;
-    teamProject?: string;
-    state: string;
-    assignedTo?: string;
-    assignedToUniqueName?: string;
-    description?: string;
-    acceptanceCriteria?: string;
-    reproSteps?: string;
-    changedDate?: string;
-    boardColumn?: string;
-    boardColumnDone?: boolean;
-    tags?: string;
-    priority?: number;
-    stackRank?: number;
-    storyPoints?: number;
-    iterationPath?: string;
-  };
+  fields: Record<AzureFieldRefName, WorkItemFieldValue>;
   testSteps?: TestStep[];
   parentId?: number;
   childIds?: number[];
   relatedWorkItemIds?: number[];
   linkedPrs?: LinkedPr[];
   relatedTestCaseIds?: number[];
+  /**
+   * Extra refNames Azure refused (F3). Present only when the request had to be
+   * retried without the configured extras.
+   */
+  partialFieldFailure?: AzureFieldRefName[];
+}
+
+/**
+ * The array returned by the multi-item fetchers, carrying the F3 marker. The
+ * marker is also copied onto every item so it survives IPC structured cloning.
+ */
+export type AzureDevOpsWorkItemList = AzureDevOpsWorkItem[] & {
+  partialFieldFailure?: AzureFieldRefName[];
+};
+
+/**
+ * Longest `fields=` value we will put in a GET URL (F8). Measured in encoded
+ * characters rather than refName count, because a count-based cap either fires
+ * far too early (the fetch set always carries the 17 core refNames) or lets a
+ * few very long custom refNames through. Well under the ~2 KB that proxies and
+ * IIS start rejecting, leaving room for the rest of the URL.
+ */
+export const WORK_ITEM_FIELDS_URL_LIMIT = 1500;
+
+/** Dedupes and drops blanks from a caller-supplied extras list. */
+function normalizeExtraFieldRefNames(
+  extraFieldRefNames: AzureFieldRefName[] | undefined,
+): AzureFieldRefName[] {
+  if (!extraFieldRefNames || extraFieldRefNames.length === 0) return [];
+  const core = new Set<AzureFieldRefName>(CORE_FIELD_REFNAMES);
+  const seen = new Set<AzureFieldRefName>();
+  const extras: AzureFieldRefName[] = [];
+  for (const refName of extraFieldRefNames) {
+    const trimmed = refName?.trim();
+    if (!trimmed || core.has(trimmed) || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    extras.push(trimmed);
+  }
+  return extras;
+}
+
+/**
+ * `CORE_FIELD_REFNAMES ∪ extraFieldRefNames`, deduped, core first.
+ * The display config never *narrows* the fetch set (design `## Data flow`).
+ */
+export function resolveFieldFetchSet(
+  extraFieldRefNames?: AzureFieldRefName[],
+): AzureFieldRefName[] {
+  return [
+    ...CORE_FIELD_REFNAMES,
+    ...normalizeExtraFieldRefNames(extraFieldRefNames),
+  ];
+}
+
+/** Maps a raw Azure `fields` bag onto the refName value model. */
+function mapWorkItemFields(
+  raw: unknown,
+): Record<AzureFieldRefName, WorkItemFieldValue> {
+  const mapped: Record<AzureFieldRefName, WorkItemFieldValue> = {};
+  if (raw === null || typeof raw !== 'object') return mapped;
+  for (const [refName, value] of Object.entries(
+    raw as Record<string, unknown>,
+  )) {
+    mapped[refName] = normalizeFieldValue(value);
+  }
+  return mapped;
+}
+
+/**
+ * F3 — decides whether a non-2xx response was caused by the extra refNames we
+ * asked for. Returns the offending refNames, or `null` when the failure is
+ * unrelated (so the original error still propagates).
+ *
+ * Azure names the bad field in the message (`TF51005`, `VS402337`); it also
+ * rejects `fields` combined with `$expand` on some endpoints, which we treat
+ * the same way because the retry drops `fields` entirely.
+ */
+function detectExtraFieldFailure(
+  message: string,
+  extras: AzureFieldRefName[],
+): AzureFieldRefName[] | null {
+  if (extras.length === 0) return null;
+  const named = extras.filter((refName) => message.includes(refName));
+  if (named.length > 0) return named;
+  if (
+    /TF51005|VS402337|VS403474|field[^.]{0,60}(does not exist|doesn't exist|not recognized|was not found|cannot be used|is not supported)/i.test(
+      message,
+    )
+  ) {
+    return [...extras];
+  }
+  return null;
+}
+
+function markPartialFieldFailure(
+  items: AzureDevOpsWorkItem[],
+  partialFieldFailure: AzureFieldRefName[] | null,
+): AzureDevOpsWorkItemList {
+  const list = items as AzureDevOpsWorkItemList;
+  if (!partialFieldFailure || partialFieldFailure.length === 0) return list;
+  list.partialFieldFailure = partialFieldFailure;
+  for (const item of list) item.partialFieldFailure = partialFieldFailure;
+  return list;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export interface WorkItemComment {
@@ -208,25 +318,7 @@ interface WorkItemsBatchResponse {
   value: Array<{
     id: number;
     url: string;
-    fields: {
-      'System.Title': string;
-      'System.WorkItemType': string;
-      'System.TeamProject'?: string;
-      'System.State': string;
-      'System.AssignedTo'?: { displayName: string; uniqueName?: string };
-      'System.Description'?: string;
-      'Microsoft.VSTS.Common.AcceptanceCriteria'?: string;
-      'Microsoft.VSTS.TCM.ReproSteps'?: string;
-      'Microsoft.VSTS.TCM.Steps'?: string;
-      'System.ChangedDate'?: string;
-      'System.BoardColumn'?: string;
-      'System.BoardColumnDone'?: boolean;
-      'System.Tags'?: string;
-      'Microsoft.VSTS.Common.Priority'?: number;
-      'Microsoft.VSTS.Common.StackRank'?: number;
-      'Microsoft.VSTS.Scheduling.StoryPoints'?: number;
-      'System.IterationPath'?: string;
-    };
+    fields: Record<string, unknown>;
     relations?: WorkItemRelation[];
   }>;
 }
@@ -734,6 +826,7 @@ export async function queryWorkItems(params: {
     iterationPaths?: string[];
     assignedTo?: string;
   };
+  extraFieldRefNames?: AzureFieldRefName[];
 }): Promise<AzureDevOpsWorkItem[]> {
   const provider = await ProviderRepository.findById(params.providerId);
   if (!provider) {
@@ -844,10 +937,15 @@ export async function queryWorkItems(params: {
   }
 
   const ids = wiqlData.workItems.map((wi) => wi.id);
+  // F8 — a long `fields=` list would bloat a GET URL, so the details fetch is
+  // routed through the POST `workitemsbatch` path. `getWorkItemsByIds` already
+  // uses that path unconditionally, which covers both sides of
+  // `WORK_ITEM_FIELDS_URL_LIMIT`.
   return getWorkItemsByIds({
     providerId: params.providerId,
     projectName: params.projectName,
     workItemIds: ids,
+    extraFieldRefNames: params.extraFieldRefNames,
   });
 }
 
@@ -897,7 +995,7 @@ export async function queryWorkItemOwners(params: {
             },
             body: JSON.stringify({
               ids: chunk,
-              fields: ['System.AssignedTo'],
+              fields: [FIELD_ASSIGNED_TO],
               errorPolicy: 'Omit',
             }),
           },
@@ -910,7 +1008,10 @@ export async function queryWorkItemOwners(params: {
       }),
     );
     for (const item of batches.flatMap((batch) => batch.value)) {
-      const identity = item.fields['System.AssignedTo'];
+      const identity = getIdentityField(
+        { fields: mapWorkItemFields(item.fields) },
+        FIELD_ASSIGNED_TO,
+      );
       const displayName = identity?.displayName.trim();
       const value = identity?.uniqueName?.trim() || displayName;
       if (displayName && value && !ownersByKey.has(value.toLocaleLowerCase())) {
@@ -980,25 +1081,7 @@ export async function queryAssignedWorkItems(params: {
   return batchData.value.map((wi) => ({
     id: wi.id,
     url: `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_workitems/edit/${wi.id}`,
-    fields: {
-      title: wi.fields['System.Title'],
-      workItemType: wi.fields['System.WorkItemType'],
-      teamProject: wi.fields['System.TeamProject'] ?? params.projectName,
-      state: wi.fields['System.State'],
-      assignedTo: wi.fields['System.AssignedTo']?.displayName,
-      assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
-      description: wi.fields['System.Description'],
-      acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
-      reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
-      changedDate: wi.fields['System.ChangedDate'],
-      boardColumn: wi.fields['System.BoardColumn'],
-      boardColumnDone: wi.fields['System.BoardColumnDone'],
-      tags: wi.fields['System.Tags'],
-      priority: wi.fields['Microsoft.VSTS.Common.Priority'],
-      stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
-      storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
-      iterationPath: wi.fields['System.IterationPath'],
-    },
+    fields: mapWorkItemFields(wi.fields),
     parentId: extractParentId(wi.relations),
     childIds: extractChildIds(wi.relations),
     relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
@@ -1007,33 +1090,209 @@ export async function queryAssignedWorkItems(params: {
   }));
 }
 
+/** Azure `FieldType` → our `WorkItemFieldType`. Unknown types degrade to text. */
+function toWorkItemFieldType(raw: unknown): WorkItemFieldType | null {
+  if (typeof raw !== 'string') return null;
+  switch (raw.toLowerCase()) {
+    case 'string':
+      return 'string';
+    case 'plaintext':
+      return 'plainText';
+    case 'html':
+    case 'history':
+      return 'html';
+    case 'integer':
+    case 'picklistinteger':
+      return 'integer';
+    case 'double':
+    case 'picklistdouble':
+      return 'double';
+    case 'datetime':
+      return 'dateTime';
+    case 'boolean':
+      return 'boolean';
+    case 'identity':
+      return 'identity';
+    case 'treepath':
+      return 'treePath';
+    case 'pickliststring':
+      return 'picklistString';
+    case 'guid':
+      return 'string';
+    default:
+      return null;
+  }
+}
+
+interface AzureWorkItemTypeFieldResponse {
+  value?: Array<{
+    referenceName?: string;
+    name?: string;
+    type?: string;
+    readOnly?: boolean;
+    alwaysRequired?: boolean;
+  }>;
+}
+
+/**
+ * Fetches and merges the Azure field metadata for every work item type in a
+ * project. Deduped by refName; `validWorkItemTypes` is the union of the types
+ * the field appeared under.
+ */
+export async function getWorkItemTypeFields(params: {
+  providerId: string;
+  azureProjectId: string;
+}): Promise<WorkItemFieldMetadata[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const projectSegment = encodeURIComponent(params.azureProjectId);
+  const baseUrl = `https://dev.azure.com/${orgName}/${projectSegment}/_apis/wit/workitemtypes`;
+
+  const typesResponse = await fetch(`${baseUrl}?api-version=7.0`, {
+    headers: { Authorization: authHeader },
+  });
+  if (!typesResponse.ok) {
+    const error = await typesResponse.text();
+    throw new Error(`Failed to fetch work item types: ${error}`);
+  }
+  const typesData: { value?: Array<{ name?: string }> } =
+    await typesResponse.json();
+  const typeNames = (typesData.value ?? [])
+    .map((entry) => entry.name)
+    .filter((name): name is string => Boolean(name));
+
+  const perType = await Promise.all(
+    typeNames.map(async (typeName) => {
+      const response = await fetch(
+        `${baseUrl}/${encodeURIComponent(typeName)}/fields?api-version=7.0`,
+        { headers: { Authorization: authHeader } },
+      );
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(
+          `Failed to fetch fields for work item type ${typeName}: ${error}`,
+        );
+      }
+      const data: AzureWorkItemTypeFieldResponse = await response.json();
+      return { typeName, fields: data.value ?? [] };
+    }),
+  );
+
+  const merged = new Map<AzureFieldRefName, WorkItemFieldMetadata>();
+  for (const { typeName, fields } of perType) {
+    for (const field of fields) {
+      const refName = field.referenceName;
+      if (!refName) continue;
+      const existing = merged.get(refName);
+      if (existing) {
+        if (!existing.validWorkItemTypes.includes(typeName)) {
+          existing.validWorkItemTypes.push(typeName);
+        }
+        continue;
+      }
+      const builtIn = CORE_FIELD_METADATA[refName];
+      merged.set(refName, {
+        refName,
+        name: field.name ?? builtIn?.name ?? refName,
+        type: toWorkItemFieldType(field.type) ?? builtIn?.type ?? 'string',
+        readOnly: field.readOnly ?? builtIn?.readOnly ?? false,
+        validWorkItemTypes: [typeName],
+      });
+    }
+  }
+
+  return [...merged.values()];
+}
+
 export async function getWorkItemById(params: {
   providerId: string;
   workItemId: number;
+  extraFieldRefNames?: AzureFieldRefName[];
 }): Promise<AzureDevOpsWorkItem | null> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const extras = normalizeExtraFieldRefNames(params.extraFieldRefNames);
+  const fetchSet = resolveFieldFetchSet(extras);
 
-  const response = await fetch(
-    `https://dev.azure.com/${orgName}/_apis/wit/workitems/${params.workItemId}?$expand=relations&api-version=7.0`,
-    {
-      headers: { Authorization: authHeader },
-    },
+  const requestOnce = async (
+    fields: AzureFieldRefName[] | null,
+  ): Promise<
+    | { ok: true; body: unknown }
+    | { ok: false; error: string; status: number }
+  > => {
+    // `fields=` is only sent when the project actually configured extras: the
+    // default payload already contains every field, so narrowing it buys
+    // nothing and Azure rejects `fields` combined with `$expand` on some
+    // endpoints (recovered from by the retry below).
+    const fieldsParam = fields
+      ? `&fields=${fields.map((refName) => encodeURIComponent(refName)).join(',')}`
+      : '';
+    const response = await fetch(
+      `https://dev.azure.com/${orgName}/_apis/wit/workitems/${params.workItemId}?$expand=relations${fieldsParam}&api-version=7.0`,
+      {
+        headers: { Authorization: authHeader },
+      },
+    );
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        error: await response.text(),
+      };
+    }
+    return { ok: true, body: await response.json() };
+  };
+
+  let partialFieldFailure: AzureFieldRefName[] | null = null;
+  // F8 on the single-item GET: `fields=` rides in the URL here, and a config
+  // may reference far more refNames than a URL should carry (the guard caps
+  // each list, not the union across detail + board + every type override).
+  // Dropping the param is lossless — the default payload contains every field
+  // — whereas an over-long URL 400s with a body that names no refName, so the
+  // retry below could not recover it.
+  const fieldsFitInUrl =
+    fetchSet.map((refName) => encodeURIComponent(refName)).join(',').length <=
+    WORK_ITEM_FIELDS_URL_LIMIT;
+  let result = await requestOnce(
+    extras.length > 0 && fieldsFitInUrl ? fetchSet : null,
   );
-
-  if (!response.ok) {
-    if (response.status === 404) return null;
-    const error = await response.text();
-    throw new Error(`Failed to fetch work item ${params.workItemId}: ${error}`);
+  if (
+    !result.ok &&
+    result.status !== 404 &&
+    extras.length > 0 &&
+    fieldsFitInUrl
+  ) {
+    const offending = detectExtraFieldFailure(result.error, extras);
+    if (offending) {
+      console.error(
+        '[azure] work item field request rejected, retrying without configured extras:',
+        offending,
+      );
+      partialFieldFailure = offending;
+      result = await requestOnce(null);
+    }
   }
 
-  const wi = await response.json();
+  if (!result.ok) {
+    if (result.status === 404) return null;
+    throw new Error(
+      `Failed to fetch work item ${params.workItemId}: ${result.error}`,
+    );
+  }
+
+  const wi = result.body as {
+    id: number;
+    fields?: Record<string, unknown>;
+    relations?: WorkItemRelation[];
+    _links?: { html?: { href?: string } };
+  };
+  const fields = mapWorkItemFields(wi.fields);
+  const holder = { fields };
 
   if (
-    !wi.fields['System.Description'] &&
-    !wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'] &&
-    !wi.fields['Microsoft.VSTS.TCM.ReproSteps']
+    !getStringField(holder, FIELD_DESCRIPTION) &&
+    !getStringField(holder, FIELD_ACCEPTANCE_CRITERIA) &&
+    !getStringField(holder, FIELD_REPRO_STEPS)
   ) {
-    const contentFields = Object.entries(wi.fields)
+    const contentFields = Object.entries(wi.fields ?? {})
       .filter(([name]) =>
         /(description|criteria|content|detail|repro|step)/i.test(name),
       )
@@ -1049,132 +1308,126 @@ export async function getWorkItemById(params: {
     );
   }
 
-  return {
+  const item: AzureDevOpsWorkItem = {
     id: wi.id,
     url:
       wi._links?.html?.href ??
       `https://dev.azure.com/${orgName}/_workitems/edit/${wi.id}`,
-    fields: {
-      title: wi.fields['System.Title'],
-      workItemType: wi.fields['System.WorkItemType'],
-      teamProject: wi.fields['System.TeamProject'],
-      state: wi.fields['System.State'],
-      assignedTo: wi.fields['System.AssignedTo']?.displayName,
-      assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
-      description: wi.fields['System.Description'],
-      acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
-      reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
-      changedDate: wi.fields['System.ChangedDate'],
-      boardColumn: wi.fields['System.BoardColumn'],
-      boardColumnDone: wi.fields['System.BoardColumnDone'],
-      tags: wi.fields['System.Tags'],
-      priority: wi.fields['Microsoft.VSTS.Common.Priority'],
-      stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
-      storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
-      iterationPath: wi.fields['System.IterationPath'],
-    },
+    fields,
     parentId: extractParentId(wi.relations),
     childIds: extractChildIds(wi.relations),
     relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
     linkedPrs: extractLinkedPrs(wi.relations),
     relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
   };
+  if (partialFieldFailure) item.partialFieldFailure = partialFieldFailure;
+  return item;
 }
 
 export async function getWorkItemsByIds(params: {
   providerId: string;
   projectName: string;
   workItemIds: number[];
+  extraFieldRefNames?: AzureFieldRefName[];
 }): Promise<AzureDevOpsWorkItem[]> {
   const ids = [...new Set(params.workItemIds)];
   if (ids.length === 0) return [];
 
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const extras = normalizeExtraFieldRefNames(params.extraFieldRefNames);
+  const fetchSet = resolveFieldFetchSet(extras);
   const chunks: number[][] = [];
   for (let index = 0; index < ids.length; index += 200) {
     chunks.push(ids.slice(index, index + 200));
   }
 
-  const results = new Array<WorkItemsBatchResponse>(chunks.length);
-  const controller = new AbortController();
-  let firstError: unknown = null;
-  let failureClaimed = false;
-  let stopped = false;
-  let nextChunkIndex = 0;
-  const workers = Array.from(
-    { length: Math.min(4, chunks.length) },
-    async () => {
-      while (!stopped && nextChunkIndex < chunks.length) {
-        const chunkIndex = nextChunkIndex++;
-        const chunk = chunks[chunkIndex];
-        try {
-          const response = await fetch(
-            `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workitemsbatch?api-version=7.0`,
-            {
-              method: 'POST',
-              headers: {
-                Authorization: authHeader,
-                'Content-Type': 'application/json',
+  // F8 — this POST body carries the refName list, so a long fetch set never
+  // bloats a URL regardless of `WORK_ITEM_FIELDS_URL_LIMIT`.
+  const runBatches = async (
+    fields: AzureFieldRefName[] | null,
+  ): Promise<WorkItemsBatchResponse[]> => {
+    const results = new Array<WorkItemsBatchResponse>(chunks.length);
+    const controller = new AbortController();
+    let firstError: unknown = null;
+    let failureClaimed = false;
+    let stopped = false;
+    let nextChunkIndex = 0;
+    const workers = Array.from(
+      { length: Math.min(4, chunks.length) },
+      async () => {
+        while (!stopped && nextChunkIndex < chunks.length) {
+          const chunkIndex = nextChunkIndex++;
+          const chunk = chunks[chunkIndex];
+          try {
+            const response = await fetch(
+              `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workitemsbatch?api-version=7.0`,
+              {
+                method: 'POST',
+                headers: {
+                  Authorization: authHeader,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  ids: chunk,
+                  ...(fields ? { fields } : {}),
+                  $expand: 'Relations',
+                  errorPolicy: 'Omit',
+                }),
+                signal: controller.signal,
               },
-              body: JSON.stringify({
-                ids: chunk,
-                $expand: 'Relations',
-                errorPolicy: 'Omit',
-              }),
-              signal: controller.signal,
-            },
-          );
-          if (!response.ok) {
-            if (failureClaimed) return;
-            failureClaimed = true;
-            stopped = true;
-            const error = await response.text();
-            firstError = new Error(
-              `Failed to batch-fetch work items for ${params.projectName}: ${error}`,
             );
-            controller.abort();
+            if (!response.ok) {
+              if (failureClaimed) return;
+              failureClaimed = true;
+              stopped = true;
+              const error = await response.text();
+              firstError = new Error(
+                `Failed to batch-fetch work items for ${params.projectName}: ${error}`,
+              );
+              controller.abort();
+              return;
+            }
+            results[chunkIndex] =
+              (await response.json()) as WorkItemsBatchResponse;
+          } catch (error) {
+            if (!failureClaimed) {
+              failureClaimed = true;
+              stopped = true;
+              firstError = error;
+              controller.abort();
+            }
             return;
           }
-          results[chunkIndex] = (await response.json()) as WorkItemsBatchResponse;
-        } catch (error) {
-          if (!failureClaimed) {
-            failureClaimed = true;
-            stopped = true;
-            firstError = error;
-            controller.abort();
-          }
-          return;
         }
-      }
-    },
-  );
-  await Promise.allSettled(workers);
-  if (firstError !== null) throw firstError;
+      },
+    );
+    await Promise.allSettled(workers);
+    if (firstError !== null) throw firstError;
+    return results;
+  };
+
+  // `fields` is only sent when the project configured extras — the default
+  // payload already contains every field.
+  let partialFieldFailure: AzureFieldRefName[] | null = null;
+  let results: WorkItemsBatchResponse[];
+  try {
+    results = await runBatches(extras.length > 0 ? fetchSet : null);
+  } catch (error) {
+    const offending = detectExtraFieldFailure(errorMessage(error), extras);
+    if (!offending) throw error;
+    console.error(
+      '[azure] work item batch rejected, retrying without configured extras:',
+      offending,
+    );
+    partialFieldFailure = offending;
+    results = await runBatches(null);
+  }
 
   const items = results.flatMap((result) =>
     result.value.map((wi) => ({
       id: wi.id,
       url: `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_workitems/edit/${wi.id}`,
-      fields: {
-        title: wi.fields['System.Title'],
-        workItemType: wi.fields['System.WorkItemType'],
-        teamProject: wi.fields['System.TeamProject'],
-        state: wi.fields['System.State'],
-        assignedTo: wi.fields['System.AssignedTo']?.displayName,
-        assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
-        description: wi.fields['System.Description'],
-        acceptanceCriteria:
-          wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
-        reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
-        changedDate: wi.fields['System.ChangedDate'],
-        boardColumn: wi.fields['System.BoardColumn'],
-        boardColumnDone: wi.fields['System.BoardColumnDone'],
-        tags: wi.fields['System.Tags'],
-        priority: wi.fields['Microsoft.VSTS.Common.Priority'],
-        stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
-        storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
-        iterationPath: wi.fields['System.IterationPath'],
-      },
+      fields: mapWorkItemFields(wi.fields),
       parentId: extractParentId(wi.relations),
       childIds: extractChildIds(wi.relations),
       relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
@@ -1183,10 +1436,11 @@ export async function getWorkItemsByIds(params: {
     })),
   );
   const itemById = new Map(items.map((item) => [item.id, item]));
-  return ids.flatMap((id) => {
+  const ordered = ids.flatMap((id) => {
     const item = itemById.get(id);
     return item ? [item] : [];
   });
+  return markPartialFieldFailure(ordered, partialFieldFailure);
 }
 
 export async function getWorkItemStates(params: {
@@ -1433,33 +1687,14 @@ export async function getRelatedTestCases(params: {
   const batchData: WorkItemsBatchResponse = await batchResponse.json();
 
   return batchData.value.map((wi) => {
-    const testSteps = wi.fields['Microsoft.VSTS.TCM.Steps']
-      ? parseTestSteps(wi.fields['Microsoft.VSTS.TCM.Steps'])
-      : undefined;
+    const fields = mapWorkItemFields(wi.fields);
+    const rawSteps = getStringField({ fields }, FIELD_STEPS);
 
     return {
       id: wi.id,
       url: `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_workitems/edit/${wi.id}`,
-      fields: {
-        title: wi.fields['System.Title'],
-        workItemType: wi.fields['System.WorkItemType'],
-        teamProject: wi.fields['System.TeamProject'] ?? params.projectName,
-        state: wi.fields['System.State'],
-        assignedTo: wi.fields['System.AssignedTo']?.displayName,
-        assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
-        description: wi.fields['System.Description'],
-        acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
-        reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
-        changedDate: wi.fields['System.ChangedDate'],
-        boardColumn: wi.fields['System.BoardColumn'],
-        boardColumnDone: wi.fields['System.BoardColumnDone'],
-         tags: wi.fields['System.Tags'],
-         priority: wi.fields['Microsoft.VSTS.Common.Priority'],
-         stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
-         storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
-        iterationPath: wi.fields['System.IterationPath'],
-      },
-      testSteps,
+      fields,
+      testSteps: rawSteps ? parseTestSteps(rawSteps) : undefined,
     };
   });
 }
@@ -3738,25 +3973,7 @@ export async function getPullRequestWorkItems(params: {
   return batchData.value.map((wi) => ({
     id: wi.id,
     url: `https://dev.azure.com/${orgName}/_workitems/edit/${wi.id}`,
-    fields: {
-      title: wi.fields['System.Title'],
-      workItemType: wi.fields['System.WorkItemType'],
-      teamProject: wi.fields['System.TeamProject'],
-      state: wi.fields['System.State'],
-      assignedTo: wi.fields['System.AssignedTo']?.displayName,
-      assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
-      description: wi.fields['System.Description'],
-      acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
-      reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
-      changedDate: wi.fields['System.ChangedDate'],
-      boardColumn: wi.fields['System.BoardColumn'],
-      boardColumnDone: wi.fields['System.BoardColumnDone'],
-      tags: wi.fields['System.Tags'],
-      priority: wi.fields['Microsoft.VSTS.Common.Priority'],
-      stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
-      storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
-      iterationPath: wi.fields['System.IterationPath'],
-    },
+    fields: mapWorkItemFields(wi.fields),
     parentId: extractParentId(wi.relations),
     childIds: extractChildIds(wi.relations),
     relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
@@ -4392,9 +4609,10 @@ export async function updateWorkItemBoardColumn(params: {
     workItemId: params.workItemId,
   });
   if (!workItem) throw new Error(`Work item not found: ${params.workItemId}`);
+  const teamProject = getTeamProject(workItem);
   if (
-    workItem.fields.teamProject &&
-    workItem.fields.teamProject.toLowerCase() !== params.projectName.toLowerCase()
+    teamProject &&
+    teamProject.toLowerCase() !== params.projectName.toLowerCase()
   ) {
     throw new Error(`Work item ${params.workItemId} does not belong to ${params.projectName}`);
   }
@@ -4409,7 +4627,7 @@ export async function updateWorkItemBoardColumn(params: {
   }
   const update = resolveWorkItemBoardColumnUpdate({
     columns: boardConfiguration.columns,
-    workItemType: workItem.fields.workItemType,
+    workItemType: getWorkItemType(workItem),
     column: params.column,
   });
   const patch = buildWorkItemBoardColumnPatch({

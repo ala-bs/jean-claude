@@ -1,3 +1,11 @@
+import {
+  getBoardColumn,
+  getIterationPath,
+  getStackRank,
+  getState,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
+
 import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
 import { normalizeOwnerName } from '@/features/work-item/utils-owner-color';
 
@@ -16,11 +24,11 @@ export function isAzureWorkItemOutOfSprint(
   workItem: AzureDevOpsWorkItem,
   currentIterationPath: string | undefined,
 ) {
+  const iterationPath = getIterationPath(workItem);
   return (
     !!currentIterationPath &&
-    !!workItem.fields.iterationPath &&
-    workItem.fields.iterationPath.toLowerCase() !==
-      currentIterationPath.toLowerCase()
+    !!iterationPath &&
+    iterationPath.toLowerCase() !== currentIterationPath.toLowerCase()
   );
 }
 
@@ -87,11 +95,11 @@ export function calculateLinkedBugProgress(
   const bugs = workItems.filter(
     (item) =>
       candidateIdSet.has(item.id) &&
-      item.fields.workItemType.toLocaleLowerCase() === 'bug',
+      getWorkItemType(item).toLocaleLowerCase() === 'bug',
   );
   if (bugs.length === 0) return null;
   return {
-    closed: bugs.filter((item) => isWorkItemClosedState(item.fields.state)).length,
+    closed: bugs.filter((item) => isWorkItemClosedState(getState(item))).length,
     total: bugs.length,
   };
 }
@@ -125,12 +133,12 @@ function getStatusWorkflowOrder(status: string): number {
 
 function sortWorkItemsByStackRank(workItems: AzureDevOpsWorkItem[]) {
   return [...workItems].sort((a, b) => {
-    const aRank = Number.isFinite(a.fields.stackRank)
-      ? a.fields.stackRank
-      : undefined;
-    const bRank = Number.isFinite(b.fields.stackRank)
-      ? b.fields.stackRank
-      : undefined;
+    // Preserve the pre-refName semantics exactly: only a *finite* stack rank
+    // counts, and everything else sinks to the end in its original order.
+    const aStackRank = getStackRank(a);
+    const bStackRank = getStackRank(b);
+    const aRank = Number.isFinite(aStackRank) ? aStackRank : undefined;
+    const bRank = Number.isFinite(bStackRank) ? bStackRank : undefined;
     if (aRank === undefined && bRank === undefined) return 0;
     if (aRank === undefined) return 1;
     if (bRank === undefined) return -1;
@@ -148,9 +156,10 @@ export function groupWorkItemsByBoardColumns({
   if (boardColumns.length === 0) {
     const groups = new Map<string, AzureDevOpsWorkItem[]>();
     for (const item of workItems) {
-      const group = groups.get(item.fields.state) ?? [];
+      const state = getState(item);
+      const group = groups.get(state) ?? [];
       group.push(item);
-      groups.set(item.fields.state, group);
+      groups.set(state, group);
     }
     return [...groups.entries()]
       .sort(([a], [b]) => getStatusWorkflowOrder(a) - getStatusWorkflowOrder(b))
@@ -166,18 +175,18 @@ export function groupWorkItemsByBoardColumns({
   );
   const unmatched = new Map<string, AzureDevOpsWorkItem[]>();
   for (const item of workItems) {
+    const state = getState(item);
     const column =
-      boardColumns.find((candidate) => candidate.name === item.fields.boardColumn) ??
+      boardColumns.find((candidate) => candidate.name === getBoardColumn(item)) ??
       boardColumns.find(
-        (candidate) =>
-          candidate.stateMappings[item.fields.workItemType] === item.fields.state,
+        (candidate) => candidate.stateMappings[getWorkItemType(item)] === state,
       );
     if (column) {
       groups.get(column.id)?.push(item);
     } else {
-      const fallback = unmatched.get(item.fields.state) ?? [];
+      const fallback = unmatched.get(state) ?? [];
       fallback.push(item);
-      unmatched.set(item.fields.state, fallback);
+      unmatched.set(state, fallback);
     }
   }
 

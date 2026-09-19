@@ -1,5 +1,11 @@
 import { Bug, FileText, Loader2, Search, X } from 'lucide-react';
 
+import {
+  getState,
+  getTitle,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
+
 import { Button } from '@/common/ui/button';
 import { IconButton } from '@/common/ui/icon-button';
 import { Input } from '@/common/ui/input';
@@ -158,17 +164,15 @@ export function WorkItemsBrowser({
             className="hover:bg-glass-medium flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left transition-colors"
           >
             <span className="text-ink-3 shrink-0 text-xs">{wi.id}</span>
-            {wi.fields.workItemType === 'Bug' ? (
+            {getWorkItemType(wi) === 'Bug' ? (
               <Bug className="text-status-fail h-3.5 w-3.5 shrink-0" />
             ) : (
               <FileText className="text-acc-ink h-3.5 w-3.5 shrink-0" />
             )}
             <span className="text-ink-1 min-w-0 flex-1 truncate text-sm">
-              {wi.fields.title}
+              {getTitle(wi)}
             </span>
-            <span className="text-ink-3 shrink-0 text-xs">
-              {wi.fields.state}
-            </span>
+            <span className="text-ink-3 shrink-0 text-xs">{getState(wi)}</span>
           </button>
         ))}
       </div>

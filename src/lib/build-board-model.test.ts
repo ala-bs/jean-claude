@@ -17,9 +17,9 @@ const item = (
     id,
     url: '',
     fields: {
-      title: `Item ${id}`,
-      workItemType: 'User Story',
-      state: 'Active',
+      'System.Title': `Item ${id}`,
+      'System.WorkItemType': 'User Story',
+      'System.State': 'Active',
       ...fields,
     },
     ...links,
@@ -66,14 +66,14 @@ describe('buildAzureBoardModel', () => {
     const model = buildAzureBoardBaseModel({
       metadataItems: [
         item(1, {
-          workItemType: 'Bug',
-          assignedTo: 'Patrick Lin',
-          tags: 'Frontend; Urgent',
+          'System.WorkItemType': 'Bug',
+          'System.AssignedTo': { displayName: 'Patrick Lin' },
+          'System.Tags': 'Frontend; Urgent',
         }),
         item(2, {
-          workItemType: 'Task',
-          assignedTo: 'patrick lin',
-          tags: 'frontend; Backend',
+          'System.WorkItemType': 'Task',
+          'System.AssignedTo': { displayName: 'patrick lin' },
+          'System.Tags': 'frontend; Backend',
         }),
       ],
       items: [],
@@ -99,9 +99,18 @@ describe('buildAzureBoardModel', () => {
     const model = buildAzureBoardBaseModel({
       metadataItems: [],
       items: [
-        item(1, { assignedTo: 'Patrick Lin', tags: 'Frontend; Urgent' }),
-        item(2, { assignedTo: 'Ada Lovelace', tags: 'Frontend' }),
-        item(3, { assignedTo: 'Patrick Lin', tags: 'Backend' }),
+        item(1, {
+          'System.AssignedTo': { displayName: 'Patrick Lin' },
+          'System.Tags': 'Frontend; Urgent',
+        }),
+        item(2, {
+          'System.AssignedTo': { displayName: 'Ada Lovelace' },
+          'System.Tags': 'Frontend',
+        }),
+        item(3, {
+          'System.AssignedTo': { displayName: 'Patrick Lin' },
+          'System.Tags': 'Backend',
+        }),
       ],
       iterations: [],
       filters: filters({ assignees: ['patrick lin'], tags: ['URGENT'] }),
@@ -241,10 +250,10 @@ describe('buildAzureBoardModel', () => {
     });
     const secondStory = item(200, {}, { relatedWorkItemIds: [4] });
     const childWorkItems = [
-      item(3, { workItemType: 'Task', state: 'Closed' }),
-      item(2, { workItemType: 'bug', state: 'Done' }),
-      item(4, { workItemType: 'Bug', state: 'Closed' }),
-      item(1, { workItemType: 'Bug', state: 'Active' }),
+      item(3, { 'System.WorkItemType': 'Task', 'System.State': 'Closed' }),
+      item(2, { 'System.WorkItemType': 'bug', 'System.State': 'Done' }),
+      item(4, { 'System.WorkItemType': 'Bug', 'System.State': 'Closed' }),
+      item(1, { 'System.WorkItemType': 'Bug', 'System.State': 'Active' }),
     ];
     const baseModel = buildAzureBoardBaseModel({
       metadataItems: [],
@@ -275,12 +284,12 @@ describe('buildAzureBoardModel', () => {
   ])('treats %s as a backlog parent for linked bugs and related panel data', (workItemType) => {
     const backlogItem = item(
       100,
-      { workItemType: workItemType.toLocaleLowerCase() },
+      { 'System.WorkItemType': workItemType.toLocaleLowerCase() },
       { childIds: [1], relatedWorkItemIds: [2] },
     );
     const childWorkItems = [
-      item(1, { workItemType: 'Bug', state: 'Active' }),
-      item(2, { workItemType: 'Bug', state: 'Done' }),
+      item(1, { 'System.WorkItemType': 'Bug', 'System.State': 'Active' }),
+      item(2, { 'System.WorkItemType': 'Bug', 'System.State': 'Done' }),
     ];
     const baseModel = buildAzureBoardBaseModel({
       metadataItems: [],
@@ -305,7 +314,7 @@ describe('buildAzureBoardModel', () => {
   it('ignores a selected story filtered out of visible items', () => {
     const relationshipModel = buildAzureBoardRelationshipModel({
       visibleItems: [item(200)],
-      childWorkItems: [item(1, { workItemType: 'Bug' })],
+      childWorkItems: [item(1, { 'System.WorkItemType': 'Bug' })],
       bugsForWorkItemId: 100,
     });
 
@@ -316,12 +325,12 @@ describe('buildAzureBoardModel', () => {
   it.each(['Bug', 'Task'])('does not open related bug data for %s items', (workItemType) => {
     const nonBacklogItem = item(
       100,
-      { workItemType },
+      { 'System.WorkItemType': workItemType },
       { relatedWorkItemIds: [1] },
     );
     const relationshipModel = buildAzureBoardRelationshipModel({
       visibleItems: [nonBacklogItem],
-      childWorkItems: [item(1, { workItemType: 'Bug' })],
+      childWorkItems: [item(1, { 'System.WorkItemType': 'Bug' })],
       bugsForWorkItemId: 100,
     });
 
@@ -333,7 +342,7 @@ describe('buildAzureBoardModel', () => {
     const story = item(100, {}, { childIds: [1, 2, 3] });
     const relationshipModel = buildAzureBoardRelationshipModel({
       visibleItems: [story],
-      childWorkItems: [item(2, { workItemType: 'Bug', state: 'Done' })],
+      childWorkItems: [item(2, { 'System.WorkItemType': 'Bug', 'System.State': 'Done' })],
       bugsForWorkItemId: 100,
     });
 

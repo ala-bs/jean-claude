@@ -66,6 +66,13 @@ import {
   renormalizeDraftInteractionMode,
 } from '@/lib/default-interaction-mode';
 import {
+  getDescriptionHtml,
+  getReproStepsHtml,
+  getState,
+  getTitle,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
+import {
   getModelsForBackend,
   getModelThinkingCapabilities,
 } from '@/features/agent/ui-backend-selector';
@@ -1583,7 +1590,7 @@ export function NewTaskOverlay({
     if (!currentBackend) return;
 
     const workItemTitles = selectedWorkItems.map((workItem) =>
-      workItem.fields.title.slice(0, 80),
+      getTitle(workItem).slice(0, 80),
     );
     const creationInput = {
       backend: currentBackend,
@@ -1591,11 +1598,11 @@ export function NewTaskOverlay({
       projectAiSkillSlots: selectedProject?.aiSkillSlots ?? null,
       workItems: selectedWorkItems.map((workItem) => ({
         id: workItem.id,
-        title: workItem.fields.title,
-        workItemType: workItem.fields.workItemType,
-        state: workItem.fields.state,
-        description: workItem.fields.description,
-        reproSteps: workItem.fields.reproSteps,
+        title: getTitle(workItem),
+        workItemType: getWorkItemType(workItem),
+        state: getState(workItem),
+        description: getDescriptionHtml(workItem),
+        reproSteps: getReproStepsHtml(workItem),
       })),
       testCasesByWorkItem,
     };

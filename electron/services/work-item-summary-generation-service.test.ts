@@ -98,7 +98,7 @@ describe('work item summary generation', () => {
     });
     mocks.getWorkItem.mockResolvedValue({
       id: 42,
-      fields: { teamProject: request.projectName },
+      fields: { 'System.TeamProject': request.projectName },
     });
     mocks.getComments.mockResolvedValue([]);
     mocks.prepareSource.mockReturnValue(source);
@@ -318,7 +318,7 @@ describe('work item summary generation', () => {
     ['a different project', 'Other Project'],
     ['a missing project', undefined],
   ])('rejects a work item from %s before loading comments', async (_label, teamProject) => {
-    mocks.getWorkItem.mockResolvedValue({ id: 42, fields: { teamProject } });
+    mocks.getWorkItem.mockResolvedValue({ id: 42, fields: { 'System.TeamProject': teamProject } });
 
     await expect(generateWorkItemSummary(request)).rejects.toThrow(
       'Work item does not belong to project',

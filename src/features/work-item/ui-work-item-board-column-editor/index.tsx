@@ -1,4 +1,5 @@
 import { ChevronDown, Loader2 } from 'lucide-react';
+import { getBoardColumn, getWorkItemType } from '@shared/work-item-field-types';
 import { useRef, useState } from 'react';
 
 import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
@@ -23,12 +24,12 @@ export function WorkItemBoardColumnEditor({
   variant?: 'metadata' | 'details';
 }) {
   const dropdownRef = useRef<{ toggle: () => void } | null>(null);
-  const currentColumn = workItem.fields.boardColumn ?? '';
+  const currentColumn = getBoardColumn(workItem) ?? '';
   const [optimisticColumn, setOptimisticColumn] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const updateColumn = useUpdateWorkItemBoardColumn();
   const displayColumn = optimisticColumn ?? currentColumn;
-  const workItemType = workItem.fields.workItemType;
+  const workItemType = getWorkItemType(workItem);
   const options = getEditableBoardColumns({
     columns,
     workItemType,

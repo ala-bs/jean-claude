@@ -18,6 +18,15 @@ vi.mock('../database/repositories/tokens', () => ({
 }));
 
 import {
+  CORE_FIELD_REFNAMES,
+  getAssignee,
+  getBoardColumnDone,
+  getStoryPoints,
+  getTags,
+  getTitle,
+} from '@shared/work-item-field-types';
+
+import {
   addWorkItemComment,
   buildWorkItemBoardColumnPatch,
   buildWorkItemFieldPatch,
@@ -25,7 +34,10 @@ import {
   getIterations,
   getBoardColumns,
   getWorkItemById,
+  WORK_ITEM_FIELDS_URL_LIMIT,
   getWorkItemsByIds,
+  getWorkItemTypeFields,
+  resolveFieldFetchSet,
   getWorkItemComments,
   getPullRequestChanges,
   getPullRequestFileContent,
@@ -79,8 +91,274 @@ describe('getWorkItemById', () => {
     await expect(
       getWorkItemById({ providerId: 'provider-1', workItemId: 55803 }),
     ).resolves.toMatchObject({
-      fields: { acceptanceCriteria: '<p>Ship it</p>' },
+      fields: {
+        'Microsoft.VSTS.Common.AcceptanceCriteria': '<p>Ship it</p>',
+      },
     });
+  });
+
+  it('omits the fields parameter when the project configured no extras', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ id: 1, fields: {} }, { ok: true }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getWorkItemById({ providerId: 'provider-1', workItemId: 1 });
+
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('fields=');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('$expand=relations');
+  });
+
+  it('omits fields= when the configured set would overflow the URL (F8)', async () => {
+    // A config can reference far more refNames than a URL should carry: the
+    // guard caps each list, not the union across detail + board + overrides.
+    // Dropping the param is lossless because the default payload has every
+    // field, whereas an over-long URL 400s with a body naming no refName,
+    // which detectExtraFieldFailure cannot recognise and so cannot recover.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ id: 1, fields: {} }, { ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    // Enough refNames to blow the encoded-length budget.
+    const manyExtras = Array.from(
+      { length: Math.ceil(WORK_ITEM_FIELDS_URL_LIMIT / 20) + 5 },
+      (_unused, index) => `Custom.LongFieldName${index}`,
+    );
+    await getWorkItemById({
+      providerId: 'provider-1',
+      workItemId: 1,
+      extraFieldRefNames: manyExtras,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('fields=');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('$expand=relations');
+  });
+
+  it('still sends fields= for a set that fits in the URL', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ id: 1, fields: {} }, { ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getWorkItemById({
+      providerId: 'provider-1',
+      workItemId: 1,
+      extraFieldRefNames: ['Custom.Severity'],
+    });
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('fields=');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('Custom.Severity');
+  });
+
+  it('round-trips every core refName and normalizes identities', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          { id: 7, fields: coreFieldsFixture() },
+          { ok: true },
+        ),
+      ),
+    );
+
+    const item = await getWorkItemById({
+      providerId: 'provider-1',
+      workItemId: 7,
+    });
+
+    expect(item).not.toBeNull();
+    for (const refName of CORE_FIELD_REFNAMES) {
+      expect(item?.fields).toHaveProperty(refName);
+      expect(item?.fields[refName]).not.toBeNull();
+    }
+    expect(getAssignee(item!)).toEqual({
+      displayName: 'Zoe',
+      uniqueName: 'zoe@example.com',
+    });
+    expect(getTitle(item!)).toBe('Story');
+    expect(getStoryPoints(item!)).toBe(5);
+    expect(getBoardColumnDone(item!)).toBe(false);
+    expect(getTags(item!)).toEqual(['alpha', 'beta']);
+  });
+
+  it('sends core plus extras and retries without fields when Azure rejects one (F3)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          'TF51005: The query references a field that does not exist. The error is caused by «Custom.Nope».',
+          { ok: false, status: 400 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { id: 7, fields: { 'System.Title': 'Story' } },
+          { ok: true },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const item = await getWorkItemById({
+      providerId: 'provider-1',
+      workItemId: 7,
+      extraFieldRefNames: ['Custom.Nope'],
+    });
+
+    const firstUrl = String(fetchMock.mock.calls[0][0]);
+    const sent = decodeURIComponent(
+      /[?&]fields=([^&]+)/.exec(firstUrl)?.[1] ?? '',
+    ).split(',');
+    expect(sent).toEqual([...CORE_FIELD_REFNAMES, 'Custom.Nope']);
+
+    expect(String(fetchMock.mock.calls[1][0])).not.toContain('fields=');
+    expect(item?.partialFieldFailure).toEqual(['Custom.Nope']);
+    expect(getTitle(item!)).toBe('Story');
+  });
+
+  it('does not retry when the failure is unrelated to the extras', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse('boom', { ok: false, status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      getWorkItemById({
+        providerId: 'provider-1',
+        workItemId: 7,
+        extraFieldRefNames: ['Custom.Severity'],
+      }),
+    ).rejects.toThrow('Failed to fetch work item 7');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('resolveFieldFetchSet', () => {
+  it('is core when there are no extras', () => {
+    expect(resolveFieldFetchSet()).toEqual([...CORE_FIELD_REFNAMES]);
+    expect(resolveFieldFetchSet([])).toEqual([...CORE_FIELD_REFNAMES]);
+  });
+
+  it('appends extras and never duplicates core or repeated refNames', () => {
+    expect(
+      resolveFieldFetchSet([
+        'System.Title',
+        'Custom.Severity',
+        'Custom.Severity',
+        '  ',
+      ]),
+    ).toEqual([...CORE_FIELD_REFNAMES, 'Custom.Severity']);
+  });
+});
+
+describe('getWorkItemTypeFields', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('merges types, dedupes by refName and unions valid work item types', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/workitemtypes?api-version=7.0')) {
+        return jsonResponse(
+          { value: [{ name: 'Bug' }, { name: 'User Story' }] },
+          { ok: true },
+        );
+      }
+      if (url.includes('/workitemtypes/Bug/fields')) {
+        return jsonResponse(
+          {
+            value: [
+              { referenceName: 'System.Title', name: 'Title', type: 'string' },
+              {
+                referenceName: 'Custom.Severity',
+                name: 'Severity',
+                type: 'picklistString',
+                readOnly: true,
+              },
+              { referenceName: 'System.History', name: 'History', type: 'history' },
+              { referenceName: 'Custom.Weird', name: 'Weird', type: 'nonsense' },
+            ],
+          },
+          { ok: true },
+        );
+      }
+      if (url.includes('/workitemtypes/User%20Story/fields')) {
+        return jsonResponse(
+          {
+            value: [
+              { referenceName: 'System.Title', name: 'Title', type: 'string' },
+              {
+                referenceName: 'Microsoft.VSTS.Scheduling.StoryPoints',
+                name: 'Story Points',
+                type: 'double',
+              },
+            ],
+          },
+          { ok: true },
+        );
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const fields = await getWorkItemTypeFields({
+      providerId: 'provider-1',
+      azureProjectId: 'project-guid',
+    });
+
+    expect(fields.map((field) => field.refName)).toEqual([
+      'System.Title',
+      'Custom.Severity',
+      'System.History',
+      'Custom.Weird',
+      'Microsoft.VSTS.Scheduling.StoryPoints',
+    ]);
+    expect(
+      fields.find((field) => field.refName === 'System.Title'),
+    ).toMatchObject({
+      name: 'Title',
+      type: 'string',
+      readOnly: false,
+      validWorkItemTypes: ['Bug', 'User Story'],
+    });
+    expect(
+      fields.find((field) => field.refName === 'Custom.Severity'),
+    ).toMatchObject({
+      type: 'picklistString',
+      readOnly: true,
+      validWorkItemTypes: ['Bug'],
+    });
+    // history maps onto html; unknown Azure types degrade to string
+    expect(
+      fields.find((field) => field.refName === 'System.History')?.type,
+    ).toBe('html');
+    expect(fields.find((field) => field.refName === 'Custom.Weird')?.type).toBe(
+      'string',
+    );
+  });
+
+  it('throws when the work item types call fails (F4)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse('unauthorized', { ok: false })),
+    );
+
+    await expect(
+      getWorkItemTypeFields({
+        providerId: 'provider-1',
+        azureProjectId: 'project-guid',
+      }),
+    ).rejects.toThrow('Failed to fetch work item types');
   });
 });
 
@@ -286,6 +564,75 @@ describe('getWorkItemsByIds', () => {
     expect(abortedChunks).toEqual([201, 401, 601]);
     expect(startedChunks).not.toContain(801);
   });
+
+  it('sends core plus extras in the batch body, without duplicating core', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ count: 1, value: [workItemResponse(10)] }, { ok: true }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getWorkItemsByIds({
+      providerId: 'provider-1',
+      projectName: 'Team Project',
+      workItemIds: [10],
+      extraFieldRefNames: ['Custom.Severity', 'System.Title', 'Custom.Severity'],
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.fields).toEqual([...CORE_FIELD_REFNAMES, 'Custom.Severity']);
+    expect(body.$expand).toBe('Relations');
+  });
+
+  it('retries the batch without fields and flags partialFieldFailure (F3)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          'VS402337: The field Custom.Severity does not exist.',
+          { ok: false, status: 400 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ count: 1, value: [workItemResponse(10)] }, { ok: true }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getWorkItemsByIds({
+      providerId: 'provider-1',
+      projectName: 'Team Project',
+      workItemIds: [10],
+      extraFieldRefNames: ['Custom.Severity'],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).not.toHaveProperty(
+      'fields',
+    );
+    expect(result).toHaveLength(1);
+    expect(
+      (result as { partialFieldFailure?: string[] }).partialFieldFailure,
+    ).toEqual(['Custom.Severity']);
+    expect(result[0].partialFieldFailure).toEqual(['Custom.Severity']);
+  });
+
+  it('propagates unrelated batch failures without retrying', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse('service unavailable', { ok: false }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      getWorkItemsByIds({
+        providerId: 'provider-1',
+        projectName: 'Team Project',
+        workItemIds: [10],
+        extraFieldRefNames: ['Custom.Severity'],
+      }),
+    ).rejects.toThrow('Failed to batch-fetch work items');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('queryWorkItems', () => {
@@ -328,6 +675,37 @@ describe('queryWorkItems', () => {
     expect(String(fetchMock.mock.calls[0][0])).not.toContain('$top=200');
     expect(result).toHaveLength(201);
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('routes a >20-refName fetch set through the POST workitemsbatch body (F8)', async () => {
+    const extras = Array.from(
+      { length: 25 },
+      (_, index) => `Custom.Field${index}`,
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ workItems: [{ id: 1, url: 'work-item-1' }] }, { ok: true }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ count: 1, value: [workItemResponse(1)] }, { ok: true }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await queryWorkItems({
+      providerId: 'provider-1',
+      projectId: 'project-1',
+      projectName: 'Team Project',
+      filters: {},
+      extraFieldRefNames: extras,
+    });
+
+    const [batchUrl, batchInit] = fetchMock.mock.calls[1];
+    expect(String(batchUrl)).toContain('/_apis/wit/workitemsbatch');
+    expect(batchInit.method).toBe('POST');
+    const body = JSON.parse(batchInit.body);
+    expect(body.fields).toEqual([...CORE_FIELD_REFNAMES, ...extras]);
+    expect(body.fields.length).toBeGreaterThan(20);
   });
 });
 
@@ -883,6 +1261,36 @@ function jsonResponse(
     json: async () => body,
     text: async () => JSON.stringify(body),
   } as Response;
+}
+
+/**
+ * One raw Azure value for every `CORE_FIELD_REFNAMES` entry. Keys are spelled
+ * out by hand on purpose: the round-trip test walks `CORE_FIELD_REFNAMES` and
+ * fails loudly if a constant and the real Azure refName ever diverge.
+ */
+function coreFieldsFixture() {
+  return {
+    'System.Title': 'Story',
+    'System.WorkItemType': 'User Story',
+    'System.TeamProject': 'Team Project',
+    'System.State': 'Active',
+    'System.AssignedTo': {
+      displayName: 'Zoe',
+      uniqueName: 'zoe@example.com',
+    },
+    'System.Description': '<p>description</p>',
+    'Microsoft.VSTS.Common.AcceptanceCriteria': '<p>criteria</p>',
+    'Microsoft.VSTS.TCM.ReproSteps': '<p>repro</p>',
+    'Microsoft.VSTS.TCM.Steps': '<steps id="0" />',
+    'System.ChangedDate': '2026-01-01T00:00:00Z',
+    'System.BoardColumn': 'Doing',
+    'System.BoardColumnDone': false,
+    'System.Tags': 'alpha; beta',
+    'Microsoft.VSTS.Common.Priority': 2,
+    'Microsoft.VSTS.Common.StackRank': 1000.5,
+    'Microsoft.VSTS.Scheduling.StoryPoints': 5,
+    'System.IterationPath': 'Team Project\\Sprint 1',
+  };
 }
 
 function workItemResponse(id: number) {

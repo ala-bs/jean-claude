@@ -5,6 +5,17 @@ import type {
   WorkItemComment,
 } from './azure-devops-service';
 import {
+  FIELD_ACCEPTANCE_CRITERIA,
+  FIELD_ASSIGNED_TO,
+  FIELD_CHANGED_DATE,
+  FIELD_DESCRIPTION,
+  FIELD_REPRO_STEPS,
+  FIELD_STATE,
+  FIELD_TITLE,
+  FIELD_WORK_ITEM_TYPE,
+} from '@shared/work-item-field-types';
+
+import {
   prepareWorkItemSummarySource,
   UNTRUSTED_WORK_ITEM_SOURCE_NOTICE,
 } from './work-item-summary-source';
@@ -13,13 +24,13 @@ const workItem: AzureDevOpsWorkItem = {
   id: 42,
   url: 'https://example.test/42',
   fields: {
-    title: 'Checkout fails',
-    workItemType: 'Bug',
-    state: 'Active',
-    description: '<p>Payment <strong>fails</strong>.</p>',
-    acceptanceCriteria: '<ul><li>Order completes</li></ul>',
-    reproSteps: '<ol><li>Submit payment</li></ol>',
-    changedDate: '2026-07-14T09:00:00.000Z',
+    [FIELD_TITLE]: 'Checkout fails',
+    [FIELD_WORK_ITEM_TYPE]: 'Bug',
+    [FIELD_STATE]: 'Active',
+    [FIELD_DESCRIPTION]: '<p>Payment <strong>fails</strong>.</p>',
+    [FIELD_ACCEPTANCE_CRITERIA]: '<ul><li>Order completes</li></ul>',
+    [FIELD_REPRO_STEPS]: '<ol><li>Submit payment</li></ol>',
+    [FIELD_CHANGED_DATE]: '2026-07-14T09:00:00.000Z',
   },
 };
 
@@ -55,9 +66,9 @@ describe('prepareWorkItemSummarySource', () => {
       workItem: {
         ...workItem,
         fields: {
-          title: 'Sparse',
-          workItemType: 'Task',
-          state: 'New',
+          [FIELD_TITLE]: 'Sparse',
+          [FIELD_WORK_ITEM_TYPE]: 'Task',
+          [FIELD_STATE]: 'New',
         },
       },
       comments: [],
@@ -88,7 +99,23 @@ describe('prepareWorkItemSummarySource', () => {
     expect(result.commentsMarkdown).toContain('_No comments._');
     expect(result.sourceLatestCommentId).toBeNull();
     expect(result.sourceCommentCount).toBe(0);
-    expect(result.sourceChangedDate).toBe(workItem.fields.changedDate);
+    expect(result.sourceChangedDate).toBe(workItem.fields[FIELD_CHANGED_DATE]);
+  });
+
+  it('handles an assignee identity without uniqueName', () => {
+    const result = prepareWorkItemSummarySource({
+      workItem: {
+        ...workItem,
+        fields: {
+          ...workItem.fields,
+          [FIELD_ASSIGNED_TO]: { displayName: 'Ada Lovelace' },
+        },
+      },
+      comments: [],
+    });
+
+    expect(result.coreMarkdown).toContain('- **Title:** Checkout fails');
+    expect(result.sourceHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it('produces a stable hash independent of comment input order', () => {
@@ -103,8 +130,8 @@ describe('prepareWorkItemSummarySource', () => {
   });
 
   it.each([
-    ['title', { workItem: { ...workItem, fields: { ...workItem.fields, title: 'Changed' } }, comments }],
-    ['description', { workItem: { ...workItem, fields: { ...workItem.fields, description: '<p>Changed</p>' } }, comments }],
+    ['title', { workItem: { ...workItem, fields: { ...workItem.fields, [FIELD_TITLE]: 'Changed' } }, comments }],
+    ['description', { workItem: { ...workItem, fields: { ...workItem.fields, [FIELD_DESCRIPTION]: '<p>Changed</p>' } }, comments }],
     ['comment text', { workItem, comments: [{ ...comments[0], text: 'Changed' }, comments[1]] }],
     ['comment id', { workItem, comments: [{ ...comments[0], id: 3 }, comments[1]] }],
     ['comment date', { workItem, comments: [{ ...comments[0], createdDate: '2026-07-14T12:00:00.000Z' }, comments[1]] }],

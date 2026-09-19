@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getOwnerOptions } from '@/features/feed/ui-work-item-details';
+import { getOwnerOptions } from '@/features/work-item/ui-work-item-field-editors/work-item-owner-editor';
 
 describe('getOwnerOptions', () => {
   it('keeps unassigned and current owner first, then sorted unique owners', () => {

@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import clsx from 'clsx';
+import { getChangedDate } from '@shared/work-item-field-types';
 import { getWorkItemSummaryExcerpt } from '@shared/work-item-summary';
 import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
 
@@ -18,6 +19,8 @@ import { useCurrentAzureUser } from '@/hooks/use-work-items';
 
 
 import { groupWorkItemsByBoardColumns } from './utils';
+import type { WorkItemDisplayConfig } from '@shared/work-item-display-config-types';
+
 import { WorkItemBoardCard } from './card-board-item';
 
 const EMPTY_COLUMN_IDS: string[] = [];
@@ -68,6 +71,7 @@ export const WorkItemBoard = memo(function WorkItemBoard({
   variant = 'default',
   parserSetting = null,
   colorSettings = DEFAULT_BOARD_COLOR_SETTINGS,
+  displayConfig = null,
 }: {
   workItems: AzureDevOpsWorkItem[];
   boardColumns: AzureDevOpsBoardColumn[];
@@ -92,6 +96,8 @@ export const WorkItemBoard = memo(function WorkItemBoard({
   variant?: 'default' | 'editorial';
   parserSetting?: WorkItemTitleParserSetting | null;
   colorSettings?: BoardColorSettings;
+  /** Per-project display config; `null` renders today's card. */
+  displayConfig?: WorkItemDisplayConfig | null;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
@@ -368,7 +374,7 @@ export const WorkItemBoard = memo(function WorkItemBoard({
               const summaryIsStale =
                 !!cachedSummary &&
                 cachedSummary.sourceChangedDate !==
-                  (workItem.fields.changedDate ?? null);
+                  (getChangedDate(workItem) ?? null);
               return (
                 <WorkItemBoardCard
                   key={workItem.id}
@@ -377,6 +383,7 @@ export const WorkItemBoard = memo(function WorkItemBoard({
                   variant={variant}
                   parserSetting={parserSetting}
                   colorSettings={colorSettings}
+                  displayConfig={displayConfig}
                   currentIterationPath={currentIterationPath}
                   currentUserDisplayName={currentUser?.displayName}
                   isHighlighted={isHighlighted}

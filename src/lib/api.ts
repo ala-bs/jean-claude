@@ -93,6 +93,11 @@ import type {
   AzureDevOpsPullRequestDetails,
   AzureDevOpsPullRequestTag,
 } from '@shared/azure-devops-types';
+import type {
+  AzureFieldRefName,
+  WorkItemFieldMetadata,
+  WorkItemFieldValue,
+} from '@shared/work-item-field-types';
 import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
 import type {
   CleanupUnusedWorktreesResult,
@@ -393,31 +398,20 @@ export interface TestStep {
 export interface AzureDevOpsWorkItem {
   id: number;
   url: string;
-  fields: {
-    title: string;
-    workItemType: string;
-    teamProject?: string;
-    state: string;
-    assignedTo?: string;
-    assignedToUniqueName?: string;
-    description?: string;
-    acceptanceCriteria?: string;
-    reproSteps?: string;
-    changedDate?: string;
-    boardColumn?: string;
-    boardColumnDone?: boolean;
-    tags?: string;
-    priority?: number;
-    stackRank?: number;
-    storyPoints?: number;
-    iterationPath?: string;
-  };
+  fields: Record<AzureFieldRefName, WorkItemFieldValue>;
   testSteps?: TestStep[];
   parentId?: number;
   childIds?: number[];
   relatedWorkItemIds?: number[];
   linkedPrs?: Array<{ prId: number; projectId: string; repoId: string }>;
   relatedTestCaseIds?: number[];
+  /**
+   * Set when Azure rejected one or more configured extra refNames and the
+   * service retried without them (design failure mode F3). Carried per item
+   * rather than on the array, because structured clone drops an array's
+   * non-index properties on the way through IPC.
+   */
+  partialFieldFailure?: AzureFieldRefName[];
 }
 
 export interface AzureDevOpsPullRequestStatus {
@@ -971,6 +965,7 @@ export interface Api {
           iterationPaths?: string[];
           assignedTo?: string;
       };
+      extraFieldRefNames?: AzureFieldRefName[];
     }) => Promise<AzureDevOpsWorkItem[]>;
     queryWorkItemOwners: (params: {
       providerId: string;
@@ -979,12 +974,18 @@ export interface Api {
     getWorkItemById: (params: {
       providerId: string;
       workItemId: number;
+      extraFieldRefNames?: AzureFieldRefName[];
     }) => Promise<AzureDevOpsWorkItem | null>;
     getWorkItemsByIds: (params: {
       providerId: string;
       projectName: string;
       workItemIds: number[];
+      extraFieldRefNames?: AzureFieldRefName[];
     }) => Promise<AzureDevOpsWorkItem[]>;
+    getWorkItemTypeFields: (params: {
+      providerId: string;
+      azureProjectId: string;
+    }) => Promise<WorkItemFieldMetadata[]>;
     getPullRequestStatuses: (params: {
       providerId: string;
       linkedPrs: Array<{ prId: number; projectId: string; repoId: string }>;
@@ -2635,6 +2636,7 @@ export const api: Api = hasWindowApi
         queryWorkItemOwners: async () => [],
         getWorkItemById: async () => null,
         getWorkItemsByIds: async () => [],
+        getWorkItemTypeFields: async () => [],
         getPullRequestStatuses: async () => [],
         getWorkItemStates: async () => [],
         getBoardColumns: async () => [],

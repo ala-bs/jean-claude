@@ -10,6 +10,7 @@ import {
   getDefaultInteractionMode,
   renormalizeDraftInteractionMode,
 } from '@/lib/default-interaction-mode';
+import { getDescriptionHtml, getTitle } from '@shared/work-item-field-types';
 import {
   getModelsForBackend,
   getModelThinkingCapabilities,
@@ -527,9 +528,9 @@ function NewTask() {
                   projectName={project!.workItemProjectName!}
                   onSelect={(wi) => {
                     setDraft({
-                      name: wi.fields.title.slice(0, 100),
+                      name: getTitle(wi).slice(0, 100),
                       prompt:
-                        `[AB#${wi.id}] ${wi.fields.title}\n\n${wi.fields.description ?? ''}`.trim(),
+                        `[AB#${wi.id}] ${getTitle(wi)}\n\n${getDescriptionHtml(wi) ?? ''}`.trim(),
                       workItemIds: [String(wi.id)],
                       workItemUrls: [wi.url],
                     });

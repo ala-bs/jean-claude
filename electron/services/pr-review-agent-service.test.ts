@@ -117,6 +117,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     workItemProjectId: null,
     workItemProjectName: null,
     workItemTitleParser: null,
+    workItemDisplayConfig: null,
     showWorkItemsInFeed: false,
     showPrsInFeed: true,
     autoPullSourceBranch: false,

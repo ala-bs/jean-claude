@@ -89,6 +89,7 @@ import * as m087 from './migrations/087_project_command_group_stages';
 import * as m088 from './migrations/088_message_query_indexes';
 import * as m089 from './migrations/089_project_command_group_favorites';
 import * as m090 from './migrations/090_project_auto_accept_on_task_creation';
+import * as m091 from './migrations/091_project_work_item_display_config';
 
 const migrations: Record<string, Migration> = {
   '001_initial': m001,
@@ -180,6 +181,7 @@ const migrations: Record<string, Migration> = {
   '088_message_query_indexes': m088,
   '089_project_command_group_favorites': m089,
   '090_project_auto_accept_on_task_creation': m090,
+  '091_project_work_item_display_config': m091,
 };
 
 export const migrationProvider: MigrationProvider = {

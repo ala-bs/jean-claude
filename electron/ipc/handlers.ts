@@ -3584,8 +3584,21 @@ export function registerIpcHandlers() {
           iterationPaths?: string[];
           assignedTo?: string;
         };
+        extraFieldRefNames?: string[];
       },
     ) => queryWorkItems(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:getWorkItemTypeFields',
+    async (
+      _event,
+      params: { providerId: string; azureProjectId: string },
+    ) => {
+      const { getWorkItemTypeFields } =
+        await import('../services/azure-devops-service');
+      return getWorkItemTypeFields(params);
+    },
   );
 
   ipcMain.handle(
@@ -3601,7 +3614,14 @@ export function registerIpcHandlers() {
 
   ipcMain.handle(
     'azureDevOps:getWorkItemById',
-    async (_event, params: { providerId: string; workItemId: number }) => {
+    async (
+      _event,
+      params: {
+        providerId: string;
+        workItemId: number;
+        extraFieldRefNames?: string[];
+      },
+    ) => {
       const { getWorkItemById } =
         await import('../services/azure-devops-service');
       return getWorkItemById(params);
@@ -3616,6 +3636,7 @@ export function registerIpcHandlers() {
         providerId: string;
         projectName: string;
         workItemIds: number[];
+        extraFieldRefNames?: string[];
       },
     ) => {
       const { getWorkItemsByIds } =

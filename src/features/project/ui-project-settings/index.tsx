@@ -116,6 +116,8 @@ import { useNavigationStore } from '@/stores/navigation';
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { useToastStore } from '@/stores/toasts';
+import type { WorkItemDisplayConfig } from '@shared/work-item-display-config-types';
+import { WorkItemDisplaySettings } from '@/features/project/ui-work-item-display-settings';
 import { WorkItemsLink } from '@/features/project/ui-work-items-link';
 import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
 
@@ -813,6 +815,8 @@ export function ProjectSettings({
     useState<ProjectPriority>('normal');
   const [workItemTitleParser, setWorkItemTitleParser] =
     useState<WorkItemTitleParserSetting | null>(null);
+  const [workItemDisplayConfig, setWorkItemDisplayConfig] =
+    useState<WorkItemDisplayConfig | null>(null);
   const [aiSkillSlots, setAiSkillSlots] = useState<AiSkillSlotsSetting | null>(
     null,
   );
@@ -865,6 +869,7 @@ export function ProjectSettings({
       prPriority: project.prPriority ?? 'normal',
       workItemPriority: project.workItemPriority ?? 'normal',
       workItemTitleParser: project.workItemTitleParser,
+      workItemDisplayConfig: project.workItemDisplayConfig,
       completionContext: project.completionContext ?? null,
       summary: project.summary ?? null,
       worktreesPath: project.worktreesPath ?? null,
@@ -891,6 +896,7 @@ export function ProjectSettings({
       prPriority,
       workItemPriority,
       workItemTitleParser,
+      workItemDisplayConfig,
       completionContext: completionContext || null,
       summary: summary || null,
       worktreesPath: worktreesPath || null,
@@ -919,6 +925,7 @@ export function ProjectSettings({
       summary,
       workItemPriority,
       workItemTitleParser,
+      workItemDisplayConfig,
       worktreesPath,
     ],
   );
@@ -976,6 +983,7 @@ export function ProjectSettings({
       setPrPriority(project.prPriority ?? 'normal');
       setWorkItemPriority(project.workItemPriority ?? 'normal');
       setWorkItemTitleParser(project.workItemTitleParser);
+      setWorkItemDisplayConfig(project.workItemDisplayConfig);
       setCompletionContext(project.completionContext ?? '');
       setSummary(project.summary ?? '');
       dirtyFieldsRef.current.clear();
@@ -1857,6 +1865,14 @@ export function ProjectSettings({
             onWorkItemTitleParserChange={(setting) => {
               markFieldDirty('workItemTitleParser');
               setWorkItemTitleParser(setting);
+            }}
+          />
+          <WorkItemDisplaySettings
+            project={project}
+            value={workItemDisplayConfig}
+            onChange={(next) => {
+              markFieldDirty('workItemDisplayConfig');
+              setWorkItemDisplayConfig(next);
             }}
           />
         </div>

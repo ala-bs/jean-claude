@@ -1,5 +1,15 @@
 import { createHash } from 'node:crypto';
 
+import {
+  getAcceptanceCriteriaHtml,
+  getChangedDate,
+  getDescriptionHtml,
+  getReproStepsHtml,
+  getState,
+  getTitle,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
+
 import type {
   AzureDevOpsWorkItem,
   WorkItemComment,
@@ -126,12 +136,12 @@ export function prepareWorkItemSummarySource({
   sourceCommentCount: number;
 } {
   const core = {
-    title: normalizeText(workItem.fields.title),
-    workItemType: normalizeText(workItem.fields.workItemType),
-    state: normalizeText(workItem.fields.state),
-    description: normalizeHtml(workItem.fields.description),
-    acceptanceCriteria: normalizeHtml(workItem.fields.acceptanceCriteria),
-    reproSteps: normalizeHtml(workItem.fields.reproSteps),
+    title: normalizeText(getTitle(workItem)),
+    workItemType: normalizeText(getWorkItemType(workItem)),
+    state: normalizeText(getState(workItem)),
+    description: normalizeHtml(getDescriptionHtml(workItem)),
+    acceptanceCriteria: normalizeHtml(getAcceptanceCriteriaHtml(workItem)),
+    reproSteps: normalizeHtml(getReproStepsHtml(workItem)),
   };
   const normalizedComments = normalizeComments(comments);
   const sourceHash = createHash('sha256')
@@ -142,7 +152,7 @@ export function prepareWorkItemSummarySource({
     coreMarkdown: renderCoreMarkdown(core),
     commentsMarkdown: renderCommentsMarkdown(normalizedComments),
     sourceHash,
-    sourceChangedDate: workItem.fields.changedDate ?? null,
+    sourceChangedDate: getChangedDate(workItem) ?? null,
     sourceLatestCommentId: normalizedComments.at(-1)?.id ?? null,
     sourceCommentCount: normalizedComments.length,
   };
