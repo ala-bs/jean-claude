@@ -2991,6 +2991,7 @@ export const api: Api = hasWindowApi
           byDay: [],
           byFeature: [],
           byModel: [],
+          byProject: [],
           topTasks: [],
           unknownPricing: [],
         }),

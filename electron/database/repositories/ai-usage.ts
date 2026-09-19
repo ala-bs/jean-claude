@@ -373,6 +373,14 @@ export const AiUsageRepository = {
         projectName: string | null;
       }
     >();
+    // Keyed by projectId, with a null key collecting usage that is not tied to
+    // any project (e.g. inline autocomplete records projectId: null). Empty
+    // string is normalized to that null bucket, matching how rebuildTaskTotal
+    // already treats '' as "no project".
+    const byProjectMap = new Map<
+      string | null,
+      typeof emptyTotals & { projectName: string | null; taskIds: Set<string> }
+    >();
     const unknownMap = new Map<
       string,
       { backend: string; model: string; requests: number }
@@ -405,6 +413,16 @@ export const AiUsageRepository = {
           byModelMap.set(modelKey, { ...emptyTotals }).get(modelKey)!,
         event,
       );
+      const projectKey = event.projectId || null;
+      const projectTotals = byProjectMap.get(projectKey) ?? {
+        ...emptyTotals,
+        projectName: projectKey ? event.projectName : null,
+        taskIds: new Set<string>(),
+      };
+      if (projectKey) projectTotals.projectName ??= event.projectName;
+      if (event.taskId) projectTotals.taskIds.add(event.taskId);
+      addTotals(projectTotals, event);
+      byProjectMap.set(projectKey, projectTotals);
       if (event.taskId && event.projectId) {
         const existing = byTaskMap.get(event.taskId);
         const taskTotals = existing ?? {
@@ -446,6 +464,21 @@ export const AiUsageRepository = {
         : [];
     const taskNames = new Map(tasks.map((task) => [task.taskId, task]));
 
+    const projectIds = [...byProjectMap.keys()].filter(
+      (projectId): projectId is string => projectId !== null,
+    );
+    const projectRows =
+      projectIds.length > 0
+        ? await db
+            .selectFrom('projects')
+            .select(['id', 'name'])
+            .where('id', 'in', projectIds)
+            .execute()
+        : [];
+    const projectNames = new Map(
+      projectRows.map((project) => [project.id, project.name]),
+    );
+
     return {
       totals,
       byDay: [...byDayMap.entries()]
@@ -469,6 +502,25 @@ export const AiUsageRepository = {
           return { backend, model, ...value };
         })
         .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd),
+      byProject: [...byProjectMap.entries()]
+        .map(([projectId, value]) => ({
+          projectId,
+          projectName:
+            projectId === null
+              ? null
+              : (projectNames.get(projectId) ?? value.projectName ?? null),
+          inputTokens: value.inputTokens,
+          outputTokens: value.outputTokens,
+          cacheReadTokens: value.cacheReadTokens,
+          cacheCreationTokens: value.cacheCreationTokens,
+          totalTokens: value.totalTokens,
+          estimatedCostUsd: value.estimatedCostUsd,
+          providerCostUsd: value.providerCostUsd,
+          providerApiCostUsd: value.providerApiCostUsd,
+          requests: value.requests,
+          taskCount: value.taskIds.size,
+        }))
+        .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd),
       topTasks: [...byTaskMap.entries()]
         .map(([taskId, value]) => ({
           taskId,
@@ -477,8 +529,14 @@ export const AiUsageRepository = {
             value.taskName ??
             taskNames.get(taskId)?.taskName ??
             formatTaskPromptFallback(taskNames.get(taskId)?.taskPrompt),
+          // Live project name wins over the record-time snapshot so a renamed
+          // project reads the same here as in byProject; the snapshot is only
+          // a fallback for projects that no longer exist.
           projectName:
-            value.projectName ?? taskNames.get(taskId)?.projectName ?? null,
+            projectNames.get(value.projectId) ??
+            taskNames.get(taskId)?.projectName ??
+            value.projectName ??
+            null,
           inputTokens: value.inputTokens,
           outputTokens: value.outputTokens,
           cacheReadTokens: value.cacheReadTokens,
