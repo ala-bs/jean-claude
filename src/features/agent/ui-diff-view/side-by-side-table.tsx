@@ -2,7 +2,7 @@ import { ChevronDown, ChevronRight, MessageSquarePlus } from 'lucide-react';
 import { memo, useCallback, useMemo } from 'react';
 import clsx from 'clsx';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import type { ThemedToken } from 'shiki';
+import type { HighlightToken } from '@/lib/syntax-highlight';
 
 
 
@@ -50,8 +50,8 @@ export function SideBySideDiffTable({
 }: {
   oldString: string;
   newString: string;
-  oldTokens: ThemedToken[][];
-  newTokens: ThemedToken[][];
+  oldTokens: HighlightToken[][];
+  newTokens: HighlightToken[][];
   onAddCommentClick?: (
     lineRange: LineRange,
     position: LineRangeSelectionPosition,
@@ -323,8 +323,8 @@ const SideBySideRowComponent = memo(function SideBySideRowComponent({
 }: {
   row: SideBySideRow;
   rowIndex: number;
-  oldTokens: ThemedToken[][];
-  newTokens: ThemedToken[][];
+  oldTokens: HighlightToken[][];
+  newTokens: HighlightToken[][];
   leftMatches: SearchMatch[];
   rightMatches: SearchMatch[];
   currentMatch: SearchMatch | null;
@@ -470,7 +470,7 @@ const SideBySideCell = memo(function SideBySideCell({
   onToggleFold,
 }: {
   line: DiffLine | null;
-  tokens: ThemedToken[][];
+  tokens: HighlightToken[][];
   side: 'left' | 'right';
   searchMatches: SearchMatch[];
   currentMatch: SearchMatch | null;

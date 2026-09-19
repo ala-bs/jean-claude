@@ -9,7 +9,7 @@ import React, {
   useState,
 } from 'react';
 import clsx from 'clsx';
-import { codeToHtml } from 'shiki';
+import { highlightToHtml, resolveLanguage } from '@/lib/syntax-highlight';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -296,49 +296,27 @@ function AsciiArtBlock({ code }: { code: string }) {
 }
 
 function CodeBlock({ language, code }: { language: string; code: string }) {
-  const [html, setHtml] = useState<string>('');
-
   // Check if this is ASCII art
   const asciiArt = isAsciiArt(code);
 
-  useEffect(() => {
-    // Skip syntax highlighting for ASCII art
-    if (asciiArt) {
-      return;
-    }
-
-    codeToHtml(code, {
-      lang: language || 'text',
-      theme: 'github-dark',
-    })
-      .then(setHtml)
-      .catch(() => {
-        // Fallback for unsupported languages
-        codeToHtml(code, {
-          lang: 'text',
-          theme: 'github-dark',
-        }).then(setHtml);
-      });
-  }, [code, language, asciiArt]);
+  // `language` is the raw markdown fence info string, so normalize it.
+  // Synchronous, so there is no unhighlighted first paint.
+  const html = useMemo(
+    () => (asciiArt ? '' : highlightToHtml(code, resolveLanguage(language))),
+    [code, language, asciiArt],
+  );
 
   // Render ASCII art with special styling
   if (asciiArt) {
     return <AsciiArtBlock code={code} />;
   }
 
-  if (!html) {
-    return (
-      <pre className="bg-bg-0 overflow-x-auto rounded-lg p-4 whitespace-pre">
-        <code>{code}</code>
-      </pre>
-    );
-  }
-
   return (
-    <div
-      className="border-glass-border mb-3 overflow-x-auto rounded border [&_pre]:w-max [&_pre]:min-w-full [&_pre]:p-2 [&_pre]:whitespace-pre"
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <div className="border-glass-border mb-3 overflow-x-auto rounded border">
+      <pre className="w-max min-w-full p-2 whitespace-pre">
+        <code dangerouslySetInnerHTML={{ __html: html }} />
+      </pre>
+    </div>
   );
 }
 

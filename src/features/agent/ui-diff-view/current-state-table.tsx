@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, MessageSquarePlus } from 'lucide-react';
 import { memo, useCallback, useMemo } from 'react';
 import clsx from 'clsx';
-import type { ThemedToken } from 'shiki';
+import type { HighlightToken } from '@/lib/syntax-highlight';
 
 
 
@@ -50,7 +50,7 @@ export function CurrentStateTable({
   oldString: string;
   newString: string;
   diffLines: DiffLine[];
-  newTokens: ThemedToken[][];
+  newTokens: HighlightToken[][];
   onAddCommentClick?: (
     lineRange: LineRange,
     position: LineRangeSelectionPosition,
@@ -259,7 +259,7 @@ const CurrentStateRow = memo(function CurrentStateRow({
   lineNumber: number;
   side: 'old' | 'new';
   content: string;
-  tokens: ThemedToken[];
+  tokens: HighlightToken[];
   searchMatches: SearchMatch[];
   currentMatch: SearchMatch | null;
   isChanged: boolean;

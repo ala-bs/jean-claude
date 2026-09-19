@@ -8,7 +8,6 @@ import {
   ThumbsUp,
   Trash2,
 } from 'lucide-react';
-import { codeToTokens, type ThemedToken } from 'shiki';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 
@@ -39,7 +38,7 @@ import { AzureMarkdownContent } from '@/features/common/ui-azure-html-content';
 import { Button } from '@/common/ui/button';
 import { encodeProxyUrl } from '@/lib/azure-image-proxy';
 import { formatRelativeTime } from '@/lib/time';
-import { getLanguageFromPath } from '@/features/agent/ui-diff-view/language-utils';
+import { getLanguageFromPath, tokenizeLines } from '@/lib/syntax-highlight';
 import { IconButton } from '@/common/ui/icon-button';
 import { InlineCommentComposer } from '@/features/common/ui-inline-comments';
 import type { PromptImagePart } from '@shared/agent-backend-types';
@@ -439,7 +438,6 @@ function ThreadCodePreview({
     'current',
     repoInfo,
   );
-  const [tokens, setTokens] = useState<ThemedToken[][]>([]);
 
   const currentSelectedLines = useMemo(
     () => getSelectedLines(currentContent, startLine, endLine),
@@ -487,17 +485,13 @@ function ThreadCodePreview({
 
   const language = useMemo(() => getLanguageFromPath(filePath), [filePath]);
 
-  useEffect(() => {
-    if (snippetLines.length === 0) return;
-    const code = snippetLines.join('\n');
-    codeToTokens(code, { lang: language, theme: 'github-dark' })
-      .then((result) => setTokens(result.tokens))
-      .catch(() => {
-        codeToTokens(code, { lang: 'text', theme: 'github-dark' }).then(
-          (result) => setTokens(result.tokens),
-        );
-      });
-  }, [snippetLines, language]);
+  const tokens = useMemo(
+    () =>
+      snippetLines.length === 0
+        ? []
+        : tokenizeLines(snippetLines.join('\n'), language),
+    [snippetLines, language],
+  );
 
   if (!activeContent || snippetLines.length === 0) return null;
 

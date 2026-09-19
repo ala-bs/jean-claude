@@ -1,6 +1,10 @@
-import { type BundledLanguage, codeToTokens, type ThemedToken } from 'shiki';
+import {
+  getLanguageFromPath,
+  type HighlightToken,
+  tokenizeLines,
+} from '@/lib/syntax-highlight';
 import { Loader2, MessageSquarePlus } from 'lucide-react';
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 
@@ -32,7 +36,6 @@ export function CommentableFileViewer({
   filePath: string;
   projectId: string;
 }) {
-  const [tokens, setTokens] = useState<ThemedToken[][] | null>(null);
   const [composerLineRange, setComposerLineRange] = useState<{
     start: number;
     end: number;
@@ -67,38 +70,15 @@ export function CommentableFileViewer({
     refetchOnWindowFocus: false,
   });
 
-  // Tokenize file content with shiki
-  useEffect(() => {
-    if (!fileData) {
-      startTransition(() => setTokens(null));
-      return;
-    }
-
-    let cancelled = false;
-    const tokenize = async () => {
-      try {
-        let result: { tokens: ThemedToken[][] };
-        try {
-          result = await codeToTokens(fileData.content, {
-            lang: (fileData.language || 'text') as BundledLanguage,
-            theme: 'github-dark',
-          });
-        } catch {
-          result = await codeToTokens(fileData.content, {
-            lang: 'text',
-            theme: 'github-dark',
-          });
-        }
-        if (!cancelled) setTokens(result.tokens);
-      } catch {
-        if (!cancelled) setTokens(null);
-      }
-    };
-    tokenize();
-    return () => {
-      cancelled = true;
-    };
-  }, [fileData]);
+  // Tokenize synchronously; derive the language from the path rather than the
+  // IPC payload so it stays consistent with the diff and preview views.
+  const tokens = useMemo(
+    () =>
+      fileData
+        ? tokenizeLines(fileData.content, getLanguageFromPath(filePath))
+        : null,
+    [fileData, filePath],
+  );
 
   // Initialize viewport info after tokens load
   useEffect(() => {
@@ -293,7 +273,7 @@ function FileLineRow({
 }: {
   lineNumber: number;
   lineContent: string;
-  lineTokens: ThemedToken[];
+  lineTokens: HighlightToken[];
   isHovered: boolean;
   isSelected: boolean;
   isInComposerRange: boolean;

@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
-import type { ThemedToken } from 'shiki';
+import type { HighlightToken } from '@/lib/syntax-highlight';
 
 import type { SearchMatch } from './use-diff-search';
 
@@ -75,7 +75,7 @@ export function renderTokensWithHighlights({
   searchMatches,
   currentMatch,
 }: {
-  tokens: ThemedToken[];
+  tokens: HighlightToken[];
   content: string;
   searchMatches: SearchMatch[];
   currentMatch: SearchMatch | null;
