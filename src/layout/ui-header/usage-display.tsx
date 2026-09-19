@@ -266,6 +266,8 @@ function ProviderUsageChip({
       }
       side="bottom"
       minWidth={280}
+      interactive
+      closeDelay={400}
     >
       <div
         className={clsx(
