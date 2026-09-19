@@ -412,19 +412,6 @@ export function MobileDevPane({
     ? runCommands.isCommandStopping(buildCommandId)
     : false;
   const buildRunning = buildStatus?.status === 'running';
-  // The runner only reports 'running' | 'stopped' | 'errored', and exit 0 maps
-  // to 'stopped' -- the same value as a command that never ran (which has no
-  // entry at all). Without this, a finished build and an unbuilt device render
-  // the identical grey dot, so the outcome has to be spelled out.
-  const buildOutcome: 'building' | 'built' | 'failed' | 'none' = buildStarting
-    ? 'building'
-    : buildRunning
-      ? 'building'
-      : buildStatus?.status === 'errored'
-        ? 'failed'
-        : buildStatus
-          ? 'built'
-          : 'none';
 
   const handleToggleBuild = useCallback(() => {
     // A build always targets exactly one device; with none selected there is
@@ -1157,74 +1144,6 @@ export function MobileDevPane({
             <p className="text-xs break-words text-red-500">{bootError}</p>
           )}
 
-          {/* Build & run onto the selected device. The command comes from
-              project settings (or detection) and, where the CLI is recognized,
-              is pointed at this exact device rather than the tool's own default
-              simulator. When it cannot be targeted, `build.notice` says so. */}
-          <div className="flex items-center gap-2">
-            <StatusDot
-              tone={
-                buildOutcome === 'failed'
-                  ? 'errored'
-                  : buildOutcome === 'building'
-                    ? 'running'
-                    : 'stopped'
-              }
-              pulse={buildStarting || buildStopping}
-            />
-            <span className="text-ink-1 text-xs font-medium">Build</span>
-            {buildOutcome !== 'none' && (
-              <span
-                className={clsx(
-                  'text-[11px]',
-                  buildOutcome === 'failed' ? 'text-red-500' : 'text-ink-3',
-                )}
-              >
-                {buildOutcome === 'building'
-                  ? 'Building…'
-                  : buildOutcome === 'failed'
-                    ? 'Failed'
-                    : 'Built'}
-              </span>
-            )}
-            <Button
-              onClick={handleToggleBuild}
-              size="sm"
-              variant="secondary"
-              className="ml-auto"
-              loading={buildStarting || buildStopping}
-              // No device selected means no build, full stop -- a build always
-              // targets one device, and the command id is keyed by it. Stated
-              // ahead of the `buildRunning` escape hatch so it cannot be
-              // reached: without a device there is no command id to be running.
-              disabled={
-                !activeDeviceKey || (!buildRunning && !build.command)
-              }
-              icon={buildRunning ? <Square /> : <Hammer />}
-              title={
-                buildRunning
-                  ? 'Stop the running build'
-                  : (build.unavailableReason ??
-                    `Build and run on ${activeDevice?.name ?? 'the selected device'}`)
-              }
-            >
-              {buildRunning ? 'Stop' : 'Build'}
-            </Button>
-          </div>
-          {build.command ? (
-            <p className="text-ink-3 truncate font-mono text-[11px]">
-              {build.command}
-            </p>
-          ) : (
-            build.unavailableReason && (
-              <p className="text-ink-3 text-xs break-words">
-                {build.unavailableReason}
-              </p>
-            )
-          )}
-          {build.notice && (
-            <p className="text-ink-3 text-xs break-words">{build.notice}</p>
-          )}
         </div>
 
         <Separator />
@@ -1244,15 +1163,42 @@ export function MobileDevPane({
                 :{effectiveDevServerPort}
               </span>
             </span>
-            <Button
-              onClick={handleToggleDevServer}
-              size="sm"
-              variant="secondary"
-              loading={devServerStarting || devServerStopping}
-              icon={devServerRunning ? <Square /> : <Play />}
-            >
-              {devServerRunning ? 'Stop' : 'Start'}
-            </Button>
+            <div className="flex items-center gap-2">
+              {/* Build & run onto the selected device. The command comes from
+                  project settings (or detection) and, where the CLI is
+                  recognized, is pointed at this exact device rather than the
+                  tool's own default simulator. */}
+              <Button
+                onClick={handleToggleBuild}
+                size="sm"
+                variant="secondary"
+                loading={buildStarting || buildStopping}
+                // No device selected means no build, full stop -- a build
+                // always targets one device, and the command id is keyed by
+                // it. Stated ahead of the `buildRunning` escape hatch so it
+                // cannot be reached: without a device there is no command id
+                // to be running.
+                disabled={!activeDeviceKey || (!buildRunning && !build.command)}
+                icon={buildRunning ? <Square /> : <Hammer />}
+                title={
+                  buildRunning
+                    ? 'Stop the running build'
+                    : (build.unavailableReason ??
+                      `Build and run on ${activeDevice?.name ?? 'the selected device'}`)
+                }
+              >
+                {buildRunning ? 'Stop' : 'Build'}
+              </Button>
+              <Button
+                onClick={handleToggleDevServer}
+                size="sm"
+                variant="secondary"
+                loading={devServerStarting || devServerStopping}
+                icon={devServerRunning ? <Square /> : <Play />}
+              >
+                {devServerRunning ? 'Stop' : 'Start'}
+              </Button>
+            </div>
           </div>
           <p className="text-ink-3 truncate font-mono text-[11px]">
             {devServerCommand}

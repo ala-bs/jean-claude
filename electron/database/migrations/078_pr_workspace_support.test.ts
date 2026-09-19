@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  constants,
-  DatabaseSync,
-  type SQLInputValue,
-} from 'node:sqlite';
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { Kysely, sql, SqliteDialect } from 'kysely';
 
 import { down, up } from './078_pr_workspace_support';
@@ -128,10 +124,6 @@ function hasIndex(name: string): boolean {
       .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
       .get(name),
   );
-}
-
-function allowAllOperations(): void {
-  client.setAuthorizer(null);
 }
 
 function expectMain077StepState(): void {
@@ -342,15 +334,17 @@ describe('078_pr_workspace_support', () => {
   });
 
   it('rolls back table recreation failures and restores FK enforcement', async () => {
-    client.setAuthorizer((actionCode, arg1) =>
-      actionCode === constants.SQLITE_DROP_TABLE && arg1 === 'tasks'
-        ? constants.SQLITE_DENY
-        : constants.SQLITE_OK,
-    );
+    // Denies the DROP TABLE that finalizes the "tasks" recreation (see the
+    // migration pattern in AGENTS.md: create *_new, copy, drop the original,
+    // rename *_new into place). Matched on the compiled statement rather than
+    // simulated via node:sqlite's authorizer -- `setAuthorizer` only exists
+    // from Node v24.10.0 onward, newer than this repo's pinned `engines`
+    // range (>=22.12.0 <23), so it is unavailable in the ordinary test run.
+    failStatement = (statement) => statement.includes('drop table "tasks"');
     try {
       await expect(up(db)).rejects.toThrow();
     } finally {
-      allowAllOperations();
+      failStatement = undefined;
     }
     expect(columns('tasks')).toContain('sessionRules');
     expect(columns('tasks')).not.toContain('cleanupWorktreePath');
@@ -359,15 +353,12 @@ describe('078_pr_workspace_support', () => {
     expect(client.prepare('PRAGMA foreign_keys').get()?.foreign_keys).toBe(1);
 
     await up(db);
-    client.setAuthorizer((actionCode, arg1) =>
-      actionCode === constants.SQLITE_DROP_TABLE && arg1 === 'task_steps'
-        ? constants.SQLITE_DENY
-        : constants.SQLITE_OK,
-    );
+    failStatement = (statement) =>
+      statement.includes('drop table "task_steps"');
     try {
       await expect(down(db)).rejects.toThrow();
     } finally {
-      allowAllOperations();
+      failStatement = undefined;
     }
     expect(columns('tasks')).not.toContain('sessionRules');
     expect(columns('tasks')).toContain('prWorkspaceState');
