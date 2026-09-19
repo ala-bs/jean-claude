@@ -219,6 +219,8 @@ function ProviderUsageChip({
           </span>
         }
         side="bottom"
+        interactive
+        closeDelay={400}
       >
         <div className="text-ink-3 flex items-center gap-1.5 rounded px-1.5 py-0.5">
           {Icon ? (
