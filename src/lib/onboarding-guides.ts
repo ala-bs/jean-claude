@@ -59,7 +59,7 @@ export const guideCards: GuideCard[] = [
     title: 'Read an agent run',
     summary:
       'Messages explain intent. Tool cards show files, commands, and edits.',
-    body: 'If agent needs approval, permission bar appears inline. You can allow once, for session, for project, or globally. If agent is running, follow-up prompts queue safely.',
+    body: 'If agent needs approval, permission bar appears inline. You can allow once, for session, for project, or globally. If agent is running, prompts steer directly when supported, otherwise they queue safely.',
     featureTag: 'tasks',
     audience: 'new',
   },

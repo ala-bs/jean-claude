@@ -9,6 +9,14 @@ export type CodexJsonRpcNotification = {
   params?: unknown;
 };
 
+export type CodexJsonRpcId = number | string;
+
+export type CodexJsonRpcRequest = {
+  id: CodexJsonRpcId;
+  method: string;
+  params?: unknown;
+};
+
 export type CodexJsonRpcProcess = Pick<EventEmitter, 'on' | 'off'> & {
   stdin: Writable;
   stdout: Readable;
@@ -35,7 +43,7 @@ type PendingRequest = {
 };
 
 type JsonRpcResponse = {
-  id?: unknown;
+  id?: CodexJsonRpcId;
   result?: unknown;
   error?: unknown;
 };
@@ -47,10 +55,13 @@ export class CodexJsonRpcClient {
   private disposed = false;
   private terminalError: Error | undefined;
   private noopErrorHandlersInstalled = false;
-  private readonly pending = new Map<number, PendingRequest>();
+  private readonly pending = new Map<CodexJsonRpcId, PendingRequest>();
   private readonly pendingWrites = new Set<(error: Error) => void>();
   private readonly notifications = new Set<
     (message: CodexJsonRpcNotification) => void
+  >();
+  private readonly requests = new Set<
+    (message: CodexJsonRpcRequest) => void
   >();
   private readonly errors = new Set<(error: Error) => void>();
   private readonly readline: ReadlineInterface;
@@ -118,6 +129,27 @@ export class CodexJsonRpcClient {
     return () => this.notifications.delete(listener);
   }
 
+  onRequest(listener: (message: CodexJsonRpcRequest) => void): () => void {
+    this.requests.add(listener);
+    return () => this.requests.delete(listener);
+  }
+
+  respond(id: CodexJsonRpcId, result: unknown): Promise<void> {
+    return this.writeLine({ jsonrpc: '2.0', id, result });
+  }
+
+  respondError(
+    id: CodexJsonRpcId,
+    code: number,
+    message: string,
+  ): Promise<void> {
+    return this.writeLine({
+      jsonrpc: '2.0',
+      id,
+      error: { code, message },
+    });
+  }
+
   onError(listener: (error: Error) => void): () => void {
     this.errors.add(listener);
     return () => this.errors.delete(listener);
@@ -139,6 +171,7 @@ export class CodexJsonRpcClient {
     this.rejectAll(this.terminalError);
     this.rejectPendingWrites(this.terminalError);
     this.notifications.clear();
+    this.requests.clear();
     this.errors.clear();
     this.options.process.kill();
   }
@@ -166,8 +199,16 @@ export class CodexJsonRpcClient {
       return;
     }
 
-    if (typeof message.method === 'string' && message.id === undefined) {
-      this.emitNotification({ method: message.method, params: message.params });
+    if (typeof message.method === 'string') {
+      if (message.id !== undefined && this.isJsonRpcId(message.id)) {
+        this.emitRequest({
+          id: message.id,
+          method: message.method,
+          params: message.params,
+        });
+      } else if (message.id === undefined) {
+        this.emitNotification({ method: message.method, params: message.params });
+      }
       return;
     }
 
@@ -196,7 +237,7 @@ export class CodexJsonRpcClient {
   };
 
   private handleResponse(message: JsonRpcResponse): void {
-    if (typeof message.id !== 'number') {
+    if (!this.isJsonRpcId(message.id)) {
       return;
     }
 
@@ -247,6 +288,16 @@ export class CodexJsonRpcClient {
         listener(message);
       } catch {
         // Notification subscribers must not break stream processing.
+      }
+    }
+  }
+
+  private emitRequest(message: CodexJsonRpcRequest): void {
+    for (const listener of this.requests) {
+      try {
+        listener(message);
+      } catch {
+        // Request subscribers must not break stream processing.
       }
     }
   }
@@ -362,6 +413,10 @@ export class CodexJsonRpcClient {
 
   private isObject(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
+  }
+
+  private isJsonRpcId(value: unknown): value is CodexJsonRpcId {
+    return typeof value === 'number' || typeof value === 'string';
   }
 
   private toError(error: unknown): Error {

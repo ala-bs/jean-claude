@@ -104,7 +104,7 @@ export interface SessionAllowedToolsCapability {
  * Resolves `false` when the input stream has already closed — the caller must
  * fall back to stopping the run and starting a new one.
  */
-export interface FollowUpPromptCapability {
+export interface PromptSteeringCapability {
   send(input: {
     handle: AgentRunHandle;
     parts: PromptPart[];
@@ -183,7 +183,7 @@ export interface AgentCapabilityGroup {
   /** Optional so provider mocks/tests without this capability still typecheck. */
   permissionRuleUpdates?: Capability<PermissionRuleUpdateCapability>;
   /** Optional: continue a live run with a new prompt instead of restarting it. */
-  followUpPrompt?: Capability<FollowUpPromptCapability>;
+  promptSteering?: Capability<PromptSteeringCapability>;
   resourceTracking: Capability<ResourceTrackingCapability>;
 }
 

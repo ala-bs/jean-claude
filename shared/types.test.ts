@@ -12,6 +12,26 @@ import {
 import type { AgentBackendType } from './agent-backend-types';
 
 describe('getInteractionModeOptions', () => {
+  it('includes Ask for Codex while keeping Build as the default', () => {
+    expect(getInteractionModeOptions({ backend: 'codex' })).toEqual([
+      {
+        value: 'auto',
+        label: 'Build',
+        description: 'Tools run without approval',
+      },
+      {
+        value: 'ask',
+        label: 'Ask',
+        description: 'Ask for approval before tools run',
+      },
+      {
+        value: 'plan',
+        label: 'Plan',
+        description: 'Planning only, no execution',
+      },
+    ]);
+  });
+
   it('falls back instead of returning undefined for stale backend values', () => {
     expect(
       getInteractionModeOptions({ backend: 'stale' as AgentBackendType }),

@@ -100,7 +100,7 @@ const {
     modes: [] as unknown[],
     sessionAllowedTools: [] as unknown[],
     permissionRuleUpdates: [] as unknown[],
-    followUpPrompts: [] as unknown[],
+    promptSteeringCalls: [] as unknown[],
     stops: [] as string[],
   };
 
@@ -115,8 +115,8 @@ const {
       | ((input: unknown) => Promise<AgentRunHandle>)
       | null,
     sessionAllowedTools: [] as string[],
-    followUpPromptSupported: true,
-    followUpPromptAccepted: true,
+    promptSteeringSupported: true,
+    promptSteeringAccepted: true,
   };
 
   const unsupported = (reason: string) => ({ supported: false, reason });
@@ -180,14 +180,14 @@ const {
               providerCalls.permissionRuleUpdates.push(input);
             },
           }),
-          followUpPrompt: providerState.followUpPromptSupported
+          promptSteering: providerState.promptSteeringSupported
             ? supported({
                 send: async (input: unknown) => {
-                  providerCalls.followUpPrompts.push(input);
-                  return providerState.followUpPromptAccepted;
+                  providerCalls.promptSteeringCalls.push(input);
+                  return providerState.promptSteeringAccepted;
                 },
               })
-            : unsupported('follow-up prompts unsupported'),
+            : unsupported('prompt steering unsupported'),
           resourceTracking: supported({
             getRootPid: ({ handle }: { handle: AgentRunHandle }) =>
               handle.rootPid ?? null,
@@ -204,10 +204,10 @@ const {
     providerCalls.modes.length = 0;
     providerCalls.sessionAllowedTools.length = 0;
     providerCalls.permissionRuleUpdates.length = 0;
-    providerCalls.followUpPrompts.length = 0;
+    providerCalls.promptSteeringCalls.length = 0;
     providerCalls.stops.length = 0;
-    providerState.followUpPromptSupported = true;
-    providerState.followUpPromptAccepted = true;
+    providerState.promptSteeringSupported = true;
+    providerState.promptSteeringAccepted = true;
     providerState.permissionsSupported = true;
     providerState.questionsSupported = true;
     providerState.runtimeModeSwitchSupported = true;
@@ -2208,8 +2208,8 @@ describe('agentService provider runtime', () => {
     ]);
 
     // Delivered through the live run...
-    expect(providerCalls.followUpPrompts).toHaveLength(1);
-    expect(providerCalls.followUpPrompts[0]).toMatchObject({
+    expect(providerCalls.promptSteeringCalls).toHaveLength(1);
+    expect(providerCalls.promptSteeringCalls[0]).toMatchObject({
       handle,
       parts: [{ type: 'text', text: 'follow up' }],
     });
@@ -2244,7 +2244,7 @@ describe('agentService provider runtime', () => {
     await agentService.beginSendMessage('step-1', [
       { type: 'text', text: 'follow up' },
     ]);
-    expect(providerCalls.followUpPrompts).toHaveLength(1);
+    expect(providerCalls.promptSteeringCalls).toHaveLength(1);
 
     // Reflect the `StepService.update(stepId, {status:'running'})` that
     // injection just performed — `closeReactivatedStep` reads the step row back
@@ -2268,7 +2268,7 @@ describe('agentService provider runtime', () => {
   it('falls back to restarting the run when the live run refuses the follow-up', async () => {
     const { handle, release } = createBackgroundWorkHandle();
     providerState.runStartImplementation = async () => handle;
-    providerState.followUpPromptAccepted = false;
+    providerState.promptSteeringAccepted = false;
 
     const startPromise = agentService.start('step-1');
     await waitForAssertion(() => {
@@ -2286,7 +2286,7 @@ describe('agentService provider runtime', () => {
     ]);
     await completion;
 
-    expect(providerCalls.followUpPrompts).toHaveLength(1);
+    expect(providerCalls.promptSteeringCalls).toHaveLength(1);
     expect(providerCalls.stops).toContain('provider-run-1');
     expect(providerCalls.runStarts).toHaveLength(2);
 
@@ -2348,7 +2348,7 @@ describe('agentService provider runtime', () => {
 
     // The run was live and finalized, but with no background work to protect
     // the old interrupt-and-restart semantics must be preserved exactly.
-    expect(providerCalls.followUpPrompts).toHaveLength(0);
+    expect(providerCalls.promptSteeringCalls).toHaveLength(0);
     expect(providerCalls.stops).toContain('provider-run-1');
     expect(providerCalls.runStarts).toHaveLength(2);
 
@@ -2356,7 +2356,7 @@ describe('agentService provider runtime', () => {
     await startPromise;
   });
 
-  it('still interrupts a mid-turn run even while background jobs are live', async () => {
+  it('steers a mid-turn run instead of interrupting it', async () => {
     let release!: () => void;
     const released = new Promise<void>((resolve) => {
       release = resolve;
@@ -2369,7 +2369,7 @@ describe('agentService provider runtime', () => {
           type: 'background-tasks',
           tasks: [{ taskId: 'bg-1', description: 'long build' }],
         } as AgentEvent;
-        // NOTE: no result — the turn is still in flight.
+        // NOTE: no result — the turn is still in flight and can be steered.
         await released;
       })(),
       rootPid: 123,
@@ -2386,22 +2386,16 @@ describe('agentService provider runtime', () => {
       expect(providerCalls.runStarts).toHaveLength(1);
     });
 
-    const secondHandle = createHandle({
-      runId: 'provider-run-2',
-      events: [completeEvent()],
-    });
-    providerState.runStartImplementation = async () => secondHandle;
-
-    const { completion } = await agentService.beginSendMessage('step-1', [
+    await agentService.beginSendMessage('step-1', [
       { type: 'text', text: 'follow up' },
     ]);
-    await completion;
 
-    // Interrupting a turn in progress is what the user asked for; injecting
-    // would have queued the prompt behind work they wanted abandoned.
-    expect(providerCalls.followUpPrompts).toHaveLength(0);
-    expect(providerCalls.stops).toContain('provider-run-1');
+    expect(providerCalls.promptSteeringCalls).toHaveLength(1);
+    expect(providerCalls.stops).toHaveLength(0);
+    expect(providerCalls.runStarts).toHaveLength(1);
 
+    // The active run remains responsible for the steered turn.
+    release();
     await startPromise;
   });
 
@@ -2449,7 +2443,7 @@ describe('agentService provider runtime', () => {
     ]);
     await completion;
 
-    expect(providerCalls.followUpPrompts).toHaveLength(0);
+    expect(providerCalls.promptSteeringCalls).toHaveLength(0);
     expect(providerCalls.stops).toContain('provider-run-1');
     expect(providerCalls.runStarts).toHaveLength(2);
 
@@ -2482,7 +2476,7 @@ describe('agentService provider runtime', () => {
     ]);
     await completion;
 
-    expect(providerCalls.followUpPrompts).toHaveLength(0);
+    expect(providerCalls.promptSteeringCalls).toHaveLength(0);
     expect(providerCalls.stops).toContain('provider-run-1');
     expect(providerCalls.runStarts).toHaveLength(2);
 
@@ -2512,7 +2506,7 @@ describe('agentService provider runtime', () => {
 
     // Without this, per-prompt prefaces silently vanish exactly when
     // background jobs are live.
-    expect(providerCalls.followUpPrompts[0]).toMatchObject({
+    expect(providerCalls.promptSteeringCalls[0]).toMatchObject({
       parts: [
         { type: 'text', text: 'PREFACE' },
         { type: 'text', text: 'follow up' },
@@ -2638,6 +2632,8 @@ describe('agentService provider runtime', () => {
   });
 
   it('snapshots an active session result before stopping without delaying the next backend', async () => {
+    // This test exercises the restart path; active steering is covered above.
+    providerState.promptSteeringSupported = false;
     const activeRun = createIdleHandle('active-prior-run');
     const previousResult = createDeferred<string | null>();
     providerState.runStartImplementation = vi
@@ -3068,6 +3064,8 @@ describe('agentService provider runtime', () => {
   it.each(['initial', 'follow-up'] as const)(
     'waits for paused raw persistence before starting a replacement after %s run',
     async (runKind) => {
+      // This test exercises replacement after persistence, not live steering.
+      providerState.promptSteeringSupported = false;
       const rawPersist = createDeferred<{ id: string }>();
       const replacementRun = createIdleHandle('replacement-run');
       let oldCompletion: Promise<void> | undefined;

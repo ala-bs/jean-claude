@@ -123,7 +123,13 @@ describe('Codex app server process manager', () => {
     );
     expect(mocks.spawn).toHaveBeenCalledWith(
       'codex',
-      ['app-server', '--listen', 'stdio://'],
+      [
+        '-c',
+        'features.default_mode_request_user_input=true',
+        'app-server',
+        '--listen',
+        'stdio://',
+      ],
       expect.objectContaining({
         env: getChildProcessEnv(),
         stdio: ['pipe', 'pipe', 'pipe'],

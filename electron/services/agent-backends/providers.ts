@@ -13,12 +13,12 @@ import {
   type BackendConfigCapability,
   type BackendSkillCapability,
   type Capability,
-  type FollowUpPromptCapability,
   type McpCapability,
   type ModelDiscoveryCapability,
   type PermissionCapability,
   type PermissionRuleUpdateCapability,
   type PromptInputCapability,
+  type PromptSteeringCapability,
   type QuestionCapability,
   type ResourceTrackingCapability,
   type ResumeSessionCapability,
@@ -208,15 +208,15 @@ function createSessionAllowedToolsCapability(
   };
 }
 
-function createFollowUpPromptCapability(
+function createPromptSteeringCapability(
   backend: AgentBackendType,
-): FollowUpPromptCapability {
+): PromptSteeringCapability {
   return {
     async send({ handle, parts }) {
       const binding = getRunBinding({
         handle,
         backend,
-        capability: 'agent.followUpPrompt',
+        capability: 'agent.promptSteering',
       });
       return (
         (await binding.backend.sendUserMessage?.(
@@ -282,7 +282,7 @@ function createCapabilities({
   supportsRuntimeModeSwitch,
   supportsSessionAllowedTools,
   supportsPermissionRuleUpdates,
-  supportsFollowUpPrompt = false,
+  supportsPromptSteering = false,
 }: {
   backend: AgentBackendType;
   run: RunAgentCapability;
@@ -291,7 +291,7 @@ function createCapabilities({
   supportsRuntimeModeSwitch: boolean;
   supportsSessionAllowedTools: boolean;
   supportsPermissionRuleUpdates: boolean;
-  supportsFollowUpPrompt?: boolean;
+  supportsPromptSteering?: boolean;
 }): AgentBackendCapabilities {
   return {
     agent: {
@@ -322,9 +322,9 @@ function createCapabilities({
         : unsupported<PermissionRuleUpdateCapability>(
             'runtime permission rule refresh is not supported by this backend',
           ),
-      followUpPrompt: supportsFollowUpPrompt
-        ? supported(createFollowUpPromptCapability(backend))
-        : unsupported<FollowUpPromptCapability>(
+      promptSteering: supportsPromptSteering
+        ? supported(createPromptSteeringCapability(backend))
+        : unsupported<PromptSteeringCapability>(
             'this backend cannot accept a new prompt on a live run',
           ),
       resourceTracking: supported(resourceTrackingCapability),
@@ -352,7 +352,7 @@ export const claudeCodeProvider: AgentBackendProvider = {
     supportsRuntimeModeSwitch: true,
     supportsSessionAllowedTools: true,
     supportsPermissionRuleUpdates: true,
-    supportsFollowUpPrompt: true,
+    supportsPromptSteering: true,
   }),
 };
 
@@ -386,11 +386,12 @@ export const codexProvider: AgentBackendProvider = {
       loadBackendClass: async () =>
         (await import('./codex/codex-backend')).CodexBackend,
     }),
-    supportsPermissions: false,
-    supportsQuestions: false,
+    supportsPermissions: true,
+    supportsQuestions: true,
     supportsRuntimeModeSwitch: false,
     supportsSessionAllowedTools: false,
     supportsPermissionRuleUpdates: false,
+    supportsPromptSteering: true,
   }),
 };
 

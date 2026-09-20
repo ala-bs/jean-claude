@@ -217,6 +217,24 @@ const OPENCODE_INTERACTION_MODE_OPTIONS = [
   },
 ] as const satisfies readonly BackendInteractionModeOption[];
 
+const CODEX_INTERACTION_MODE_OPTIONS = [
+  {
+    value: 'auto',
+    label: 'Build',
+    description: 'Tools run without approval',
+  },
+  {
+    value: 'ask',
+    label: 'Ask',
+    description: 'Ask for approval before tools run',
+  },
+  {
+    value: 'plan',
+    label: 'Plan',
+    description: 'Planning only, no execution',
+  },
+] as const satisfies readonly BackendInteractionModeOption[];
+
 export const COPILOT_INTERACTION_MODE_OPTIONS =
   OPENCODE_INTERACTION_MODE_OPTIONS;
 
@@ -226,7 +244,7 @@ export const BACKEND_INTERACTION_MODE_OPTIONS: Record<
 > = {
   'claude-code': CLAUDE_CODE_INTERACTION_MODE_OPTIONS,
   opencode: OPENCODE_INTERACTION_MODE_OPTIONS,
-  codex: OPENCODE_INTERACTION_MODE_OPTIONS,
+  codex: CODEX_INTERACTION_MODE_OPTIONS,
   copilot: COPILOT_INTERACTION_MODE_OPTIONS,
   vibe: CLAUDE_CODE_INTERACTION_MODE_OPTIONS,
 };

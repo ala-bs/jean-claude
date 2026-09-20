@@ -578,6 +578,8 @@ interface ActiveSession {
   currentModel: string | null;
   /** Thinking effort the live run was started with (see `runBackend`). */
   currentThinkingEffort: ThinkingEffort | null;
+  /** Interaction mode the live run was started with. */
+  currentInteractionMode: InteractionMode | null;
   requestedBackendType: AgentBackendType;
   swapModel?: string;
   swapThinkingEffort?: ThinkingEffort;
@@ -1526,6 +1528,7 @@ class AgentService {
       usageFeature: getUsageFeatureForStep(step.type),
       currentModel: swapModel ?? step.modelPreference,
       currentThinkingEffort: swapThinkingEffort ?? step.thinkingEffort ?? null,
+      currentInteractionMode: null,
       requestedBackendType: requestedBackend,
       swapModel,
       swapThinkingEffort,
@@ -1723,18 +1726,14 @@ class AgentService {
   /**
    * Try to continue the live run with `parts` instead of stopping it.
    *
-   * A run that spawned background tasks keeps its CLI process (and therefore
-   * those tasks) alive past the turn's `result`. During that window the step
-   * reads as `completed`, so the composer offers Send rather than Queue — and
-   * the old stop-then-restart path would abort the process and silently orphan
-   * every background job. Feeding the prompt into the run's still-open input
-   * stream keeps them running and lets the new turn stream into a fresh prompt
-   * group on the same session.
+   * A backend with a streaming input can accept a prompt while its turn is
+   * active. A run that spawned background tasks can also accept one after the
+   * turn's `result`, while its process remains alive. Both cases feed the
+   * prompt into the existing run instead of queuing or restarting it.
    *
-   * Deliberately narrow: only when the previous turn is finalized (nothing is
-   * mid-turn) AND background work is still live AND the run's own settings
-   * still match the step's. Anything else keeps the long-standing restart
-   * semantics, because the backend only applies those settings at run start.
+   * The run's model, effort, and interaction mode must still match the step's
+   * settings. A changed mode falls back to a new turn so the next turn gets
+   * the new sandbox/approval configuration.
    *
    * Returns true only once the prompt is in the run's input stream — at which
    * point it can no longer be un-sent.
@@ -1747,15 +1746,22 @@ class AgentService {
     // though `turnFinalized` has not been set yet.
     { turnIsOver = session.turnFinalized }: { turnIsOver?: boolean } = {},
   ): Promise<boolean> {
+    dbg.agentSession(
+      'Attempting live prompt delivery for step %s backend=%s running=%s mode=%s',
+      stepId,
+      session.backendType,
+      !session.stopRequested && !session.hasTerminalError,
+      session.currentInteractionMode,
+    );
     if (session.stopRequested || session.hasTerminalError) return false;
-    if (!turnIsOver) return false;
-    if (session.backgroundTasks.length === 0) return false;
-
     const runHandle = session.runHandle;
     if (!runHandle) return false;
 
-    const capability = session.provider.capabilities.agent.followUpPrompt;
+    const capability = session.provider.capabilities.agent.promptSteering;
     if (!capability?.supported) return false;
+    // A supported backend can steer an active turn. Once the turn has ended,
+    // only keep the live process when background work still needs it.
+    if (turnIsOver && session.backgroundTasks.length === 0) return false;
 
     const step = await TaskStepRepository.findById(stepId);
     if (!step) return false;
@@ -1779,6 +1785,26 @@ class AgentService {
         session.currentThinkingEffort,
         wantedModel,
         wantedEffort,
+      );
+      return false;
+    }
+
+    const wantedInteractionMode = normalizeInteractionModeForBackend({
+      backend: session.backendType,
+      mode: (step.interactionMode ??
+        getDefaultInteractionModeForBackend({
+          backend: session.backendType,
+        })) as InteractionMode,
+    });
+    if (
+      session.currentInteractionMode !== null &&
+      wantedInteractionMode !== session.currentInteractionMode
+    ) {
+      dbg.agentSession(
+        'Interaction mode changed for step %s since its run started (%s -> %s) — restarting instead of steering',
+        stepId,
+        session.currentInteractionMode,
+        wantedInteractionMode,
       );
       return false;
     }
@@ -2131,16 +2157,19 @@ class AgentService {
         );
       }
 
+      const interactionMode = normalizeInteractionModeForBackend({
+        backend: session.backendType,
+        mode: (step?.interactionMode ??
+          getDefaultInteractionModeForBackend({
+            backend: session.backendType,
+          })) as InteractionMode,
+      });
+      session.currentInteractionMode = interactionMode;
+
       const config = {
         type: session.backendType,
         cwd: workingDir,
-        interactionMode: normalizeInteractionModeForBackend({
-          backend: session.backendType,
-          mode: (step?.interactionMode ??
-            getDefaultInteractionModeForBackend({
-              backend: session.backendType,
-            })) as InteractionMode,
-        }),
+        interactionMode,
         model:
           modelPreference && modelPreference !== 'default'
             ? modelPreference
@@ -2245,6 +2274,16 @@ class AgentService {
     source: 'backend' | 'jc-mcp',
   ): Promise<void> {
     const { taskId } = session;
+
+    dbg.agentPermission(
+      'Enqueueing agent question step=%s backend=%s mode=%s source=%s request=%s questions=%d',
+      stepId,
+      session.backendType,
+      session.currentInteractionMode,
+      source,
+      request.requestId,
+      request.questions.length,
+    );
 
     session.pendingRequests.push({
       requestId: request.requestId,

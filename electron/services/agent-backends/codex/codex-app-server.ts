@@ -98,10 +98,23 @@ async function startCodexAppServer(
   // binary here, or we report "not found" for a CLI that would have launched.
   await assertCodexCliAvailable(env);
 
-  const proc = spawn('codex', ['app-server', '--listen', 'stdio://'], {
-    env: getChildProcessEnv({ overrides: env }),
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  // Codex only exposes request_user_input in Plan mode by default. Jean-Claude
+  // has its own question UI and must support the same interaction in Build
+  // mode, so enable the documented default-mode feature at app-server startup.
+  const proc = spawn(
+    'codex',
+    [
+      '-c',
+      'features.default_mode_request_user_input=true',
+      'app-server',
+      '--listen',
+      'stdio://',
+    ],
+    {
+      env: getChildProcessEnv({ overrides: env }),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    },
+  );
   const client = new CodexJsonRpcClient({ process: proc });
 
   const clearOnTerminal = () => clearIfCurrent();

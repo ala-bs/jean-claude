@@ -6,6 +6,33 @@ import {
 } from './normalize-codex-message-v2';
 
 describe('normalizeCodexNotification', () => {
+  it('labels sandbox-allowed tool use in Ask mode', () => {
+    const ctx = createCodexNormalizationContext({ interactionMode: 'ask' });
+
+    const [event] = normalizeCodexNotification(
+      {
+        method: 'item/started',
+        params: {
+          item: {
+            type: 'commandExecution',
+            id: 'cmd-ask',
+            command: 'printf hello',
+          },
+        },
+      },
+      ctx,
+    );
+
+    expect(event).toMatchObject({
+      type: 'entry',
+      entry: {
+        type: 'tool-use',
+        name: 'bash',
+        permission: { allowedBy: 'system', source: 'sandbox' },
+      },
+    });
+  });
+
   it('emits a session id for thread started', () => {
     const ctx = createCodexNormalizationContext();
 

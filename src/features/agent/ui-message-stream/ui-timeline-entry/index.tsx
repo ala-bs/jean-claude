@@ -622,6 +622,9 @@ function CompactDiffPreview({
 
 function getPermissionMetadata(toolUse: NormalizedToolUse): string | undefined {
   if (!toolUse.permission) return undefined;
+  if (toolUse.permission.source === 'sandbox') {
+    return 'allowed by Codex sandbox';
+  }
   if (toolUse.permission.allowedBy === 'agent') return 'allowed by agent';
 
   const rule = toolUse.permission.rule;

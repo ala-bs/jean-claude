@@ -3919,6 +3919,11 @@ const TaskInputFooter = memo(function TaskInputFooter({
     activeStep?.interactionMode ??
     getDefaultInteractionModeForBackend({ backend: effectiveBackend });
   const effectiveModel = activeStep?.modelPreference ?? 'default';
+  // Keep the renderer's submission path aligned with the backend capability.
+  // Codex and Claude can accept a follow-up on their live input stream; the
+  // other backends must retain the explicit queued-prompt path.
+  const promptSteering =
+    effectiveBackend === 'claude-code' || effectiveBackend === 'codex';
 
   const { data: dynamicModels } = useBackendModels(effectiveBackend);
   const resolvedModelForContext =
@@ -3955,6 +3960,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
   const setStepMode = useSetTaskMode();
   const clearUserCompleted = useClearTaskUserCompleted();
   const addFooterToast = useToastStore((s) => s.addToast);
+  const pendingModeUpdateRef = useRef<Promise<unknown> | null>(null);
 
   const {
     text: promptDraft,
@@ -4031,10 +4037,29 @@ const TaskInputFooter = memo(function TaskInputFooter({
   const handleModeChange = useCallback(
     (mode: InteractionMode) => {
       if (activeStepId) {
-        setStepMode.mutate({ stepId: activeStepId, mode });
+        const pendingUpdate = setStepMode.mutateAsync({
+          stepId: activeStepId,
+          mode,
+        });
+        pendingModeUpdateRef.current = pendingUpdate;
+        void pendingUpdate
+          .catch((error: unknown) => {
+            addFooterToast({
+              type: 'error',
+              message:
+                error instanceof Error
+                  ? error.message
+                  : 'Failed to save interaction mode',
+            });
+          })
+          .finally(() => {
+            if (pendingModeUpdateRef.current === pendingUpdate) {
+              pendingModeUpdateRef.current = null;
+            }
+          });
       }
     },
-    [activeStepId, setStepMode],
+    [activeStepId, addFooterToast, setStepMode],
   );
 
   const { enabled: autoAcceptEnabled, toggle: toggleAutoAccept } =
@@ -4069,6 +4094,27 @@ const TaskInputFooter = memo(function TaskInputFooter({
     } finally {
       if (pendingThinkingUpdateRef.current === pendingUpdate) {
         pendingThinkingUpdateRef.current = null;
+      }
+    }
+  }, [addToast]);
+
+  const waitForModeUpdate = useCallback(async () => {
+    const pendingUpdate = pendingModeUpdateRef.current;
+    if (!pendingUpdate) return;
+    try {
+      await pendingUpdate;
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to save interaction mode',
+      });
+      throw error;
+    } finally {
+      if (pendingModeUpdateRef.current === pendingUpdate) {
+        pendingModeUpdateRef.current = null;
       }
     }
   }, [addToast]);
@@ -4143,6 +4189,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
   }) => {
     setIsSubmittingPrompt(true);
     try {
+      await waitForModeUpdate();
       await waitForThinkingUpdate();
       await runPromptSubmission({
         parts,
@@ -4175,6 +4222,13 @@ const TaskInputFooter = memo(function TaskInputFooter({
   };
 
   const handleSendMessage = async (parts: PromptPart[]) => {
+    console.debug('[agent] task panel send', {
+      taskId,
+      activeStepId,
+      backend: effectiveBackend,
+      promptSteering,
+      partCount: parts.length,
+    });
     if (task?.userCompleted) {
       clearUserCompleted.mutate(taskId);
     }
@@ -4330,6 +4384,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
           <MessageInput
             onSend={handleSendMessage}
             onQueue={handleQueuePrompt}
+            promptSteering={promptSteering}
             onStop={handleStop}
             disabled={!effectiveCanSend}
             forceDisabled={isTaskCompleted}
@@ -4399,6 +4454,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
           <MessageInput
             onSend={handleSendMessage}
             onQueue={handleQueuePrompt}
+            promptSteering={promptSteering}
             onStop={handleStop}
             disabled={!effectiveCanSend}
             forceDisabled={isTaskCompleted}

@@ -46,6 +46,7 @@ export function MessageInput({
   forceDisabled = false,
   placeholder = 'Type a message... (Cmd+Enter to send)',
   isRunning = false,
+  promptSteering = false,
   isStopping = false,
   skills = [],
   projectRoot = null,
@@ -80,6 +81,8 @@ export function MessageInput({
   forceDisabled?: boolean;
   placeholder?: string;
   isRunning?: boolean;
+  /** Send directly into a live run instead of putting the prompt in the UI queue. */
+  promptSteering?: boolean;
   isStopping?: boolean;
   skills?: Skill[];
   projectRoot?: string | null;
@@ -242,9 +245,15 @@ export function MessageInput({
 
     setIsSubmitting(true);
     try {
-      if (isRunning && onQueue) {
+      console.debug('[agent] composer submit', {
+        isRunning,
+        promptSteering,
+        hasQueueHandler: Boolean(onQueue),
+        partCount: parts.length,
+      });
+      if (isRunning && onQueue && !promptSteering) {
         await onQueue(parts);
-      } else if (!disabled) {
+      } else if (!disabled || (isRunning && promptSteering)) {
         await onSend(parts);
       } else {
         return;
@@ -269,6 +278,7 @@ export function MessageInput({
     disabled,
     forceDisabled,
     isRunning,
+    promptSteering,
     onSend,
     onQueue,
     setValue,
@@ -327,21 +337,29 @@ export function MessageInput({
       disabled={isSubmitDisabled}
       size={buttonSize}
       variant="primary"
-      icon={isRunning ? <ListPlus /> : <Send />}
+      icon={isRunning && !promptSteering ? <ListPlus /> : <Send />}
       className={clsx(
         'shrink-0 transition-all duration-200',
         isRunning
           ? 'bg-status-run shadow-status-run/25 hover:shadow-status-run/40 shadow-md hover:shadow-lg hover:brightness-110'
           : 'bg-acc shadow-acc/25 hover:shadow-acc/40 shadow-md hover:scale-105 hover:shadow-lg hover:brightness-110',
       )}
-      aria-label={isRunning ? 'Queue this message' : 'Send message'}
+      aria-label={
+        isRunning
+          ? promptSteering
+            ? 'Steer the running agent'
+            : 'Queue this message'
+          : 'Send message'
+      }
       title={
         isRunning
-          ? `Queue message (${formatKeyForDisplay('cmd+enter')})`
+          ? promptSteering
+            ? `Steer running agent (${formatKeyForDisplay('cmd+enter')})`
+            : `Queue message (${formatKeyForDisplay('cmd+enter')})`
           : `Send message (${formatKeyForDisplay('cmd+enter')})`
       }
     >
-      {isRunning ? 'Queue' : 'Send'}
+      {isRunning ? (promptSteering ? 'Steer' : 'Queue') : 'Send'}
       <Kbd
         shortcut="cmd+enter"
         className="border-glass-border bg-glass-light text-ink-0"
@@ -390,7 +408,9 @@ export function MessageInput({
       snippetVariableContext={snippetVariableContext}
       placeholder={
         isRunning
-          ? 'Type to queue a follow-up... (Esc twice to stop)'
+          ? promptSteering
+            ? 'Type to steer the running agent... (Esc twice to stop)'
+            : 'Type to queue a follow-up... (Esc twice to stop)'
           : placeholder
       }
       disabled={forceDisabled || isSubmitting || (disabled && !isRunning)}
