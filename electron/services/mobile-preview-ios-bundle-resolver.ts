@@ -492,12 +492,16 @@ export async function resolveIosApp({
   const { iosPath, projectFiles } = await getNativeProjectFiles(appPath, signal);
   signal?.throwIfAborted();
   const nativeProjectExists = projectFiles.length > 0;
+  // The bundle id configured in project settings is an explicit user choice and
+  // always wins over auto-detection, which only guesses from the native project
+  // or the Expo config.
+  const configuredBundleId = normalizeBundleId(iosBundleId);
   const bundleId =
+    configuredBundleId ??
     (nativeProjectExists && iosPath
       ? await readNativeBundleId(appPath, iosPath, projectFiles, signal)
       : null) ??
-    (await readExpoBundleId({ appPath, packageManager, signal })) ??
-    normalizeBundleId(iosBundleId);
+    (await readExpoBundleId({ appPath, packageManager, signal }));
   return { bundleId, nativeProjectExists };
 }
 

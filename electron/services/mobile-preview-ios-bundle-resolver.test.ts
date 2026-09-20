@@ -291,7 +291,45 @@ describe('mobile preview iOS bundle resolver', () => {
     },
   );
 
-  it('uses configured bundle id when dynamic Expo config fails', async () => {
+  it('prefers the configured bundle id over the Expo config', async () => {
+    const appPath = await mkdtemp(join(tmpdir(), 'jc-ios-config-precedence-'));
+    try {
+      await writeFile(
+        join(appPath, 'app.json'),
+        JSON.stringify({ expo: { ios: { bundleIdentifier: 'com.example.expo' } } }),
+      );
+      runCommandMock.mockImplementation(async (_command, args) => {
+        if (args[1] === 'list' && args[2] === 'devices') {
+          return {
+            stdout: JSON.stringify({
+              devices: {
+                'com.apple.CoreSimulator.SimRuntime.iOS-18-2': [
+                  { name: 'iPhone 16', udid: 'device-1', state: 'Booted' },
+                ],
+              },
+            }),
+            stderr: '',
+          };
+        }
+        return { stdout: '{}', stderr: '' };
+      });
+
+      await expect(
+        iosIdbAdapter.getIosAppStatus({
+          appPath,
+          deviceId: 'device-1',
+          iosBundleId: ' com.example.configured ',
+        }),
+      ).resolves.toMatchObject({
+        bundleId: 'com.example.configured',
+        appInstalled: false,
+      });
+    } finally {
+      await rm(appPath, { recursive: true, force: true });
+    }
+  });
+
+  it('reports no bundle id when dynamic Expo config fails', async () => {
     const appPath = await mkdtemp(join(tmpdir(), 'jc-ios-config-fallback-'));
     try {
       await writeFile(join(appPath, 'app.config.js'), 'module.exports = {};\n');
@@ -318,11 +356,10 @@ describe('mobile preview iOS bundle resolver', () => {
         iosIdbAdapter.getIosAppStatus({
           appPath,
           deviceId: 'device-1',
-          iosBundleId: ' com.example.fallback ',
         }),
       ).resolves.toMatchObject({
-        bundleId: 'com.example.fallback',
-        appInstalled: false,
+        bundleId: null,
+        appInstalled: null,
       });
       expect(mobilePreviewDebugMock).toHaveBeenCalledWith(
         expect.stringContaining('Expo config resolution failed'),
@@ -608,7 +645,7 @@ describe('mobile preview iOS bundle resolver', () => {
         iosIdbAdapter.getIosAppStatus({
           appPath,
           deviceId: 'device-1',
-          iosBundleId: 'com.example.configured',
+          iosBundleId: null,
         }),
       ).resolves.toMatchObject({
         appInstalled: true,
