@@ -1,5 +1,10 @@
 import { execFile } from 'child_process';
 
+export type CodexBarCliError = Error & {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+};
 
 
 export function runCodexBarCli(
@@ -47,15 +52,17 @@ function runNext(
       const exitCode = typeof error.code === 'number' ? error.code : null;
       const reason = stderr.trim();
       const message = cleanExecFileMessage(error.message);
-      reject(
-        new Error(
+      const cliError = new Error(
           reason ||
             message ||
             (exitCode != null
               ? `CodexBar CLI exited with code ${exitCode}.`
               : 'CodexBar CLI failed.'),
-        ),
-      );
+        ) as CodexBarCliError;
+      cliError.stdout = stdout;
+      cliError.stderr = stderr;
+      cliError.exitCode = exitCode ?? undefined;
+      reject(cliError);
     });
   });
 }
