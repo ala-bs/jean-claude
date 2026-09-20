@@ -296,6 +296,7 @@ import {
   getProjectFeatureMap,
   getProjectFeatureMapDraftDiff,
   saveProjectFeatureMapFromTemp,
+  validateProjectFeatureMapDraft,
 } from '../services/project-feature-map-generation-service';
 import {
   buildPromptActivityText,
@@ -1597,12 +1598,22 @@ export function registerIpcHandlers() {
         throw new Error('Feature map project metadata is stale');
       }
 
+      const validation = await validateProjectFeatureMapDraft({
+        tempFilePath: meta.tempFilePath,
+      });
+      if (validation.status === 'invalid') {
+        await updateStepAndEmit(stepId, {
+          meta: { ...meta, draftValidation: validation },
+        });
+        throw new Error(`Feature map not ready: ${validation.error}`);
+      }
+
       const featureMap = await saveProjectFeatureMapFromTemp({
         tempFilePath: meta.tempFilePath,
         savedFilePath: meta.savedFilePath,
       });
       await updateStepAndEmit(stepId, {
-        meta: { ...meta, saved: true },
+        meta: { ...meta, draftValidation: validation, saved: true },
       });
       await cleanupFeatureMapTempDir(meta.tempDir).catch((err) => {
         dbg.ipc(

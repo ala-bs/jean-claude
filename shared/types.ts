@@ -846,7 +846,20 @@ export interface FeatureMapStepMeta {
   tempFilePath: string;
   savedFilePath: string;
   saved?: boolean;
+  draftValidation?: FeatureMapDraftValidation;
 }
+
+export type FeatureMapDraftValidation =
+  | {
+      status: 'valid';
+      validatedAt: string;
+      featureCount: number;
+    }
+  | {
+      status: 'invalid';
+      validatedAt: string;
+      error: string;
+    };
 
 export type TaskStepMeta =
   | CreatePullRequestStepMeta

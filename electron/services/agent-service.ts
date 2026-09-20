@@ -54,6 +54,7 @@ import {
 } from '@shared/types';
 import {
   type InteractionMode,
+  isFeatureMapStepMeta,
   isPrReviewChatStepMeta,
   isSkillCreationStepMeta,
   type ReviewStepMeta,
@@ -138,6 +139,7 @@ import { stepPermissionService } from './step-permission-service';
 import { StepService } from './step-service';
 import { stripPromptImagePlaceholders } from '@shared/prompt-image-placeholders';
 import { TaskStepRepository } from '../database/repositories/task-steps';
+import { validateProjectFeatureMapDraft } from './project-feature-map-generation-service';
 
 /** In-memory store for queued prompt parts, keyed by QueuedPrompt.id.
  *  Keeps full PromptPart[] (with image base64) out of the QueuedPrompt.content
@@ -149,6 +151,31 @@ const MAX_QUEUED_PROMPT_TOMBSTONES = 2_048;
 /** Upper bound on normalized entries returned to the renderer for one step. */
 const MAX_STEP_MESSAGES_PER_FETCH = 10_000;
 const queuedPromptSubmissionTombstones = new Map<string, string>();
+
+async function validateFeatureMapDraftForStep(stepId: string): Promise<void> {
+  const step = await TaskStepRepository.findById(stepId);
+  if (!step || step.type !== 'feature-map' || !isFeatureMapStepMeta(step.meta)) {
+    return;
+  }
+
+  const validation = await validateProjectFeatureMapDraft({
+    tempFilePath: step.meta.tempFilePath,
+  });
+  dbg.agent(
+    'Feature-map draft validation step=%s path=%s status=%s detail=%s',
+    stepId,
+    step.meta.tempFilePath,
+    validation.status,
+    validation.status === 'valid'
+      ? `features=${validation.featureCount}`
+      : validation.error,
+  );
+
+  const updatedStep = await TaskStepRepository.update(stepId, {
+    meta: { ...step.meta, draftValidation: validation },
+  });
+  emitStepUpsert(updatedStep);
+}
 
 type CanonicalQuestionMemoryDetail = AgentMemoryQuestionResponseDetail & {
   question: string;
@@ -2740,9 +2767,10 @@ class AgentService {
             // block), so `lastTerminalStatus` would stay null — and that is the
             // ONLY fallback `closeReactivatedStep` has for closing the step if
             // the injected prompt is never answered. Without this the step is
-            // stuck `running` forever with no live session.
-            // Assigned, not `??=`: a stale 'errored' from an earlier turn would
-            // otherwise survive and close this successful step as failed.
+          // stuck `running` forever with no live session.
+          // Assigned, not `??=`: a stale 'errored' from an earlier turn would
+          // otherwise survive and close this successful step as failed.
+            await validateFeatureMapDraftForStep(stepId);
             session.lastTerminalStatus = 'completed';
             return;
           }
@@ -2751,6 +2779,7 @@ class AgentService {
 
         // No more queued prompts - finalize
         if (await this.shouldAbortTerminalHandling(stepId, session)) break;
+        await validateFeatureMapDraftForStep(stepId);
         let autoStartStepIds: string[] = [];
         if (result.isError) {
           await StepService.errorStep(stepId);
