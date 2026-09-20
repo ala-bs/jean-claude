@@ -10,11 +10,11 @@ import type {
   TaskStepType,
   ThinkingEffort,
 } from '@shared/types';
+import type { ResolvedModel } from '@shared/model-profiles';
 
 import { AgentMessageRepository } from '../database/repositories/agent-messages';
 import { createDebug } from '../lib/debug';
 import { ProjectRepository } from '../database/repositories/projects';
-import { SettingsRepository } from '../database/repositories/settings';
 import { TaskRepository } from '../database/repositories/tasks';
 import { TaskStepRepository } from '../database/repositories/task-steps';
 
@@ -24,6 +24,7 @@ import {
   emitStepUpsert,
   emitTaskUpsert,
 } from './cache-event-service';
+import { getModelProfileService } from './model-profile-service';
 import { prepareSummaryGenerationPrompt } from './session-summary-service';
 import { summarizeNormalizedMessages } from './session-summary-service';
 import { taskRuntimeCleanupService } from './task-runtime-cleanup-service';
@@ -108,8 +109,7 @@ async function resolvePromptTemplate({
   taskId,
   projectId,
   steps,
-  summaryBackend,
-  summaryModels,
+  summaryModel,
   onSummaryLifecycle,
 }: {
   template: string;
@@ -118,17 +118,15 @@ async function resolvePromptTemplate({
   taskId: string;
   projectId: string;
   steps: TaskStep[];
-  summaryBackend: AgentBackendType;
-  summaryModels: Partial<Record<
-    import('@shared/agent-backend-types').AgentBackendType,
-    import('@shared/types').ModelPreference
-  >>;
+  /** Model resolved for the `summary` role; may be `off`. */
+  summaryModel: ResolvedModel;
   onSummaryLifecycle?: {
     onStart?: (step: TaskStep, prompt: string) => Promise<void> | void;
     onResolved?: (step: TaskStep, summary: string) => Promise<void> | void;
   };
 }): Promise<{ resolvedPrompt: string; warnings: string[] }> {
   const warnings: string[] = [];
+  const summaryBackend = summaryModel.backend;
 
   // {{step.<id>}} is an alias for {{step.<id>.output}} — both return step.output.
   function resolveValueExpression(expression: string): string {
@@ -186,7 +184,27 @@ async function resolvePromptTemplate({
 
       const messages = await AgentMessageRepository.findByStepId(step.id);
 
-      const model = summaryModels[summaryBackend] ?? 'default';
+      // The active profile bound `summary` to `off`: skip generation entirely
+      // and reuse what the step already produced.
+      if (summaryModel.off) {
+        const fallback = getSummaryFallbackText({ step, messages });
+        warnings.push(
+          `Summary generation is disabled by the active model profile; used ${
+            fallback ? fallback.source : 'no'
+          } fallback for step "${step.name}" (${stepId}).`,
+        );
+        const text = fallback?.text ?? '';
+        await onSummaryLifecycle?.onResolved?.(step, text);
+        return text;
+      }
+
+      if (summaryModel.blocked) {
+        throw new Error(
+          `Failed to summarize step "${step.name}" (${stepId}): ${summaryModel.blocked.message}`,
+        );
+      }
+
+      const model = summaryModel.model;
       const summaryStartedAt = Date.now();
       const messageTypes = countMessageTypes(messages);
       let summaryPrompt = '';
@@ -674,8 +692,6 @@ export const StepService = {
     if (!project)
       throw new Error(`Project not found for task: ${task.projectId}`);
 
-    const summaryModelsSetting = await SettingsRepository.get('summaryModels');
-
     const steps = await TaskStepRepository.findByTaskId(step.taskId);
 
     // Validate all dependencies are completed
@@ -689,9 +705,11 @@ export const StepService = {
       }
     }
 
-    const summaryBackend = (step.agentBackend ??
-      project.defaultAgentBackend ??
-      'claude-code') as AgentBackendType;
+    const summaryModel = await getModelProfileService().resolveForRole({
+      role: 'summary',
+      projectId: task.projectId,
+    });
+    const summaryBackend = summaryModel.backend;
 
     debug(
       'Resolving prompt template for step %s (%s): backend=%s dependsOn=%d',
@@ -709,8 +727,7 @@ export const StepService = {
       taskId: task.id,
       projectId: task.projectId,
       steps,
-      summaryBackend,
-      summaryModels: summaryModelsSetting.models,
+      summaryModel,
       onSummaryLifecycle: options?.onSummaryLifecycle,
     });
 

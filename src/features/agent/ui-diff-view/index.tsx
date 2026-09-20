@@ -16,6 +16,11 @@ import { useUISetting, useUIStore } from '@/stores/ui';
 
 import { computeDiff, type DiffLine } from './diff-utils';
 import {
+  getLanguageFromPath,
+  type HighlightToken,
+  tokenizeLines,
+} from '@/lib/syntax-highlight';
+import {
   type LineRangeSelectionPosition,
   useLineRangeSelection,
 } from './use-line-range-selection';
@@ -28,11 +33,6 @@ import { ChangeNavigatorOverlay } from './change-navigator';
 import { CurrentStateTable } from './current-state-table';
 import { DiffMinimapOverlay } from './diff-minimap';
 import { DiffSearchBar } from './diff-search-bar';
-import {
-  getLanguageFromPath,
-  type HighlightToken,
-  tokenizeLines,
-} from '@/lib/syntax-highlight';
 import { SideBySideDiffTable } from './side-by-side-table';
 import { useCodeFolding } from './use-code-folding';
 import { useScrollToFirstChange } from './use-scroll-to-first-change';

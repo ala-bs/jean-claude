@@ -606,6 +606,25 @@ export interface Api {
     deleteEnvVar: (id: string) => Promise<void>;
     isSecretStorageAvailable: () => Promise<boolean>;
     findById: (id: string) => Promise<Project | undefined>;
+    /**
+     * Effective model policy for a project: the committed
+     * `.jean-claude/model-policy.json` when present (wholesale), else the
+     * `modelPolicy` column, else `{ mode: 'inherit' }`.
+     */
+    getEffectivePolicy: (
+      projectId: string,
+    ) => Promise<
+      import('@shared/model-profiles').EffectiveProjectModelPolicy
+    >;
+    /**
+     * Write the project-level model policy. Separate from `update` because
+     * `UpdateProject` spreads straight into Kysely and cannot carry an object
+     * column; the repository serializes this one.
+     */
+    setModelPolicy: (
+      projectId: string,
+      policy: import('@shared/model-profiles').ProjectModelPolicy,
+    ) => Promise<Project>;
     create: (data: NewProject) => Promise<Project>;
     update: (id: string, data: UpdateProject) => Promise<Project>;
     detectMobilePreview: (projectId: string) => Promise<Project>;
@@ -1389,6 +1408,21 @@ export interface Api {
       value: AppSettings[K],
     ) => Promise<void>;
   };
+  modelProfiles: {
+    /**
+     * Resolves `(backend, model, thinkingEffort)` for a role using the project
+     * policy, the pinned or active profile, and any step override.
+     */
+    resolve: (params: {
+      role: import('@shared/model-profiles').ModelRole;
+      projectId?: string | null;
+      override?: import('@shared/model-profiles').ModelOverride | null;
+    }) => Promise<import('@shared/model-profiles').ResolvedModel>;
+    /** Makes a profile the globally active one. */
+    activate: (
+      profileId: string,
+    ) => Promise<import('@shared/model-profiles').ModelProfile>;
+  };
   backendConfig: {
     getUserConfig: (
       backend: import('@shared/agent-backend-types').AgentBackendType,
@@ -1760,6 +1794,37 @@ export interface Api {
       model?: string;
       thinkingEffort?: ThinkingEffort;
       swapped: boolean;
+      /**
+       * `true` when the backend is STILL over its limit but no fallback
+       * profile is available. Without this, `swapped: false` conflates
+       * "quota recovered" with "nothing left to switch to".
+       */
+      skippedDueToRateLimit?: boolean;
+    }>;
+    /**
+     * React to a real rate-limit event by activating the fallback profile
+     * (design §4). Distinct from `resolve`, which is a side-effect-free probe
+     * used by the status panel and AI-generation peek path.
+     *
+     * `projectId` is required for design §8: an `enforce` project whose only
+     * permitted backend is limited comes back with `blocked` set and no swap.
+     */
+    react: (params: {
+      backend: AgentBackendType;
+      projectId?: string | null;
+    }) => Promise<{
+      backend: AgentBackendType;
+      model?: string;
+      thinkingEffort?: ThinkingEffort;
+      swapped: boolean;
+      skippedDueToRateLimit?: boolean;
+      profileId?: string;
+      blocked?: {
+        reason: 'backend-not-allowed' | 'profile-not-allowed';
+        message: string;
+        allowedBackends?: AgentBackendType[];
+        allowedProfileIds?: string[];
+      };
     }>;
   };
   usageDisplay: {
@@ -2336,6 +2401,12 @@ export const api: Api = hasWindowApi
       projects: {
         findAll: async () => [],
         findById: async () => undefined,
+        getEffectivePolicy: async () => {
+          throw new Error('API not available');
+        },
+        setModelPolicy: async () => {
+          throw new Error('API not available');
+        },
         listEnvVars: async () => [],
         createEnvVar: async () => {
           throw new Error('API not available');
@@ -2782,6 +2853,14 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
       },
+      modelProfiles: {
+        resolve: async () => {
+          throw new Error('API not available');
+        },
+        activate: async () => {
+          throw new Error('API not available');
+        },
+      },
       backendConfig: {
         getUserConfig: async () => {
           throw new Error('API not available');
@@ -3061,6 +3140,7 @@ export const api: Api = hasWindowApi
       rateLimitSwap: {
         getStatus: async () => ({ active: false, swaps: [] }),
         resolve: async (backend) => ({ backend, swapped: false }),
+        react: async ({ backend }) => ({ backend, swapped: false }),
       },
       usageDisplay: {
         saveSettings: async (value) => value,

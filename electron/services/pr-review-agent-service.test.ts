@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Project, Task, TaskStep } from '@shared/types';
+import type { ResolvedModel } from '@shared/model-profiles';
 
 import {
   buildPrReviewChatPrompt,
@@ -234,6 +235,29 @@ describe('buildPrReviewFollowUpPrompt', () => {
   });
 });
 
+function resolvedModel(
+  overrides: Partial<ResolvedModel> = {},
+): ResolvedModel {
+  return {
+    backend: 'claude-code',
+    model: 'default',
+    thinkingEffort: 'default',
+    source: 'profile',
+    ...overrides,
+  };
+}
+
+function baseParams() {
+  return {
+    taskId: 'task-1',
+    pullRequestId: 12,
+    filePath: 'src/auth.ts',
+    lineStart: 4,
+    selectedText: 'return user.id;',
+    question: 'Is this safe?',
+  };
+}
+
 describe('createPrReviewChatStep', () => {
   it('creates an ask-mode anchored agent step and starts it', async () => {
     const createdStep = makeStep();
@@ -244,15 +268,13 @@ describe('createPrReviewChatStep', () => {
         title: 'Fix auth',
         description: 'Tightens token validation and session handling.',
       }),
-      getPrReviewAgentSetting: vi.fn().mockResolvedValue({
-        backend: null,
-        modelPreference: 'default',
-        thinkingEffort: 'default',
-      }),
-      getBackendsSetting: vi.fn().mockResolvedValue({
-        enabledBackends: ['claude-code'],
-        defaultBackend: 'claude-code',
-      }),
+      resolvePrReviewModel: vi.fn().mockResolvedValue(
+        resolvedModel({
+          backend: 'opencode',
+          model: 'gpt-5.5',
+          thinkingEffort: 'default',
+        }),
+      ),
       createStep: vi.fn().mockResolvedValue(createdStep),
       startAgent: vi.fn().mockResolvedValue(undefined),
     };
@@ -303,124 +325,107 @@ describe('createPrReviewChatStep', () => {
     expect(deps.startAgent).toHaveBeenCalledWith('step-1');
   });
 
-  it('falls back to the global default backend before claude-code', async () => {
+  it('uses the model resolved for the pr-review role', async () => {
     const createdStep = makeStep();
     const deps = {
       findTaskById: vi.fn().mockResolvedValue(makeTask()),
       findProjectById: vi.fn().mockResolvedValue(
         makeProject({
           defaultAgentBackend: null,
+          defaultAgentModelPreference: null,
         }),
       ),
       getPullRequest: vi.fn().mockResolvedValue({ title: 'Fix auth' }),
-      getPrReviewAgentSetting: vi.fn().mockResolvedValue({
-        backend: null,
-        modelPreference: 'default',
-        thinkingEffort: 'default',
-      }),
-      getBackendsSetting: vi.fn().mockResolvedValue({
-        enabledBackends: ['claude-code', 'opencode'],
-        defaultBackend: 'opencode',
-      }),
+      resolvePrReviewModel: vi.fn().mockResolvedValue(
+        resolvedModel({
+          backend: 'claude-code',
+          model: 'opus',
+          thinkingEffort: 'high',
+        }),
+      ),
       createStep: vi.fn().mockResolvedValue(createdStep),
       startAgent: vi.fn().mockResolvedValue(undefined),
     };
 
-    await createPrReviewChatStep(
-      {
-        taskId: 'task-1',
-        pullRequestId: 12,
-        filePath: 'src/auth.ts',
-        lineStart: 4,
-        selectedText: 'return user.id;',
-        question: 'Is this safe?',
-      },
-      deps,
-    );
+    await createPrReviewChatStep(baseParams(), deps);
 
+    expect(deps.resolvePrReviewModel).toHaveBeenCalledWith({
+      projectId: 'project-1',
+    });
     expect(deps.createStep).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentBackend: 'opencode',
+        agentBackend: 'claude-code',
+        modelPreference: 'opus',
+        thinkingEffort: 'high',
       }),
     );
   });
 
-  it('rejects configured codex backend because PR review chat needs permissions', async () => {
+  it('rejects a resolved codex backend because PR review chat needs permissions', async () => {
     const deps = {
       findTaskById: vi.fn().mockResolvedValue(makeTask()),
       findProjectById: vi.fn().mockResolvedValue(makeProject()),
       getPullRequest: vi.fn().mockResolvedValue({ title: 'Fix auth' }),
-      getPrReviewAgentSetting: vi.fn().mockResolvedValue({
-        backend: 'codex',
-        modelPreference: 'default',
-        thinkingEffort: 'default',
-      }),
-      getBackendsSetting: vi.fn().mockResolvedValue({
-        enabledBackends: ['claude-code', 'codex'],
-        defaultBackend: 'claude-code',
-      }),
+      resolvePrReviewModel: vi
+        .fn()
+        .mockResolvedValue(resolvedModel({ backend: 'codex' })),
       createStep: vi.fn(),
       startAgent: vi.fn(),
     };
 
-    await expect(
-      createPrReviewChatStep(
-        {
-          taskId: 'task-1',
-          pullRequestId: 12,
-          filePath: 'src/auth.ts',
-          lineStart: 4,
-          selectedText: 'return user.id;',
-          question: 'Is this safe?',
-        },
-        deps,
-      ),
-    ).rejects.toThrow('requires backend permission support');
+    await expect(createPrReviewChatStep(baseParams(), deps)).rejects.toThrow(
+      'requires backend permission support',
+    );
 
     expect(getAgentBackendProviderMock).toHaveBeenCalledWith('codex');
     expect(deps.createStep).not.toHaveBeenCalled();
     expect(deps.startAgent).not.toHaveBeenCalled();
   });
 
-  it('rejects codex inherited from global default backend', async () => {
+  it('refuses to create a step when the pr-review role is off', async () => {
     const deps = {
       findTaskById: vi.fn().mockResolvedValue(makeTask()),
-      findProjectById: vi.fn().mockResolvedValue(
-        makeProject({
-          defaultAgentBackend: null,
-        }),
-      ),
+      findProjectById: vi.fn().mockResolvedValue(makeProject()),
       getPullRequest: vi.fn().mockResolvedValue({ title: 'Fix auth' }),
-      getPrReviewAgentSetting: vi.fn().mockResolvedValue({
-        backend: null,
-        modelPreference: 'default',
-        thinkingEffort: 'default',
-      }),
-      getBackendsSetting: vi.fn().mockResolvedValue({
-        enabledBackends: ['codex'],
-        defaultBackend: 'codex',
-      }),
+      resolvePrReviewModel: vi
+        .fn()
+        .mockResolvedValue(resolvedModel({ off: true })),
       createStep: vi.fn(),
       startAgent: vi.fn(),
     };
 
-    await expect(
-      createPrReviewChatStep(
-        {
-          taskId: 'task-1',
-          pullRequestId: 12,
-          filePath: 'src/auth.ts',
-          lineStart: 4,
-          selectedText: 'return user.id;',
-          question: 'Is this safe?',
-        },
-        deps,
-      ),
-    ).rejects.toThrow('requires backend permission support');
+    await expect(createPrReviewChatStep(baseParams(), deps)).rejects.toThrow(
+      'PR review chat is disabled by the active model profile',
+    );
 
-    expect(getAgentBackendProviderMock).toHaveBeenCalledWith('codex');
     expect(deps.createStep).not.toHaveBeenCalled();
     expect(deps.startAgent).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the policy message when the project blocks the resolved model', async () => {
+    const deps = {
+      findTaskById: vi.fn().mockResolvedValue(makeTask()),
+      findProjectById: vi.fn().mockResolvedValue(makeProject()),
+      getPullRequest: vi.fn().mockResolvedValue({ title: 'Fix auth' }),
+      resolvePrReviewModel: vi.fn().mockResolvedValue(
+        resolvedModel({
+          source: 'policy',
+          blocked: {
+            reason: 'backend-not-allowed',
+            message: 'This project only permits claude-code.',
+            allowed: { backends: ['claude-code'] },
+          },
+        }),
+      ),
+      createStep: vi.fn(),
+      startAgent: vi.fn(),
+    };
+
+    await expect(createPrReviewChatStep(baseParams(), deps)).rejects.toThrow(
+      'This project only permits claude-code.',
+    );
+
+    expect(deps.createStep).not.toHaveBeenCalled();
   });
 
   it('rejects non-pr-review tasks', async () => {
@@ -428,8 +433,7 @@ describe('createPrReviewChatStep', () => {
       findTaskById: vi.fn().mockResolvedValue(makeTask({ type: 'agent' })),
       findProjectById: vi.fn(),
       getPullRequest: vi.fn(),
-      getPrReviewAgentSetting: vi.fn(),
-      getBackendsSetting: vi.fn(),
+      resolvePrReviewModel: vi.fn(),
       createStep: vi.fn(),
       startAgent: vi.fn(),
     };
@@ -456,8 +460,7 @@ describe('createPrReviewChatStep', () => {
       findTaskById: vi.fn().mockResolvedValue(makeTask({ pullRequestId: '99' })),
       findProjectById: vi.fn(),
       getPullRequest: vi.fn(),
-      getPrReviewAgentSetting: vi.fn(),
-      getBackendsSetting: vi.fn(),
+      resolvePrReviewModel: vi.fn(),
       createStep: vi.fn(),
       startAgent: vi.fn(),
     };
@@ -484,8 +487,7 @@ describe('createPrReviewChatStep', () => {
       findTaskById: vi.fn().mockResolvedValue(makeTask({ worktreePath: null })),
       findProjectById: vi.fn(),
       getPullRequest: vi.fn(),
-      getPrReviewAgentSetting: vi.fn(),
-      getBackendsSetting: vi.fn(),
+      resolvePrReviewModel: vi.fn(),
       createStep: vi.fn(),
       startAgent: vi.fn(),
     };

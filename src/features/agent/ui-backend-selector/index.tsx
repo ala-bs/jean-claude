@@ -3,6 +3,7 @@ import { forwardRef, useCallback, useMemo } from 'react';
 import { Select, type SelectRef } from '@/common/ui/select';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import type { BackendModel } from '@/hooks/use-backend-models';
+import { BACKENDS } from '@shared/types';
 import type { BindingKey } from '@/common/context/keyboard-bindings/types';
 import { getAgentBackendBadge } from '@shared/agent-backend-metadata';
 import type { KeyboardLayer } from '@/common/context/keyboard-bindings';
@@ -23,8 +24,12 @@ export interface BackendModelOption {
   group?: string;
 }
 
-// Static fallback for Claude Code (models are fixed by the SDK)
-const CLAUDE_CODE_MODELS: BackendModelOption[] = [
+/**
+ * Static fallback for Claude Code (models are fixed by the SDK).
+ * The single renderer-side Claude model list — `ui-model-selector` reuses it
+ * rather than keeping its own copy.
+ */
+export const CLAUDE_CODE_MODELS: BackendModelOption[] = [
   {
     value: 'default',
     label: 'Default',
@@ -182,44 +187,21 @@ export function useBackendModelOptions(
 
 // --- Backend definitions ---
 
+/**
+ * Selector options for every backend. Derived from the single `BACKENDS`
+ * registry in `shared/types` — this list used to restate it by hand.
+ */
 export const AVAILABLE_BACKENDS: {
   value: AgentBackendType;
   label: string;
   description: string;
   badge?: string;
-}[] = [
-  {
-    value: 'claude-code',
-    label: 'Claude Code',
-    description: 'Anthropic Agent SDK',
-  },
-  {
-    value: 'opencode',
-    label: 'OpenCode',
-    description: 'OpenCode SDK',
-  },
-  {
-    value: 'codex',
-    label: 'Codex',
-    description: 'OpenAI Codex App Server',
-    badge: getAgentBackendBadge('codex'),
-  },
-  {
-    value: 'copilot',
-    label: 'Copilot',
-    description: 'GitHub Copilot SDK',
-    badge: getAgentBackendBadge('copilot'),
-  },
-  {
-    value: 'vibe',
-    label: 'Mistral Vibe',
-    description:
-      'Uses vibe-acp. Install mistral-vibe from github.com/mistralai/mistral-vibe, then run vibe-acp --setup or set MISTRAL_API_KEY.',
-    badge: getAgentBackendBadge('vibe'),
-  },
-];
-
-export const AGENT_BACKENDS = AVAILABLE_BACKENDS.map((b) => b.value);
+}[] = BACKENDS.map((backend) => ({
+  value: backend.id,
+  label: backend.label,
+  description: backend.description,
+  badge: getAgentBackendBadge(backend.id),
+}));
 
 /**
  * Hook that encapsulates backend selector logic: enabled list, label, toggle.

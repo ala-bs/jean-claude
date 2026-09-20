@@ -10,16 +10,97 @@ import {
   type WorkItemTitleParserSetting,
 } from '@shared/work-item-title-parser-types';
 
-vi.mock('../index', () => ({ db: {} }));
+const { dbMock } = vi.hoisted(() => ({
+  dbMock: {} as Record<string, unknown>,
+}));
+
+vi.mock('../index', () => ({ db: dbMock }));
 
 import {
+  ProjectRepository,
+  parseProjectModelPolicy,
   parseWorkItemDisplayConfig,
   parseWorkItemTitleParser,
+  serializeProjectModelPolicy,
   serializeWorkItemDisplayConfig,
   serializeWorkItemDisplayConfigUpdate,
   serializeWorkItemTitleParser,
   serializeWorkItemTitleParserUpdate,
 } from './projects';
+
+describe('project model policy persistence', () => {
+  function stubUpdate(rowOverrides: Record<string, unknown> = {}) {
+    const captured: { set?: Record<string, unknown>; id?: string } = {};
+    const builder = {
+      set: (values: Record<string, unknown>) => {
+        captured.set = values;
+        return builder;
+      },
+      where: (_col: string, _op: string, value: string) => {
+        captured.id = value;
+        return builder;
+      },
+      returningAll: () => builder,
+      executeTakeFirstOrThrow: () =>
+        Promise.resolve({
+          id: captured.id,
+          workItemDisplayConfig: null,
+          modelPolicy: captured.set?.modelPolicy ?? null,
+          ...rowOverrides,
+        }),
+    };
+    dbMock.updateTable = () => builder;
+    return captured;
+  }
+
+  afterEach(() => {
+    delete dbMock.updateTable;
+  });
+
+  it('round trips a policy through setModelPolicy', async () => {
+    const policy = {
+      mode: 'enforce' as const,
+      allowedBackends: ['claude-code' as const],
+      allowedPresetIds: ['preset-a'],
+      pinnedProfileId: 'profile-a',
+    };
+    const captured = stubUpdate();
+
+    const project = await ProjectRepository.setModelPolicy('p1', policy);
+
+    expect(captured.id).toBe('p1');
+    expect(captured.set?.modelPolicy).toBe(JSON.stringify(policy));
+    expect(project.modelPolicy).toEqual(policy);
+  });
+
+  it('reads a null column as inherit', async () => {
+    stubUpdate({ modelPolicy: null });
+
+    const project = await ProjectRepository.setModelPolicy('p1', {
+      mode: 'inherit',
+    });
+
+    expect(project.modelPolicy).toEqual({ mode: 'inherit' });
+  });
+
+  it('falls back to inherit for malformed or invalid JSON', () => {
+    expect(parseProjectModelPolicy(null)).toEqual({ mode: 'inherit' });
+    expect(parseProjectModelPolicy('{ not json')).toEqual({ mode: 'inherit' });
+    expect(parseProjectModelPolicy('{"mode":"nope"}')).toEqual({
+      mode: 'inherit',
+    });
+    expect(parseProjectModelPolicy('[]')).toEqual({ mode: 'inherit' });
+    expect(
+      parseProjectModelPolicy('{"mode":"prefer","allowedBackends":"x"}'),
+    ).toEqual({ mode: 'inherit' });
+  });
+
+  it('serializes a policy to JSON', () => {
+    expect(serializeProjectModelPolicy({ mode: 'prefer' })).toBe(
+      '{"mode":"prefer"}',
+    );
+  });
+});
 
 describe('project work item title parser persistence', () => {
   it('serializes and parses a valid setting', () => {

@@ -12,6 +12,14 @@ import {
   DEFAULT_PROMPT_PREFACE_SETTING,
   isPromptPrefaceSetting,
 } from './prompt-preface-types';
+import {
+  MODEL_ROLES,
+  type ModelProfile,
+  type ModelProfilesSetting,
+  PROJECT_MODEL_POLICY_MODES,
+  type ProjectModelPolicy,
+  type RoleBinding,
+} from './model-profiles';
 import type { PermissionScope } from './permission-types';
 import type { ProjectPriority } from './feed-types';
 import type { UsageProviderType } from './usage-types';
@@ -31,6 +39,18 @@ export type {
   WorkItemTabId,
 } from './work-item-display-config-types';
 
+
+export type {
+  EffectiveProjectModelPolicy,
+  ModelOverride,
+  ModelProfile,
+  ModelProfilesSetting,
+  ModelRole,
+  ProjectModelPolicy,
+  ProjectModelPolicyMode,
+  ResolvedModel,
+  RoleBinding,
+} from './model-profiles';
 
 export type ProviderType = 'azure-devops' | 'github' | 'gitlab';
 
@@ -550,8 +570,22 @@ export interface Project {
   commitWithNoVerify: boolean;
   queuePrAutoComplete: boolean;
   autoAcceptOnTaskCreation: boolean;
-  defaultAgentBackend: AgentBackendType | null; // null = use global default
-  defaultAgentModelPreference: ModelPreference | null;
+  /**
+   * @deprecated Replaced by `modelPolicy` + model profiles. The underlying
+   * column was dropped in migration 093, so this is now always `undefined` at
+   * runtime; the remaining readers all fall back to the global default. Drop
+   * the last readers, then this field.
+   */
+  defaultAgentBackend?: AgentBackendType | null; // null/absent = use global default
+  /**
+   * @deprecated Replaced by `modelPolicy` + model profiles. The underlying
+   * column was dropped in migration 093, so this is now always `undefined` at
+   * runtime; the remaining readers all fall back to the global default. Drop
+   * the last readers, then this field.
+   */
+  defaultAgentModelPreference?: ModelPreference | null;
+  /** Per-project model constraint. Null/absent = `{ mode: 'inherit' }`. */
+  modelPolicy?: ProjectModelPolicy | null;
   completionContext: string | null;
   summary: string | null;
   aiSkillSlots: AiSkillSlotsSetting | null;
@@ -593,8 +627,10 @@ export interface NewProject {
   commitWithNoVerify?: boolean;
   queuePrAutoComplete?: boolean;
   autoAcceptOnTaskCreation?: boolean;
-  defaultAgentBackend?: AgentBackendType | null;
-  defaultAgentModelPreference?: ModelPreference | null;
+  // `modelPolicy` is deliberately absent here: it is written through the
+  // dedicated `ProjectRepository.setModelPolicy` path (T3), not through the
+  // generic project create/update payload, which spreads its fields straight
+  // into SQLite and cannot carry an object.
   completionContext?: string | null;
   summary?: string | null;
   aiSkillSlots?: AiSkillSlotsSetting | null;
@@ -636,8 +672,10 @@ export interface UpdateProject {
   commitWithNoVerify?: boolean;
   queuePrAutoComplete?: boolean;
   autoAcceptOnTaskCreation?: boolean;
-  defaultAgentBackend?: AgentBackendType | null;
-  defaultAgentModelPreference?: ModelPreference | null;
+  // `modelPolicy` is deliberately absent here: it is written through the
+  // dedicated `ProjectRepository.setModelPolicy` path (T3), not through the
+  // generic project create/update payload, which spreads its fields straight
+  // into SQLite and cannot carry an object.
   completionContext?: string | null;
   summary?: string | null;
   aiSkillSlots?: AiSkillSlotsSetting | null;
@@ -1043,7 +1081,6 @@ export type EditorSetting =
 // Backend settings
 export interface BackendsSetting {
   enabledBackends: AgentBackendType[];
-  defaultBackend: AgentBackendType | null;
 }
 
 // Completion settings (Mistral FIM autocomplete)
@@ -1064,37 +1101,10 @@ export interface AppearanceSetting {
   reduceMotion: boolean;
 }
 
-export interface SummaryModelsSetting {
-  models: Partial<Record<AgentBackendType, ModelPreference>>;
-}
-
-export interface BackendDefaultModelsSetting {
-  models: Record<AgentBackendType, ModelPreference>;
-}
-
-export interface PrReviewAgentSetting {
-  backend: AgentBackendType | null;
-  modelPreference: ModelPreference;
-  thinkingEffort: ThinkingEffort;
-}
-
 export type OpenCodeProcessMode = 'standalone' | 'shared';
 
 export interface OpenCodeProcessSetting {
   mode: OpenCodeProcessMode;
-}
-
-export interface RateLimitSwapEntry {
-  backend: AgentBackendType;
-  model?: ModelPreference;
-  thinkingEffort?: ThinkingEffort;
-  presetId?: string | null;
-  threshold?: number; // 0-1, omit on last entry (absolute fallback)
-}
-
-export interface RateLimitSwapSetting {
-  enabled: boolean;
-  chain: RateLimitSwapEntry[];
 }
 
 export interface EditorAutomationSetting {
@@ -1109,8 +1119,11 @@ export interface RawMessageCleanupSetting {
 export interface AgentMemorySetting {
   enabled: boolean;
   extractionIntervalMinutes: number;
+  /** @deprecated Replaced by the `memory` role of the active model profile (T16 removes it). */
   extractionBackend: AgentBackendType;
+  /** @deprecated Replaced by the `memory` role of the active model profile (T16 removes it). */
   extractionModel: ModelPreference;
+  /** @deprecated Replaced by the `memory` role of the active model profile (T16 removes it). */
   extractionThinkingEffort: ThinkingEffort;
 }
 
@@ -1124,26 +1137,6 @@ export const DEFAULT_AGENT_MEMORY_EXTRACTION_BACKEND: AgentBackendType =
 export const DEFAULT_AGENT_MEMORY_EXTRACTION_MODEL: ModelPreference = 'haiku';
 export const DEFAULT_AGENT_MEMORY_EXTRACTION_THINKING_EFFORT: ThinkingEffort =
   'default';
-
-export interface ThinkingSettingsSetting {
-  efforts: Record<AgentBackendType, Record<string, ThinkingEffort>>;
-  selectedModels?: Record<AgentBackendType, ModelPreference>;
-}
-
-export interface BackendModelPreset {
-  id: string;
-  name: string;
-  backend: AgentBackendType;
-  model: ModelPreference;
-  thinkingEffort?: ThinkingEffort | null;
-  showInQuickSwitcher?: boolean;
-}
-
-export type BackendModelPresetsSetting = BackendModelPreset[];
-
-export interface ModelQuickSwitcherSetting {
-  enabled: boolean;
-}
 
 export type TaskNotificationEvent =
   | 'completed'
@@ -1249,13 +1242,53 @@ function isEditorSetting(v: unknown): v is EditorSetting {
   return false;
 }
 
-const VALID_BACKENDS: AgentBackendType[] = [
-  'claude-code',
-  'opencode',
-  'codex',
-  'copilot',
-  'vibe',
-];
+/**
+ * The single registry of agent backends.
+ *
+ * The backend list used to be spelled out independently in the
+ * `AgentBackendType` union, the settings validators below, the `settings.ts`
+ * normalizers and `AVAILABLE_BACKENDS` in `ui-backend-selector`. Everything that
+ * needs the *runtime* list (as opposed to the compile-time union) now derives
+ * from here — `id` is checked against `AgentBackendType`, so adding a member to
+ * the union without registering it is a type error.
+ */
+export const BACKENDS = [
+  {
+    id: 'claude-code',
+    label: 'Claude Code',
+    description: 'Anthropic Agent SDK',
+  },
+  {
+    id: 'opencode',
+    label: 'OpenCode',
+    description: 'OpenCode SDK',
+  },
+  {
+    id: 'codex',
+    label: 'Codex',
+    description: 'OpenAI Codex App Server',
+  },
+  {
+    id: 'copilot',
+    label: 'Copilot',
+    description: 'GitHub Copilot SDK',
+  },
+  {
+    id: 'vibe',
+    label: 'Mistral Vibe',
+    description:
+      'Uses vibe-acp. Install mistral-vibe from github.com/mistralai/mistral-vibe, then run vibe-acp --setup or set MISTRAL_API_KEY.',
+  },
+] as const satisfies readonly {
+  id: AgentBackendType;
+  label: string;
+  description: string;
+}[];
+
+/** Every backend id, in display order. Derived from {@link BACKENDS}. */
+export const AGENT_BACKEND_IDS: AgentBackendType[] = BACKENDS.map((b) => b.id);
+
+const VALID_BACKENDS: AgentBackendType[] = AGENT_BACKEND_IDS;
 
 function isCompletionSetting(v: unknown): v is CompletionSetting {
   if (!v || typeof v !== 'object') return false;
@@ -1303,14 +1336,6 @@ function isBackendsSetting(v: unknown): v is BackendsSetting {
     )
   )
     return false;
-  if (obj.defaultBackend !== null) {
-    if (typeof obj.defaultBackend !== 'string') return false;
-    if (!VALID_BACKENDS.includes(obj.defaultBackend as AgentBackendType))
-      return false;
-    if (!obj.enabledBackends.includes(obj.defaultBackend)) return false;
-  }
-  if (obj.enabledBackends.length > 0 && obj.defaultBackend === null)
-    return false;
   return true;
 }
 
@@ -1345,72 +1370,10 @@ function isAppearanceSetting(v: unknown): v is AppearanceSetting {
   return typeof obj.reduceMotion === 'boolean';
 }
 
-function isSummaryModelsSetting(v: unknown): v is SummaryModelsSetting {
-  if (!v || typeof v !== 'object') return false;
-  const obj = v as Record<string, unknown>;
-  if (!obj.models || typeof obj.models !== 'object') return false;
-  const models = obj.models as Record<string, unknown>;
-  return (
-    Object.keys(models).every((backend) =>
-      VALID_BACKENDS.includes(backend as AgentBackendType),
-    ) &&
-    VALID_BACKENDS.every((backend) => typeof models[backend] === 'string')
-  );
-}
-
-function isBackendDefaultModelsSetting(
-  v: unknown,
-): v is BackendDefaultModelsSetting {
-  if (!v || typeof v !== 'object') return false;
-  const obj = v as Record<string, unknown>;
-  if (!obj.models || typeof obj.models !== 'object') return false;
-  const models = obj.models as Record<string, unknown>;
-  return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
-}
-
-function isPrReviewAgentSetting(v: unknown): v is PrReviewAgentSetting {
-  if (!v || typeof v !== 'object') return false;
-  const obj = v as Record<string, unknown>;
-  return (
-    (obj.backend === null ||
-      (typeof obj.backend === 'string' &&
-        VALID_BACKENDS.includes(obj.backend as AgentBackendType))) &&
-    typeof obj.modelPreference === 'string' &&
-    VALID_THINKING_EFFORTS.includes(obj.thinkingEffort as ThinkingEffort)
-  );
-}
-
 function isOpenCodeProcessSetting(v: unknown): v is OpenCodeProcessSetting {
   if (!v || typeof v !== 'object') return false;
   const obj = v as Record<string, unknown>;
   return obj.mode === 'standalone' || obj.mode === 'shared';
-}
-
-function isRateLimitSwapSetting(value: unknown): value is RateLimitSwapSetting {
-  if (!value || typeof value !== 'object') return false;
-  const v = value as Record<string, unknown>;
-  if (typeof v.enabled !== 'boolean' || !Array.isArray(v.chain)) return false;
-
-  return v.chain.every((entry) => {
-    if (!entry || typeof entry !== 'object') return false;
-    const obj = entry as Record<string, unknown>;
-    return (
-      typeof obj.backend === 'string' &&
-      VALID_BACKENDS.includes(obj.backend as AgentBackendType) &&
-      (obj.model === undefined || typeof obj.model === 'string') &&
-      (obj.thinkingEffort === undefined ||
-        VALID_THINKING_EFFORTS.includes(
-          obj.thinkingEffort as ThinkingEffort,
-        )) &&
-      (obj.presetId === undefined ||
-        obj.presetId === null ||
-        typeof obj.presetId === 'string') &&
-      (obj.threshold === undefined ||
-        (typeof obj.threshold === 'number' &&
-          obj.threshold >= 0 &&
-          obj.threshold <= 1))
-    );
-  });
 }
 
 function isEditorAutomationSetting(v: unknown): v is EditorAutomationSetting {
@@ -1475,66 +1438,113 @@ const VALID_THINKING_EFFORTS: ThinkingEffort[] = [
   'xhigh',
 ];
 
-function isThinkingSettingsSetting(v: unknown): v is ThinkingSettingsSetting {
-  if (!v || typeof v !== 'object') return false;
-  const obj = v as Record<string, unknown>;
-  if (!obj.efforts || typeof obj.efforts !== 'object') return false;
-  const efforts = obj.efforts as Record<string, unknown>;
-  if (obj.selectedModels !== undefined) {
-    if (!obj.selectedModels || typeof obj.selectedModels !== 'object') {
-      return false;
-    }
-    const selectedModels = obj.selectedModels as Record<string, unknown>;
+/**
+ * Revision 1: a role holds its own `(backend, model, thinkingEffort)` triple, or
+ * `'inherit'` / `'off'`.
+ *
+ * A legacy preset-id string is still accepted here on purpose: the startup
+ * migration inlines those into triples, and it can only do that if the stored
+ * setting survives validation first (`normalizeModelProfilesSetting` preserves
+ * them for exactly that reason). Rejecting them would discard every profile of
+ * a not-yet-migrated install.
+ */
+function isRoleBinding(value: unknown): value is RoleBinding {
+  if (typeof value === 'string') return value.length > 0;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  // A role may point at a preset of its profile, or (image roles) hold an image
+  // model id. Both must be recognised here: `isModelProfile` discards the WHOLE
+  // `modelProfiles` setting when a single binding fails this guard.
+  if ('presetId' in obj) {
+    return typeof obj.presetId === 'string' && obj.presetId.length > 0;
+  }
+  if ('imageModel' in obj) {
+    return typeof obj.imageModel === 'string' && obj.imageModel.length > 0;
+  }
+  return (
+    typeof obj.backend === 'string' &&
+    VALID_BACKENDS.includes(obj.backend as AgentBackendType) &&
+    typeof obj.model === 'string' &&
+    typeof obj.thinkingEffort === 'string' &&
+    VALID_THINKING_EFFORTS.includes(obj.thinkingEffort as ThinkingEffort)
+  );
+}
+
+export function isModelProfile(value: unknown): value is ModelProfile {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.id !== 'string' || obj.id.length === 0) return false;
+  if (typeof obj.name !== 'string') return false;
+  if (!obj.roles || typeof obj.roles !== 'object' || Array.isArray(obj.roles)) {
+    return false;
+  }
+  // Unknown role keys are tolerated on purpose: a profile written by a newer
+  // version must not be discarded wholesale (design §8).
+  return Object.entries(obj.roles as Record<string, unknown>).every(
+    ([role, binding]) =>
+      !MODEL_ROLES.includes(role as (typeof MODEL_ROLES)[number]) ||
+      isRoleBinding(binding),
+  );
+}
+
+export function isModelProfilesSetting(
+  value: unknown,
+): value is ModelProfilesSetting {
+  return Array.isArray(value) && value.every(isModelProfile);
+}
+
+export function isActiveModelProfileIdSetting(
+  value: unknown,
+): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+export function isModelFallbackOrderSetting(
+  value: unknown,
+): value is string[] {
+  return (
+    Array.isArray(value) && value.every((id) => typeof id === 'string')
+  );
+}
+
+export function isProjectModelPolicySetting(
+  value: unknown,
+): value is ProjectModelPolicy {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  if (
+    typeof obj.mode !== 'string' ||
+    !PROJECT_MODEL_POLICY_MODES.includes(
+      obj.mode as (typeof PROJECT_MODEL_POLICY_MODES)[number],
+    )
+  ) {
+    return false;
+  }
+  if (obj.allowedBackends !== undefined) {
     if (
-      !VALID_BACKENDS.every(
-        (backend) => typeof selectedModels[backend] === 'string',
+      !Array.isArray(obj.allowedBackends) ||
+      !obj.allowedBackends.every((backend) =>
+        VALID_BACKENDS.includes(backend as AgentBackendType),
       )
     ) {
       return false;
     }
   }
-  return VALID_BACKENDS.every((backend) => {
-    const backendEfforts = efforts[backend];
-    if (!backendEfforts || typeof backendEfforts !== 'object') return false;
-    return Object.values(backendEfforts as Record<string, unknown>).every(
-      (effort) => VALID_THINKING_EFFORTS.includes(effort as ThinkingEffort),
-    );
-  });
-}
-
-function isBackendModelPresetsSetting(
-  v: unknown,
-): v is BackendModelPresetsSetting {
-  if (!Array.isArray(v)) return false;
-
-  return v.every((preset) => {
-    if (!preset || typeof preset !== 'object') return false;
-
-    const obj = preset as Record<string, unknown>;
-
-    return (
-      typeof obj.id === 'string' &&
-      typeof obj.name === 'string' &&
-      typeof obj.model === 'string' &&
-      typeof obj.backend === 'string' &&
-      VALID_BACKENDS.includes(obj.backend as AgentBackendType) &&
-      (obj.thinkingEffort === undefined ||
-        obj.thinkingEffort === null ||
-        VALID_THINKING_EFFORTS.includes(obj.thinkingEffort as ThinkingEffort)) &&
-      (obj.showInQuickSwitcher === undefined ||
-        typeof obj.showInQuickSwitcher === 'boolean')
-    );
-  });
-}
-
-function isModelQuickSwitcherSetting(
-  v: unknown,
-): v is ModelQuickSwitcherSetting {
-  return (
-    !!v &&
-    typeof v === 'object' &&
-    typeof (v as Record<string, unknown>).enabled === 'boolean'
-  );
+  if (obj.allowedProfileIds !== undefined) {
+    if (
+      !Array.isArray(obj.allowedProfileIds) ||
+      !obj.allowedProfileIds.every((id) => typeof id === 'string')
+    ) {
+      return false;
+    }
+  }
+  if (
+    obj.pinnedProfileId !== undefined &&
+    typeof obj.pinnedProfileId !== 'string'
+  ) {
+    return false;
+  }
+  return true;
 }
 
 const VALID_TASK_NOTIFICATION_EVENTS: TaskNotificationEvent[] = [
@@ -1802,7 +1812,6 @@ export const SETTINGS_DEFINITIONS = {
   backends: {
     defaultValue: {
       enabledBackends: [],
-      defaultBackend: null,
     } as BackendsSetting,
     validate: isBackendsSetting,
   },
@@ -1829,50 +1838,11 @@ export const SETTINGS_DEFINITIONS = {
     } as AppearanceSetting,
     validate: isAppearanceSetting,
   },
-  summaryModels: {
-    defaultValue: {
-      models: {
-        'claude-code': 'haiku',
-        opencode: 'default',
-        codex: 'default',
-        copilot: 'default',
-        vibe: 'default',
-      },
-    } as SummaryModelsSetting,
-    validate: isSummaryModelsSetting,
-  },
-  backendDefaultModels: {
-    defaultValue: {
-      models: {
-        'claude-code': 'default',
-        opencode: 'default',
-        codex: 'default',
-        copilot: 'default',
-        vibe: 'default',
-      },
-    } as BackendDefaultModelsSetting,
-    validate: isBackendDefaultModelsSetting,
-  },
-  prReviewAgent: {
-    defaultValue: {
-      backend: null,
-      modelPreference: 'default',
-      thinkingEffort: 'default',
-    } as PrReviewAgentSetting,
-    validate: isPrReviewAgentSetting,
-  },
   opencodeProcess: {
     defaultValue: {
       mode: 'standalone',
     } as OpenCodeProcessSetting,
     validate: isOpenCodeProcessSetting,
-  },
-  rateLimitSwap: {
-    defaultValue: {
-      enabled: false,
-      chain: [],
-    } as RateLimitSwapSetting,
-    validate: isRateLimitSwapSetting,
   },
   editorAutomation: {
     defaultValue: {
@@ -1899,32 +1869,20 @@ export const SETTINGS_DEFINITIONS = {
     } as AgentMemorySetting,
     validate: isAgentMemorySetting,
   },
-  thinkingSettings: {
-    defaultValue: {
-      efforts: {
-        'claude-code': { default: 'default' },
-        opencode: { default: 'default' },
-        codex: { default: 'default' },
-        copilot: { default: 'default' },
-        vibe: { default: 'default' },
-      },
-      selectedModels: {
-        'claude-code': 'default',
-        opencode: 'default',
-        codex: 'default',
-        copilot: 'default',
-        vibe: 'default',
-      },
-    } as ThinkingSettingsSetting,
-    validate: isThinkingSettingsSetting,
+  /** Global profile definitions. Populated by the settings migration (T2). */
+  modelProfiles: {
+    defaultValue: [] as ModelProfilesSetting,
+    validate: isModelProfilesSetting,
   },
-  backendModelPresets: {
-    defaultValue: [] as BackendModelPresetsSetting,
-    validate: isBackendModelPresetsSetting,
+  /** Id of the globally active profile, or null when none is set. */
+  activeModelProfileId: {
+    defaultValue: null as string | null,
+    validate: isActiveModelProfileIdSetting,
   },
-  modelQuickSwitcher: {
-    defaultValue: { enabled: false } as ModelQuickSwitcherSetting,
-    validate: isModelQuickSwitcherSetting,
+  /** Ordered profile ids used for rate-limit fallback. Replaces `rateLimitSwap`. */
+  modelFallbackOrder: {
+    defaultValue: [] as string[],
+    validate: isModelFallbackOrderSetting,
   },
   taskEventNotifications: {
     defaultValue: {

@@ -18,6 +18,7 @@ import {
   encodeMentionDisplayNames,
   type MentionOption,
 } from '@/common/ui/mention-textarea';
+import { getLanguageFromPath, tokenizeLines } from '@/lib/syntax-highlight';
 import {
   type MentionDisplayNames,
   replaceAzureDevOpsMentions,
@@ -38,7 +39,6 @@ import { AzureMarkdownContent } from '@/features/common/ui-azure-html-content';
 import { Button } from '@/common/ui/button';
 import { encodeProxyUrl } from '@/lib/azure-image-proxy';
 import { formatRelativeTime } from '@/lib/time';
-import { getLanguageFromPath, tokenizeLines } from '@/lib/syntax-highlight';
 import { IconButton } from '@/common/ui/icon-button';
 import { InlineCommentComposer } from '@/features/common/ui-inline-comments';
 import type { PromptImagePart } from '@shared/agent-backend-types';

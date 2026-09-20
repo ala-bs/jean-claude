@@ -1,14 +1,14 @@
 // @vitest-environment happy-dom
 
+import { act, useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import { act, useRef } from 'react';
 
-import type { ProjectCommand } from '@shared/run-command-types';
 import type {
   RunCommandLogs,
   RunCommandLogState,
 } from '@/stores/task-messages';
+import type { ProjectCommand } from '@shared/run-command-types';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;

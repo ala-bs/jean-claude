@@ -16,9 +16,13 @@ vi.mock('./agent-usage-service', () => ({
   },
 }));
 
-import { SettingsRepository } from '../database/repositories/settings';
+import type {
+  EffectiveProjectModelPolicy,
+  ModelProfile,
+} from '../../shared/model-profiles';
 
 import { agentUsageService } from './agent-usage-service';
+import type { ModelProfileService } from './model-profile-service';
 import { RateLimitSwapService } from './rate-limit-swap-service';
 
 function makeUsage(utilization: number) {
@@ -42,244 +46,337 @@ function makeUsage(utilization: number) {
   };
 }
 
-describe('RateLimitSwapService (chain model)', () => {
-  let service: RateLimitSwapService;
+const CLAUDE_TRIPLE = {
+  backend: 'claude-code',
+  model: 'sonnet',
+  thinkingEffort: 'high',
+} as const;
 
+const CODEX_TRIPLE = {
+  backend: 'codex',
+  model: 'gpt-5',
+  thinkingEffort: 'medium',
+} as const;
+
+const PROFILE_CLAUDE: ModelProfile = {
+  id: 'anthropic',
+  name: 'Anthropic',
+  presets: [],
+  quickPresetIds: [],
+  roles: { agent: { ...CLAUDE_TRIPLE } },
+};
+
+const PROFILE_CODEX: ModelProfile = {
+  id: 'codex-fallback',
+  name: 'Codex fallback',
+  presets: [],
+  quickPresetIds: [],
+  roles: { agent: { ...CODEX_TRIPLE } },
+};
+
+function createFakeProfileService(
+  overrides: Partial<{
+    fallbackOrder: string[];
+    profiles: ModelProfile[];
+    activeProfile: ModelProfile | null;
+    policy: EffectiveProjectModelPolicy;
+  }> = {},
+) {
+  const activateFallbackProfile = vi.fn(async () => PROFILE_CODEX);
+  const activateProfile = vi.fn();
+  const service = {
+    listProfiles: async () =>
+      overrides.profiles ?? [PROFILE_CLAUDE, PROFILE_CODEX],
+    getActiveProfile: async () =>
+      overrides.activeProfile === undefined
+        ? PROFILE_CLAUDE
+        : overrides.activeProfile,
+    activateProfile,
+    getEffectivePolicy: async () =>
+      overrides.policy ?? {
+        policy: { mode: 'inherit' as const },
+        source: 'default' as const,
+      },
+    resolveForRole: vi.fn(),
+    getFallbackOrder: async () => overrides.fallbackOrder ?? ['codex-fallback'],
+    activateFallbackProfile,
+    invalidateProjectPolicyCache: vi.fn(),
+  } as unknown as ModelProfileService;
+  return { service, activateFallbackProfile, activateProfile };
+}
+
+function createService(
+  overrides?: Parameters<typeof createFakeProfileService>[0],
+) {
+  const { service, activateFallbackProfile, activateProfile } =
+    createFakeProfileService(overrides);
+  return {
+    swapService: new RateLimitSwapService({
+      modelProfileService: () => service,
+    }),
+    activateFallbackProfile,
+    activateProfile,
+  };
+}
+
+describe('RateLimitSwapService (profile fallback)', () => {
   beforeEach(() => {
-    vi.mocked(SettingsRepository.get).mockReset();
     vi.mocked(agentUsageService.getUsage).mockReset();
-    service = new RateLimitSwapService();
   });
 
-  it('returns original when disabled', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: false,
-      chain: [{ backend: 'claude-code', threshold: 0.8 }],
+  it('does not swap when the fallback order is empty', async () => {
+    const { swapService } = createService({ fallbackOrder: [] });
+    await expect(swapService.resolveBackend('claude-code')).resolves.toEqual({
+      backend: 'claude-code',
+      swapped: false,
     });
-    const result = await service.resolveBackend('claude-code');
-    expect(result).toEqual({ backend: 'claude-code', swapped: false });
+    expect(agentUsageService.getUsage).not.toHaveBeenCalled();
   });
 
-  it('returns original when chain empty', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [],
-    });
-    const result = await service.resolveBackend('claude-code');
-    expect(result).toEqual({ backend: 'claude-code', swapped: false });
-  });
-
-  it('picks first entry when under threshold', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [
-        { backend: 'claude-code', model: 'sonnet', threshold: 0.8 },
-        { backend: 'opencode', model: 'gpt-4o' },
-      ],
-    });
+  it('does not swap while the backend is under the threshold', async () => {
     vi.mocked(agentUsageService.getUsage).mockResolvedValue({
       'claude-code': makeUsage(0.5),
     });
-    const result = await service.resolveBackend('claude-code');
-    expect(result.backend).toBe('claude-code');
-    expect(result.model).toBe('sonnet');
+    const { swapService } = createService();
+    await expect(swapService.resolveBackend('claude-code')).resolves.toEqual({
+      backend: 'claude-code',
+      swapped: false,
+    });
   });
 
-  it('skips entries over threshold', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [
-        { backend: 'claude-code', model: 'sonnet', threshold: 0.8 },
-        { backend: 'claude-code', model: 'haiku', threshold: 0.9 },
-        { backend: 'opencode', model: 'gpt-4o' },
-      ],
-    });
-    vi.mocked(agentUsageService.getUsage).mockResolvedValue({
-      'claude-code': makeUsage(0.85),
-    });
-    const result = await service.resolveBackend('claude-code');
-    expect(result.backend).toBe('claude-code');
-    expect(result.model).toBe('haiku');
+  it('treats missing usage data as optimistic (no swap)', async () => {
+    vi.mocked(agentUsageService.getUsage).mockResolvedValue({});
+    const { swapService } = createService();
+    const result = await swapService.resolveBackend('claude-code');
+    expect(result.swapped).toBe(false);
   });
 
-  it('falls through to last entry (no threshold) when all exceeded', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [
-        { backend: 'claude-code', model: 'sonnet', threshold: 0.8 },
-        { backend: 'claude-code', model: 'haiku', threshold: 0.9 },
-        { backend: 'opencode', model: 'gpt-4o' },
-      ],
-    });
+  it('preserves the fallback profile model and thinking effort', async () => {
     vi.mocked(agentUsageService.getUsage).mockResolvedValue({
       'claude-code': makeUsage(0.95),
     });
-    const result = await service.resolveBackend('claude-code');
-    expect(result.backend).toBe('opencode');
-    expect(result.model).toBe('gpt-4o');
-    expect(result.swapped).toBe(true);
+    const { swapService } = createService();
+    const result = await swapService.resolveBackend('claude-code');
+    expect(result).toEqual({
+      backend: 'codex',
+      model: 'gpt-5',
+      thinkingEffort: 'medium',
+      swapped: true,
+      skippedDueToRateLimit: true,
+      profileId: 'codex-fallback',
+    });
   });
 
-  it('treats missing usage data as 0% (optimistic)', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [
-        { backend: 'claude-code', model: 'sonnet', threshold: 0.8 },
-        { backend: 'opencode', model: 'gpt-4o' },
-      ],
-    });
-    vi.mocked(agentUsageService.getUsage).mockResolvedValue({});
-    const result = await service.resolveBackend('claude-code');
-    expect(result.backend).toBe('claude-code');
-    expect(result.model).toBe('sonnet');
-  });
-
-  it('marks swapped=true when backend differs from requested', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [
-        { backend: 'claude-code', threshold: 0.8 },
-        { backend: 'opencode' },
-      ],
-    });
+  it('skips profiles whose agent role stays on the limited backend', async () => {
     vi.mocked(agentUsageService.getUsage).mockResolvedValue({
-      'claude-code': makeUsage(0.85),
+      'claude-code': makeUsage(0.95),
     });
-    const result = await service.resolveBackend('claude-code');
-    expect(result.swapped).toBe(true);
-    expect(result.skippedDueToRateLimit).toBe(true);
-    expect(result.backend).toBe('opencode');
+    const sameBackendProfile: ModelProfile = {
+      id: 'claude-cheap',
+      name: 'Claude cheap',
+      presets: [],
+      quickPresetIds: [],
+      roles: { agent: { ...CLAUDE_TRIPLE } },
+    };
+    const { swapService } = createService({
+      profiles: [PROFILE_CLAUDE, sameBackendProfile, PROFILE_CODEX],
+      fallbackOrder: ['claude-cheap', 'codex-fallback'],
+    });
+    const result = await swapService.resolveBackend('claude-code');
+    expect(result.profileId).toBe('codex-fallback');
+    expect(result.backend).toBe('codex');
   });
 
-  it('marks swapped=true when model override present even if same backend', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [
-        { backend: 'claude-code', model: 'haiku', threshold: 0.8 },
-        { backend: 'opencode' },
-      ],
-    });
+  // A profile's agent role may follow one of its presets by reference; the
+  // fallback must still see its backend, or that profile is silently skipped.
+  it('uses a fallback profile whose agent role follows a preset', async () => {
+    const presetBound: ModelProfile = {
+      id: 'codex-preset',
+      name: 'Codex via preset',
+      presets: [{ id: 'p-codex', name: 'Codex', ...CODEX_TRIPLE }],
+      quickPresetIds: ['p-codex'],
+      roles: { agent: { presetId: 'p-codex' } },
+    };
     vi.mocked(agentUsageService.getUsage).mockResolvedValue({
-      'claude-code': makeUsage(0.5),
+      'claude-code': makeUsage(0.95),
     });
-    const result = await service.resolveBackend('claude-code');
-    expect(result.swapped).toBe(true);
-    expect(result.backend).toBe('claude-code');
-    expect(result.model).toBe('haiku');
+    const { swapService } = createService({
+      profiles: [PROFILE_CLAUDE, presetBound],
+      fallbackOrder: ['codex-preset'],
+    });
+
+    const result = await swapService.resolveBackend('claude-code');
+
+    expect(result.profileId).toBe('codex-preset');
+    expect(result.backend).toBe('codex');
   });
 
-  it('marks swapped=false when first entry matches requested with no model', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [
-        { backend: 'claude-code', threshold: 0.8 },
-        { backend: 'opencode' },
-      ],
-    });
+  it('does not activate a profile unless asked (probe callers)', async () => {
     vi.mocked(agentUsageService.getUsage).mockResolvedValue({
-      'claude-code': makeUsage(0.5),
+      'claude-code': makeUsage(0.95),
     });
-    const result = await service.resolveBackend('claude-code');
+    const { swapService, activateFallbackProfile } = createService();
+    await swapService.resolveBackend('claude-code');
+    expect(activateFallbackProfile).not.toHaveBeenCalled();
+  });
+
+  // Activation must use the profile this call already selected. Re-deriving it
+  // let a profile with no resolvable agent role win there but not here, so the
+  // banner named one profile while another was activated.
+  it('activates exactly the profile it reports switching to', async () => {
+    vi.mocked(agentUsageService.getUsage).mockResolvedValue({
+      'claude-code': makeUsage(0.95),
+    });
+    const blank: ModelProfile = {
+      id: 'blank',
+      name: 'No agent role',
+      presets: [],
+      quickPresetIds: [],
+      roles: {},
+    };
+    const { swapService, activateProfile } = createService({
+      profiles: [PROFILE_CLAUDE, blank, PROFILE_CODEX],
+      fallbackOrder: ['blank', 'codex-fallback'],
+    });
+
+    const result = await swapService.resolveBackend('claude-code', {
+      activate: true,
+    });
+
+    expect(result.profileId).toBe('codex-fallback');
+    expect(activateProfile).toHaveBeenCalledWith({
+      profileId: 'codex-fallback',
+    });
+  });
+
+  it('blocks instead of falling back for an enforce project (design §8)', async () => {
+    vi.mocked(agentUsageService.getUsage).mockResolvedValue({
+      'claude-code': makeUsage(0.95),
+    });
+    const { swapService, activateFallbackProfile } = createService({
+      policy: {
+        policy: { mode: 'enforce', allowedBackends: ['claude-code'] },
+        source: 'project',
+      },
+    });
+    const result = await swapService.resolveBackend('claude-code', {
+      activate: true,
+      projectId: 'project-1',
+    });
     expect(result.swapped).toBe(false);
     expect(result.backend).toBe('claude-code');
+    expect(result.blocked?.reason).toBe('backend-not-allowed');
+    expect(result.blocked?.allowedBackends).toEqual(['claude-code']);
+    expect(activateFallbackProfile).not.toHaveBeenCalled();
   });
 
-  it('treats default model and thinking as no override', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [
-        {
-          backend: 'claude-code',
-          model: 'default',
-          thinkingEffort: 'default',
-          threshold: 0.8,
-        },
-        { backend: 'opencode' },
-      ],
-    });
-    vi.mocked(agentUsageService.getUsage).mockResolvedValue({
-      'claude-code': makeUsage(0.5),
-    });
-    const result = await service.resolveBackend('claude-code');
-    expect(result).toEqual({ backend: 'claude-code', swapped: false });
-  });
-
-  it('returns thinking override when configured', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [
-        { backend: 'claude-code', thinkingEffort: 'max', threshold: 0.8 },
-        { backend: 'opencode' },
-      ],
-    });
-    vi.mocked(agentUsageService.getUsage).mockResolvedValue({
-      'claude-code': makeUsage(0.5),
-    });
-    const result = await service.resolveBackend('claude-code');
-    expect(result.swapped).toBe(true);
-    expect(result.thinkingEffort).toBe('max');
-  });
-
-  it('checks different backend utilization for each entry', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [
-        { backend: 'claude-code', threshold: 0.8 },
-        { backend: 'opencode', threshold: 0.7 },
-        { backend: 'opencode', model: 'fallback' },
-      ],
-    });
-    // claude-code over, opencode has no data -> optimistic -> pick it
-    vi.mocked(agentUsageService.getUsage)
-      .mockResolvedValueOnce({ 'claude-code': makeUsage(0.85) })
-      .mockResolvedValueOnce({});
-    const result = await service.resolveBackend('claude-code');
-    expect(result.backend).toBe('opencode');
-    expect(result.model).toBeUndefined();
-  });
-
-  it('queries usage for supported backend providers', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [
-        { backend: 'codex', threshold: 0.8 },
-        { backend: 'opencode', threshold: 0.8 },
-        { backend: 'copilot', threshold: 0.8 },
-        { backend: 'claude-code' },
-      ],
-    });
-    vi.mocked(agentUsageService.getUsage)
-      .mockResolvedValueOnce({ codex: makeUsage(0.9) })
-      .mockResolvedValueOnce({ opencode: makeUsage(0.9) })
-      .mockResolvedValueOnce({ copilot: makeUsage(0.9) });
-
-    const result = await service.resolveBackend('codex');
-
-    expect(agentUsageService.getUsage).toHaveBeenNthCalledWith(1, ['codex']);
-    expect(agentUsageService.getUsage).toHaveBeenNthCalledWith(2, ['opencode']);
-    expect(agentUsageService.getUsage).toHaveBeenNthCalledWith(3, ['copilot']);
-    expect(result.backend).toBe('claude-code');
-  });
-
-  it('reset clears notification state', async () => {
-    service.reset();
-    // No error = success
-    expect(true).toBe(true);
-  });
-
-  it('falls back to last entry when all have thresholds and all exceeded', async () => {
-    vi.mocked(SettingsRepository.get).mockResolvedValue({
-      enabled: true,
-      chain: [
-        { backend: 'claude-code', threshold: 0.8 },
-        { backend: 'claude-code', model: 'haiku', threshold: 0.9 },
-      ],
-    });
+  // The guard used to inspect `allowedBackends` ONLY. The policy editor treats
+  // profiles and backends as separate constraints, so "always run Anthropic"
+  // stores a pin and NO allowedBackends — leaving the guard inert for exactly
+  // the policies people actually write.
+  it('blocks a swap away from the pinned profile (design §8)', async () => {
     vi.mocked(agentUsageService.getUsage).mockResolvedValue({
       'claude-code': makeUsage(0.95),
     });
-    const result = await service.resolveBackend('claude-code');
-    expect(result.backend).toBe('claude-code');
-    expect(result.model).toBe('haiku');
+    const { swapService, activateProfile } = createService({
+      policy: {
+        policy: { mode: 'enforce', pinnedProfileId: 'anthropic' },
+        source: 'project',
+      },
+    });
+
+    const result = await swapService.resolveBackend('claude-code', {
+      activate: true,
+      projectId: 'project-1',
+    });
+
+    expect(result.swapped).toBe(false);
+    expect(result.blocked?.reason).toBe('profile-not-allowed');
+    expect(result.blocked?.message).toContain('Anthropic');
+    expect(activateProfile).not.toHaveBeenCalled();
+  });
+
+  it('blocks a swap to a profile outside the allow-list (design §8)', async () => {
+    vi.mocked(agentUsageService.getUsage).mockResolvedValue({
+      'claude-code': makeUsage(0.95),
+    });
+    const { swapService, activateProfile } = createService({
+      policy: {
+        policy: { mode: 'enforce', allowedProfileIds: ['anthropic'] },
+        source: 'project',
+      },
+    });
+
+    const result = await swapService.resolveBackend('claude-code', {
+      activate: true,
+      projectId: 'project-1',
+    });
+
+    expect(result.swapped).toBe(false);
+    expect(result.blocked?.reason).toBe('profile-not-allowed');
+    expect(result.blocked?.allowedProfileIds).toEqual(['anthropic']);
+    expect(activateProfile).not.toHaveBeenCalled();
+  });
+
+  it('allows the swap when the fallback profile is itself permitted', async () => {
+    vi.mocked(agentUsageService.getUsage).mockResolvedValue({
+      'claude-code': makeUsage(0.95),
+    });
+    const { swapService } = createService({
+      policy: {
+        policy: {
+          mode: 'enforce',
+          allowedProfileIds: ['anthropic', 'codex-fallback'],
+        },
+        source: 'project',
+      },
+    });
+
+    const result = await swapService.resolveBackend('claude-code', {
+      projectId: 'project-1',
+    });
+
+    expect(result.swapped).toBe(true);
+    expect(result.profileId).toBe('codex-fallback');
+    expect(result.blocked).toBeUndefined();
+  });
+
+  it('falls back normally for a project in prefer mode', async () => {
+    vi.mocked(agentUsageService.getUsage).mockResolvedValue({
+      'claude-code': makeUsage(0.95),
+    });
+    const { swapService } = createService({
+      policy: {
+        policy: { mode: 'prefer', allowedBackends: ['claude-code'] },
+        source: 'project',
+      },
+    });
+    const result = await swapService.resolveBackend('claude-code', {
+      projectId: 'project-1',
+    });
+    expect(result.swapped).toBe(true);
+    expect(result.backend).toBe('codex');
+    expect(result.blocked).toBeUndefined();
+  });
+
+  it('reports the rate limit when no profile can take over', async () => {
+    vi.mocked(agentUsageService.getUsage).mockResolvedValue({
+      'claude-code': makeUsage(0.95),
+    });
+    const { swapService } = createService({
+      profiles: [PROFILE_CLAUDE],
+      fallbackOrder: ['anthropic'],
+    });
+    const result = await swapService.resolveBackend('claude-code');
+    expect(result).toEqual({
+      backend: 'claude-code',
+      swapped: false,
+      skippedDueToRateLimit: true,
+    });
+  });
+
+  it('reset clears notification state', () => {
+    const { swapService } = createService();
+    expect(() => swapService.reset()).not.toThrow();
   });
 });

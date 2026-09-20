@@ -3,6 +3,8 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { db } from '../database';
 import { dbg } from '../lib/debug';
 
+import { getModelProfileService } from './model-profile-service';
+
 const CONTEXT_SCHEMA = {
   type: 'object',
   properties: {
@@ -13,8 +15,9 @@ const CONTEXT_SCHEMA = {
 
 /**
  * Generates a completion context for a project by analyzing its task history.
- * Uses Claude Haiku to produce a project description and example prompts
- * that help the FIM model understand the project domain and writing style.
+ * The model comes from the `ai-generation` role of the active model profile
+ * (it used to be a hardcoded `haiku`), so the generated project description and
+ * example prompts follow the user's configured preferences.
  */
 export async function generateCompletionContext({
   projectId,
@@ -45,6 +48,19 @@ export async function generateCompletionContext({
       return null;
     }
 
+    const role = await getModelProfileService().resolveForRole({
+      role: 'ai-generation',
+      projectId,
+    });
+
+    if (role.off || role.blocked) {
+      dbg.agent(
+        'Skipping completion context generation: %s',
+        role.off ? 'ai-generation role is off' : role.blocked?.message,
+      );
+      return null;
+    }
+
     const generator = query({
       prompt: `You are analyzing a software project's task history to create a completion context.
 Given these recent task prompts from a project, generate a concise context block that will help an autocomplete model complete future prompts.
@@ -67,7 +83,7 @@ Example prompts:
 Keep it concise. The total should be under 500 characters.`,
       options: {
         allowedTools: [],
-        model: 'haiku',
+        ...(role.model !== 'default' ? { model: role.model } : {}),
         outputFormat: {
           type: 'json_schema',
           schema: CONTEXT_SCHEMA,

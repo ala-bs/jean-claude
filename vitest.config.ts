@@ -11,6 +11,12 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    // Several suites shell out to real `git` (merge-conflict-tracker,
+    // worktree-service). They pass comfortably in isolation but exceed the 5s
+    // default when the full suite runs them in parallel, producing timeouts
+    // that look like failures but are only scheduling pressure.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     include: [
       'scripts/**/*.test.ts',
       'shared/**/*.test.ts',
@@ -31,6 +37,11 @@ export default defineConfig({
       'src/features/agent/task-message-manager/**/*.test.tsx',
       'src/features/agent/ui-worktree-actions/**/*.test.ts',
       'src/features/agent/utils-backend-model-selection/**/*.test.ts',
+      'src/features/agent/ui-model-profile-switcher/**/*.test.tsx',
+      'src/features/agent/ui-rate-limit-banner/**/*.test.tsx',
+      'src/features/project/ui-project-model-policy/**/*.test.tsx',
+      'src/features/settings/ui-model-profiles-settings/**/*.test.tsx',
+      'src/features/settings/ui-settings-overlay/**/*.test.ts',
       'src/features/changelog/**/*.test.tsx',
       'src/features/common/ui-azure-html-content/**/*.test.tsx',
       'src/features/common/ui-inline-comments/**/*.test.ts',

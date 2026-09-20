@@ -149,6 +149,10 @@ contextBridge.exposeInMainWorld('api', {
     isSecretStorageAvailable: () =>
       ipcRenderer.invoke('projects:isSecretStorageAvailable'),
     findById: (id: string) => ipcRenderer.invoke('projects:findById', id),
+    getEffectivePolicy: (projectId: string) =>
+      ipcRenderer.invoke('projects:getEffectivePolicy', projectId),
+    setModelPolicy: (projectId: string, policy: unknown) =>
+      ipcRenderer.invoke('projects:setModelPolicy', projectId, policy),
     create: (data: unknown) => ipcRenderer.invoke('projects:create', data),
     update: (id: string, data: unknown) =>
       ipcRenderer.invoke('projects:update', id, data),
@@ -910,6 +914,15 @@ contextBridge.exposeInMainWorld('api', {
     set: (key: string, value: unknown) =>
       ipcRenderer.invoke('settings:set', key, value),
   },
+  modelProfiles: {
+    resolve: (params: {
+      role: import('@shared/model-profiles').ModelRole;
+      projectId?: string | null;
+      override?: import('@shared/model-profiles').ModelOverride | null;
+    }) => ipcRenderer.invoke('modelProfiles:resolve', params),
+    activate: (profileId: string) =>
+      ipcRenderer.invoke('modelProfiles:activate', profileId),
+  },
   backendConfig: {
     getUserConfig: (
       backend: import('@shared/agent-backend-types').AgentBackendType,
@@ -1397,6 +1410,29 @@ contextBridge.exposeInMainWorld('api', {
         model?: string;
         thinkingEffort?: import('@shared/types').ThinkingEffort;
         swapped: boolean;
+        skippedDueToRateLimit?: boolean;
+      }>,
+    /**
+     * React to a real rate-limit event by activating the fallback profile.
+     * Distinct from `resolve`, which is a side-effect-free probe.
+     */
+    react: (params: {
+      backend: import('@shared/agent-backend-types').AgentBackendType;
+      projectId?: string | null;
+    }) =>
+      ipcRenderer.invoke('rate-limit-swap:react', params) as Promise<{
+        backend: import('@shared/agent-backend-types').AgentBackendType;
+        model?: string;
+        thinkingEffort?: import('@shared/types').ThinkingEffort;
+        swapped: boolean;
+        skippedDueToRateLimit?: boolean;
+        profileId?: string;
+        blocked?: {
+          reason: 'backend-not-allowed' | 'profile-not-allowed';
+          message: string;
+          allowedBackends?: import('@shared/agent-backend-types').AgentBackendType[];
+          allowedProfileIds?: string[];
+        };
       }>,
   },
   usageDisplay: {

@@ -1,7 +1,7 @@
-import { highlight as sugarHighlight } from 'sugar-high';
-import { parse, type ParseOptions, type TokenType } from 'sugar-high/core';
 import { languages, lang as normalizeLang } from 'sugar-high/lang';
+import { parse, type ParseOptions, type TokenType } from 'sugar-high/core';
 import type { LanguageName } from 'sugar-high';
+import { highlight as sugarHighlight } from 'sugar-high';
 
 /**
  * Synchronous syntax highlighting built on sugar-high.

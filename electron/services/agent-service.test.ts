@@ -14,10 +14,16 @@ import type { AgentMemoryTaskReviewCapture } from '@shared/agent-memory-types';
 import type { AgentRunHandle } from '@shared/agent-backend-provider-types';
 import type { Task } from '@shared/types';
 
+import {
+  assertModelPolicyAllowed,
+  buildSessionIdStepUpdate,
+  ModelPolicyViolationError,
+  resolveRunModelSettings,
+} from './agent-session-update';
 import { buildJcMcpServersConfigForCwd } from './jc-mcp-config';
-import { buildSessionIdStepUpdate } from './agent-session-update';
 import { deleteAllPrWorkspaces } from './pr-workspace-deletion-service';
 import { JcMcpBridgeService } from './jc-mcp-bridge-service';
+import type { ModelProfileService } from './model-profile-service';
 import { QuestionBrokerService } from './question-broker-service';
 
 const TEST_ALLOWED_DIRECTORY = fs.realpathSync.native(os.tmpdir());
@@ -327,6 +333,33 @@ vi.mock('../database/repositories/settings', () => ({
   SettingsRepository: settingsRepositoryMock,
 }));
 
+// The agent role resolver. The default fake simply echoes the step override
+// back, i.e. "no profile configured, the step's own triple wins".
+const { modelProfileServiceMock } = vi.hoisted(() => ({
+  modelProfileServiceMock: {
+    resolveForRole: vi.fn(
+      async ({
+        override,
+      }: {
+        override?: {
+          backend?: string | null;
+          model?: string | null;
+          thinkingEffort?: string | null;
+        } | null;
+      }) => ({
+        backend: override?.backend ?? 'claude-code',
+        model: override?.model ?? 'default',
+        thinkingEffort: override?.thinkingEffort ?? 'default',
+        source: 'override',
+      }),
+    ),
+  },
+}));
+
+vi.mock('./model-profile-service', () => ({
+  getModelProfileService: () => modelProfileServiceMock,
+}));
+
 vi.mock('../database/repositories/task-steps', () => ({
   TaskStepRepository: taskStepRepositoryMock,
 }));
@@ -443,8 +476,8 @@ vi.mock('./system-project-service', () => ({
 }));
 
 import { agentService } from './agent-service';
-import { emitPermissionsChanged } from './permission-event-service';
 import { buildReadOnlyPrReviewSessionRules } from './pr-review-agent-service';
+import { emitPermissionsChanged } from './permission-event-service';
 
 const defaultStep = {
   id: 'step-1',
@@ -739,7 +772,7 @@ describe('buildSessionIdStepUpdate', () => {
     });
   });
 
-  it('clears stale model settings when backend changes without explicit overrides', () => {
+  it('keeps the step model when the backend changes (design §4)', () => {
     expect(
       buildSessionIdStepUpdate({
         sessionId: 'session-1',
@@ -749,8 +782,6 @@ describe('buildSessionIdStepUpdate', () => {
     ).toEqual({
       sessionId: 'session-1',
       agentBackend: 'opencode',
-      modelPreference: 'default',
-      thinkingEffort: 'default',
     });
   });
 
@@ -769,6 +800,165 @@ describe('buildSessionIdStepUpdate', () => {
       modelPreference: 'openai/gpt-5.1',
       thinkingEffort: 'high',
     });
+  });
+});
+
+describe('model policy enforcement at session creation', () => {
+  it('throws a visible error when the resolution was blocked', () => {
+    expect(() =>
+      assertModelPolicyAllowed({
+        backend: 'claude-code',
+        model: 'default',
+        thinkingEffort: 'default',
+        source: 'policy',
+        blocked: {
+          reason: 'backend-not-allowed',
+          message: 'This project does not permit the backend "codex".',
+          allowed: { backends: ['claude-code'] },
+        },
+      }),
+    ).toThrow(ModelPolicyViolationError);
+  });
+
+  it('does nothing when the resolution is allowed', () => {
+    expect(() =>
+      assertModelPolicyAllowed({
+        backend: 'claude-code',
+        model: 'sonnet',
+        thinkingEffort: 'high',
+        source: 'profile',
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe('resolveRunModelSettings', () => {
+  const CLAUDE_TRIPLE = {
+    backend: 'claude-code' as const,
+    model: 'sonnet',
+    thinkingEffort: 'high' as const,
+  };
+
+  const CODEX_TRIPLE = {
+    backend: 'codex' as const,
+    model: 'gpt-5',
+    thinkingEffort: 'medium' as const,
+  };
+
+  /**
+   * Minimal stand-in for the real service: runs the shared resolver against an
+   * in-memory active profile so a "profile switch" is a single assignment.
+   */
+  function fakeProfileService(state: { activeProfileId: string }) {
+    return {
+      resolveForRole: async ({
+        role,
+        override,
+      }: Parameters<ModelProfileService['resolveForRole']>[0]) => {
+        const { resolveModelForRole } = await import('@shared/model-profiles');
+        return resolveModelForRole({
+          role,
+          activeProfileId: state.activeProfileId,
+          profiles: [
+            {
+              id: 'anthropic',
+              name: 'Anthropic',
+              presets: [],
+              quickPresetIds: [],
+              roles: { agent: { ...CLAUDE_TRIPLE } },
+            },
+            {
+              id: 'codex',
+              name: 'Codex',
+              presets: [],
+              quickPresetIds: [],
+              roles: { agent: { ...CODEX_TRIPLE } },
+            },
+          ],
+          enabledBackends: ['claude-code', 'codex'],
+          override,
+        });
+      },
+    } as unknown as ModelProfileService;
+  }
+
+  it('keeps the step model and effort across a cross-backend run', async () => {
+    const state = { activeProfileId: 'codex' };
+    await expect(
+      resolveRunModelSettings({
+        session: { projectId: 'p1', backendType: 'codex' },
+        step: { modelPreference: 'gpt-5-mini', thinkingEffort: 'low' },
+        modelProfileService: fakeProfileService(state),
+      }),
+    ).resolves.toEqual({
+      modelPreference: 'gpt-5-mini',
+      thinkingEffort: 'low',
+    });
+  });
+
+  it('keeps an explicit swap model and effort instead of blanking them', async () => {
+    const state = { activeProfileId: 'anthropic' };
+    await expect(
+      resolveRunModelSettings({
+        session: {
+          projectId: 'p1',
+          backendType: 'codex',
+          swapModel: 'gpt-5',
+          swapThinkingEffort: 'medium',
+        },
+        step: { modelPreference: 'sonnet', thinkingEffort: 'high' },
+        modelProfileService: fakeProfileService(state),
+      }),
+    ).resolves.toEqual({
+      modelPreference: 'gpt-5',
+      thinkingEffort: 'medium',
+    });
+  });
+
+  it('a new session picks up the switched profile', async () => {
+    const state = { activeProfileId: 'anthropic' };
+    const service = fakeProfileService(state);
+    const session = { projectId: 'p1', backendType: 'claude-code' as const };
+
+    const before = await resolveRunModelSettings({
+      session,
+      step: {},
+      modelProfileService: service,
+    });
+    expect(before).toEqual({
+      modelPreference: 'sonnet',
+      thinkingEffort: 'high',
+    });
+
+    state.activeProfileId = 'codex';
+
+    const after = await resolveRunModelSettings({
+      session: { projectId: 'p1', backendType: 'codex' },
+      step: {},
+      modelProfileService: service,
+    });
+    expect(after).toEqual({
+      modelPreference: 'gpt-5',
+      thinkingEffort: 'medium',
+    });
+  });
+
+  it('leaves a running step on its own model after a profile switch', async () => {
+    const state = { activeProfileId: 'anthropic' };
+    const service = fakeProfileService(state);
+    // The step row of a run that started under the Anthropic profile.
+    const step = { modelPreference: 'sonnet', thinkingEffort: 'high' as const };
+    const session = { projectId: 'p1', backendType: 'claude-code' as const };
+
+    state.activeProfileId = 'codex';
+
+    await expect(
+      resolveRunModelSettings({
+        session,
+        step,
+        modelProfileService: service,
+      }),
+    ).resolves.toEqual({ modelPreference: 'sonnet', thinkingEffort: 'high' });
   });
 });
 
@@ -1611,6 +1801,34 @@ describe('agentService provider runtime', () => {
       expect(handle.stop).toHaveBeenCalled();
       expect(handle.dispose).toHaveBeenCalledTimes(1);
     });
+  });
+
+  // The policy check must run BEFORE the step is flipped to `running`. The
+  // catch in `start()` begins `if (!session) throw error`, so anything thrown
+  // from `createSession` skips `errorStep()` and the synthetic timeline entry,
+  // and the IPC caller only logs it — leaving the step stuck on `running`
+  // with no explanation. Assert the ordering, not just the assert helper.
+  it('refuses a policy-blocked run before marking the step running', async () => {
+    modelProfileServiceMock.resolveForRole.mockResolvedValueOnce({
+      backend: 'claude-code',
+      model: 'default',
+      thinkingEffort: 'default',
+      source: 'policy',
+      blocked: {
+        reason: 'backend-not-allowed',
+        message: 'This project only permits codex.',
+        allowed: { backends: ['codex'] },
+      },
+    } as never);
+
+    await expect(agentService.start('step-1')).rejects.toThrow(
+      'This project only permits codex.',
+    );
+
+    expect(stepServiceMock.update).not.toHaveBeenCalledWith(
+      'step-1',
+      expect.objectContaining({ status: 'running' }),
+    );
   });
 
   it('rejects PR review task starts when backend permissions are unsupported', async () => {

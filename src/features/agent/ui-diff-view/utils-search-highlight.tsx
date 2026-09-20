@@ -1,6 +1,6 @@
 import clsx from 'clsx';
-import type { ReactNode } from 'react';
 import type { HighlightToken } from '@/lib/syntax-highlight';
+import type { ReactNode } from 'react';
 
 import type { SearchMatch } from './use-diff-search';
 

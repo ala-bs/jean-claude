@@ -44,6 +44,7 @@ import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-
 
 import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
 
+import { FindInViewBar, useFindInView } from '@/common/ui/find-in-view';
 import {
   useAddWorkItemComment,
   useCurrentAzureUser,
@@ -58,12 +59,11 @@ import {
 } from '@/hooks/use-work-items';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import { canShowWorkItemSummary } from '@/lib/work-item-summary';
-import { FindInViewBar, useFindInView } from '@/common/ui/find-in-view';
-import { useWorkItemModalStore } from '@/stores/work-item-modal';
 import { Kbd } from '@/common/ui/kbd';
 import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
+import { useWorkItemModalStore } from '@/stores/work-item-modal';
 import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
 
 
@@ -72,21 +72,21 @@ import {
   addOpenedCommentsWorkItemId,
   getWorkItemPreviewQueryPolicy,
 } from './query-policy';
-import { useProject } from '@/hooks/use-projects';
-import { useWorkItemFieldMetadataMap } from '@/hooks/use-work-items';
 import {
   collectExtraFieldRefNames,
   resolveDetailLayout,
 } from '@shared/work-item-display-config-types';
-import { WorkItemFieldRows } from '../ui-work-item-field-rows';
-import { WorkItemBoardColumnEditor } from '../ui-work-item-board-column-editor';
-import { WorkItemComments } from '../ui-work-item-comments';
-import { WorkItemHistory } from '../ui-work-item-history';
-import { WorkItemExpandableTestCase } from '../ui-work-item-expandable-test-case';
 import {
   getOwnerOptions,
   WorkItemOwnerEditor,
 } from '../ui-work-item-field-editors/work-item-owner-editor';
+import { useProject } from '@/hooks/use-projects';
+import { useWorkItemFieldMetadataMap } from '@/hooks/use-work-items';
+import { WorkItemBoardColumnEditor } from '../ui-work-item-board-column-editor';
+import { WorkItemComments } from '../ui-work-item-comments';
+import { WorkItemExpandableTestCase } from '../ui-work-item-expandable-test-case';
+import { WorkItemFieldRows } from '../ui-work-item-field-rows';
+import { WorkItemHistory } from '../ui-work-item-history';
 import { WorkItemIterationEditor } from '../ui-work-item-field-editors/work-item-iteration-editor';
 import { WorkItemMetadataValue } from '../ui-work-item-field-editors/work-item-metadata-value';
 import { WorkItemStateEditor } from '../ui-work-item-field-editors/work-item-state-editor';

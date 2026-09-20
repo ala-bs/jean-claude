@@ -1,0 +1,215 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
+
+import type {
+  ModelOverride,
+  ModelProfile,
+  ModelProfilesSetting,
+  ModelRole,
+} from '@shared/model-profiles';
+import { pickEffectiveProfile } from '@shared/model-profiles';
+
+import { api } from '@/lib/api';
+import { useSetting } from '@/hooks/use-settings';
+import { useUpdateSetting } from '@/hooks/use-settings';
+
+/**
+ * Shared empty value so selectors/derivations never hand React a fresh `[]`
+ * (see AGENTS.md: unstable outputs cause re-render loops in React 19).
+ */
+const EMPTY_PROFILES: ModelProfilesSetting = [];
+
+export const MODEL_PROFILES_QUERY_KEY = ['settings', 'modelProfiles'] as const;
+export const ACTIVE_MODEL_PROFILE_QUERY_KEY = [
+  'settings',
+  'activeModelProfileId',
+] as const;
+export const RESOLVED_MODEL_QUERY_KEY = ['model-profiles', 'resolve'] as const;
+
+/**
+ * Global profile definitions. `profiles` is always an array and keeps a stable
+ * identity while the underlying setting is unchanged.
+ */
+export function useModelProfilesSetting() {
+  const query = useSetting('modelProfiles');
+  const profiles = query.data ?? EMPTY_PROFILES;
+  return { ...query, profiles };
+}
+
+/** Id of the globally active profile, or `null` when none is set. */
+export function useActiveModelProfileId() {
+  const query = useSetting('activeModelProfileId');
+  return { ...query, activeProfileId: query.data ?? null };
+}
+
+/**
+ * The currently active profile object, derived from the profile list and the
+ * active id. `profile` is `undefined` while loading or when the active id no
+ * longer matches any profile.
+ */
+export function useActiveModelProfile() {
+  const profilesQuery = useModelProfilesSetting();
+  const activeQuery = useActiveModelProfileId();
+  const { profiles } = profilesQuery;
+  const { activeProfileId } = activeQuery;
+  const profile = useMemo<ModelProfile | undefined>(
+    () =>
+      activeProfileId
+        ? profiles.find((entry) => entry.id === activeProfileId)
+        : undefined,
+    [profiles, activeProfileId],
+  );
+  return {
+    profile,
+    profiles,
+    activeProfileId,
+    isLoading: profilesQuery.isLoading || activeQuery.isLoading,
+  };
+}
+
+/** Cache key of a project's effective model policy (shared with the switcher). */
+export const PROJECT_MODEL_POLICY_QUERY_KEY = [
+  'projects',
+  'effective-model-policy',
+] as const;
+
+/**
+ * The profile that governs a project — the renderer twin of
+ * `ModelProfileService.getEffectiveProfile`. Both call the same shared rule,
+ * `pickEffectiveProfile`: pin first, then (under `enforce`) the first profile
+ * the allow-list permits when the active one is not permitted, else the
+ * globally active profile.
+ *
+ * Use this — never `useActiveModelProfile` — for anything project-scoped, such
+ * as the preset list or the composer's quick chips. `useActiveModelProfile`
+ * stays right for genuinely global decisions (e.g. which profiles the switcher
+ * lets you switch between).
+ *
+ * With no `projectId` this behaves exactly like `useActiveModelProfile`.
+ */
+export function useEffectiveModelProfile(projectId?: string | null) {
+  const normalizedProjectId = projectId ?? null;
+  const {
+    profiles,
+    activeProfileId,
+    isLoading: isProfilesLoading,
+  } = useActiveModelProfile();
+
+  const policyQuery = useQuery({
+    queryKey: [...PROJECT_MODEL_POLICY_QUERY_KEY, normalizedProjectId],
+    queryFn: () => api.projects.getEffectivePolicy(normalizedProjectId as string),
+    enabled: Boolean(normalizedProjectId),
+  });
+
+  const policy = policyQuery.data?.policy;
+
+  const profile = useMemo<ModelProfile | undefined>(
+    () =>
+      pickEffectiveProfile({ profiles, activeProfileId, policy }) ?? undefined,
+    [activeProfileId, policy, profiles],
+  );
+
+  return {
+    profile,
+    profiles,
+    activeProfileId,
+    /** Id of the profile actually in effect here (pinned or active). */
+    effectiveProfileId: profile?.id ?? null,
+    isLoading:
+      isProfilesLoading ||
+      (Boolean(normalizedProjectId) && policyQuery.isLoading),
+  };
+}
+
+/**
+ * Activates a profile globally. Optimistic: the active id flips immediately and
+ * rolls back if the main process rejects the switch (e.g. project policy).
+ */
+/**
+ * Writes the `modelProfiles` setting and invalidates the resolved-model cache.
+ *
+ * Editing a role changes what every `useResolvedModelForRole` consumer should
+ * show, so the invalidation belongs next to the key rather than in whichever
+ * component happens to do the write — the task panel, add-step dialog and
+ * skill-slot rows otherwise keep displaying the pre-edit model while the main
+ * process already resolves the new one.
+ */
+export function useUpdateModelProfiles() {
+  const queryClient = useQueryClient();
+  const updateSetting = useUpdateSetting<'modelProfiles'>();
+  // Both entry points must invalidate. Wrapping only `mutate` left
+  // `mutateAsync` as a silent bypass with an identical type signature.
+  const onSuccess = () => {
+    void queryClient.invalidateQueries({ queryKey: RESOLVED_MODEL_QUERY_KEY });
+  };
+  type Variables = { key: 'modelProfiles'; value: ModelProfile[] };
+  return {
+    ...updateSetting,
+    mutate: (variables: Variables) =>
+      updateSetting.mutate(variables, { onSuccess }),
+    mutateAsync: (variables: Variables) =>
+      updateSetting.mutateAsync(variables, { onSuccess }),
+  };
+}
+
+export function useActivateModelProfile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (profileId: string) => api.modelProfiles.activate(profileId),
+    onMutate: async (profileId) => {
+      const queryKey = ACTIVE_MODEL_PROFILE_QUERY_KEY;
+      await queryClient.cancelQueries({ queryKey });
+      const hadPrevious = queryClient.getQueryData(queryKey) !== undefined;
+      const previous = queryClient.getQueryData<string | null>(queryKey);
+      queryClient.setQueryData(queryKey, profileId);
+      return { hadPrevious, previous };
+    },
+    onError: (_error, _profileId, context) => {
+      if (context?.hadPrevious) {
+        queryClient.setQueryData(
+          ACTIVE_MODEL_PROFILE_QUERY_KEY,
+          context.previous,
+        );
+      } else {
+        queryClient.removeQueries({
+          queryKey: ACTIVE_MODEL_PROFILE_QUERY_KEY,
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ACTIVE_MODEL_PROFILE_QUERY_KEY,
+      });
+      // Every resolved role depends on the active profile.
+      queryClient.invalidateQueries({ queryKey: RESOLVED_MODEL_QUERY_KEY });
+    },
+  });
+}
+
+/**
+ * Resolves `(backend, model, thinkingEffort)` for a role through the main
+ * process, which applies the project policy, the pinned or active profile and
+ * any step override.
+ */
+export function useResolvedModelForRole(
+  role: ModelRole,
+  projectId?: string | null,
+  override?: ModelOverride | null,
+) {
+  const normalizedProjectId = projectId ?? null;
+  const normalizedOverride = override ?? null;
+  return useQuery({
+    queryKey: [
+      ...RESOLVED_MODEL_QUERY_KEY,
+      role,
+      normalizedProjectId,
+      normalizedOverride,
+    ],
+    queryFn: () =>
+      api.modelProfiles.resolve({
+        role,
+        projectId: normalizedProjectId,
+        override: normalizedOverride,
+      }),
+  });
+}

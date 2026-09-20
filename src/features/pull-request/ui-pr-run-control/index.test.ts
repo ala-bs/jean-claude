@@ -235,6 +235,27 @@ async function flushUpdates() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * Wait for an expectation instead of guessing how many turns the effect chain
+ * needs. `flushUpdates` awaits a fixed two macrotasks, which is a race by
+ * construction: a test that puts an extra rejected promise in flight needs
+ * more hops, and fails only under parallel load.
+ */
+async function waitFor(assertion: () => void, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  throw lastError;
+}
+
 async function waitForFocusedMenuItem() {
   for (let frame = 0; frame < 5; frame += 1) {
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -925,8 +946,9 @@ describe('PrRunControl', () => {
     expect(useToastStore.getState().toasts[0]?.message).toBe('stop failed');
 
     rerender({ associatedTask: buildTask({ id: 'task-2', worktreePath: '/tmp/new' }) });
-    await flushUpdates();
-    expect(api.runCommands.getStatus).toHaveBeenCalledWith('task-2');
+    await waitFor(() => {
+      expect(api.runCommands.getStatus).toHaveBeenCalledWith('task-2');
+    });
 
     rerender({ associatedTask: null });
     await flushUpdates();

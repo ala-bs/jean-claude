@@ -24,16 +24,11 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createPortal } from 'react-dom';
 import { CSS as DndCSS } from '@dnd-kit/utilities';
 import FocusLock from 'react-focus-lock';
-import { useQueryClient } from '@tanstack/react-query';
 
-import type {
-  AgentBackendType,
-  PromptFilePart,
-  PromptImagePart,
-} from '@shared/agent-backend-types';
 import {
   BranchOrTaskSelect,
   type BranchOrTaskSelection,
@@ -95,6 +90,10 @@ import {
   type ProjectFeatureMap,
   type ThinkingEffort,
 } from '@shared/types';
+import type {
+  PromptFilePart,
+  PromptImagePart,
+} from '@shared/agent-backend-types';
 import {
   PromptTextarea,
   type PromptTextareaProps,
@@ -116,13 +115,9 @@ import {
   useReorderProjects,
 } from '@/hooks/use-projects';
 import {
-  useBackendDefaultModelsSetting,
-  useBackendModelPresetsSetting,
   useBackendsSetting,
   useCompletionSetting,
-  useModelQuickSwitcherSetting,
   usePromptSnippetsSetting,
-  useThinkingSettingsSetting,
 } from '@/hooks/use-settings';
 import {
   useCreateFeedNote,
@@ -134,25 +129,29 @@ import {
   useWorkItemComments,
   useWorkItems,
 } from '@/hooks/use-work-items';
+import { api } from '@/lib/api';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
 import { Button } from '@/common/ui/button';
 import { compressImage } from '@/lib/image-compression';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
-import { getDefaultModelForBackend } from '@/lib/default-models';
 import { getOriginalTaskAgentMemoryPrompt } from '@/lib/agent-memory-prompt-input';
 import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
+import { ModelProfileSwitcher } from '@/features/agent/ui-model-profile-switcher';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import { NewTaskMoreMenu } from '@/features/new-task/ui-new-task-more-menu';
+import type { ProfilePreset } from '@shared/model-profiles';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
+import { resolveAgentModelSelection } from '@/lib/default-models';
 import { resolveBackendModelSelection } from '@/features/agent/utils-backend-model-selection';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
+import { useEffectiveModelProfile } from '@/hooks/use-model-profiles';
 import { useProjectCanCreateWorktree } from '@/hooks/use-project-git';
 import { useProjectSkills } from '@/hooks/use-skills';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
@@ -183,6 +182,9 @@ function projectHasWorkItems(project: Project | null): boolean {
 const EMPTY_PROMPT_FILES: PromptFilePart[] = [];
 /** Stable fallback so a fresh `[]` doesn't defeat the workspace's memoization. */
 const EMPTY_WORK_ITEM_IDS: string[] = [];
+/** Stable fallbacks for the active profile's presets / quick list. */
+const EMPTY_PROFILE_PRESETS: ProfilePreset[] = [];
+const EMPTY_QUICK_PRESET_IDS: string[] = [];
 
 const FinalPromptPreviewButton = memo(function FinalPromptPreviewButton({
   getPrompt,
@@ -291,29 +293,6 @@ const FinalPromptPreviewButton = memo(function FinalPromptPreviewButton({
     </>
   );
 });
-
-function resolveDefaultBackend({
-  selectedProject,
-  backendsSetting,
-}: {
-  selectedProject: Project | null;
-  backendsSetting: {
-    enabledBackends: AgentBackendType[];
-    defaultBackend: AgentBackendType | null;
-  };
-}): AgentBackendType | null {
-  const projectOrGlobalDefault =
-    selectedProject?.defaultAgentBackend ?? backendsSetting.defaultBackend;
-
-  if (
-    projectOrGlobalDefault &&
-    backendsSetting.enabledBackends.includes(projectOrGlobalDefault)
-  ) {
-    return projectOrGlobalDefault;
-  }
-
-  return backendsSetting.enabledBackends[0] ?? null;
-}
 
 // Auto-detect input mode based on selection
 function getAutoInputMode(
@@ -878,38 +857,55 @@ export function NewTaskOverlay({
 
   // Enabled backends from settings
   const { data: backendsSetting } = useBackendsSetting();
-  const { data: backendDefaultModelsSetting } =
-    useBackendDefaultModelsSetting();
-  const { data: backendModelPresets = [] } = useBackendModelPresetsSetting();
-  const { data: thinkingSettings } = useThinkingSettingsSetting();
-  const { data: quickSwitcherSetting } = useModelQuickSwitcherSetting();
+  const {
+    profile: effectiveProfile,
+    profiles,
+    activeProfileId,
+  } = useEffectiveModelProfile(selectedProjectId);
+  // Revision 1: presets and the quick list are owned by a profile, and the one
+  // that counts here is the *effective* profile — the project may pin a
+  // different profile than the globally active one.
+  const profilePresets = effectiveProfile?.presets ?? EMPTY_PROFILE_PRESETS;
+  const quickPresetIds =
+    effectiveProfile?.quickPresetIds ?? EMPTY_QUICK_PRESET_IDS;
+  const { data: effectivePolicy } = useQuery({
+    queryKey: ['projects', 'effective-model-policy', selectedProjectId],
+    queryFn: () => api.projects.getEffectivePolicy(selectedProjectId as string),
+    enabled: Boolean(selectedProjectId),
+  });
 
-  const defaultBackend = useMemo(() => {
-    if (!backendsSetting) {
-      return selectedProject?.defaultAgentBackend ?? null;
-    }
+  // The `agent` role is the single source of truth for what a new task runs.
+  // The draft's own model fields are an explicit per-task override and win;
+  // everything else follows the active profile (and the project policy).
+  const resolvedAgentModel = useMemo(
+    () =>
+      resolveAgentModelSelection({
+        profiles,
+        activeProfileId,
+        policy: effectivePolicy?.policy ?? null,
+        enabledBackends: backendsSetting?.enabledBackends,
+        draft: {
+          agentBackend: draft?.agentBackend,
+          modelPreference: draft?.modelPreference,
+          thinkingEffort: draft?.thinkingEffort,
+          backendModelPresetId: draft?.backendModelPresetId,
+        },
+      }),
+    [
+      activeProfileId,
+      backendsSetting?.enabledBackends,
+      draft?.agentBackend,
+      draft?.backendModelPresetId,
+      draft?.modelPreference,
+      draft?.thinkingEffort,
+      effectivePolicy?.policy,
+      profiles,
+    ],
+  );
 
-    return resolveDefaultBackend({
-      selectedProject,
-      backendsSetting,
-    });
-  }, [selectedProject, backendsSetting]);
-
-  const currentBackend = useMemo(() => {
-    const draftBackend = draft?.agentBackend;
-
-    if (!draftBackend) {
-      return defaultBackend;
-    }
-
-    if (!backendsSetting) {
-      return draftBackend;
-    }
-
-    return backendsSetting.enabledBackends.includes(draftBackend)
-      ? draftBackend
-      : defaultBackend;
-  }, [draft?.agentBackend, defaultBackend, backendsSetting]);
+  // Null until the enabled-backend list has loaded: resolving against an empty
+  // list would fall back to a backend the user may not even have enabled.
+  const currentBackend = backendsSetting ? resolvedAgentModel.backend : null;
 
   const { data: dynamicModels, isFetched: areBackendModelsFetched } =
     useBackendModels(currentBackend);
@@ -931,35 +927,36 @@ export function NewTaskOverlay({
   const backendModelSelection = useMemo(
     () =>
       resolveBackendModelSelection({
-        presets: backendModelPresets,
+        presets: profilePresets,
+        quickPresetIds,
         backend: currentBackend,
-        defaultModel: getDefaultModelForBackend({
-          backend: currentBackend,
-          project: selectedProject,
-          backendDefaultModels: backendDefaultModelsSetting,
-        }),
+        defaultModel: resolvedAgentModel.model,
         draftModelPreference: draft?.modelPreference,
         draftAgentBackend: draft?.agentBackend,
         draftPresetId: draft?.backendModelPresetId,
         shouldAutoSelectPreset: draft?.shouldAutoSelectBackendModelPreset,
         enabledBackends: backendsSetting?.enabledBackends,
-        quickSwitcherEnabled: quickSwitcherSetting?.enabled,
         availableModels: availableModelPreferences,
         areModelsFetched: areBackendModelsFetched,
+        profiles,
+        activeProfileId,
+        policy: effectivePolicy?.policy ?? null,
       }),
     [
+      activeProfileId,
       areBackendModelsFetched,
       availableModelPreferences,
-      backendDefaultModelsSetting,
-      backendModelPresets,
       backendsSetting?.enabledBackends,
       currentBackend,
       draft?.agentBackend,
       draft?.backendModelPresetId,
       draft?.modelPreference,
       draft?.shouldAutoSelectBackendModelPreset,
-      quickSwitcherSetting?.enabled,
-      selectedProject,
+      effectivePolicy?.policy,
+      profilePresets,
+      profiles,
+      quickPresetIds,
+      resolvedAgentModel.model,
     ],
   );
   const currentBackendModelPreset = backendModelSelection.preset;
@@ -978,13 +975,7 @@ export function NewTaskOverlay({
     const configuredEffort =
       draft?.thinkingEffort ??
       currentBackendModelPreset?.thinkingEffort ??
-      (currentBackend
-        ? thinkingSettings?.efforts[currentBackend]?.[currentModelPreference]
-        : undefined) ??
-      (currentBackend
-        ? thinkingSettings?.efforts[currentBackend]?.default
-        : undefined) ??
-      'default';
+      resolvedAgentModel.thinkingEffort;
 
     return normalizeThinkingEffortForModel({
       backend: currentBackend,
@@ -995,7 +986,7 @@ export function NewTaskOverlay({
   }, [
     draft?.thinkingEffort,
     currentBackendModelPreset?.thinkingEffort,
-    thinkingSettings,
+    resolvedAgentModel.thinkingEffort,
     currentBackend,
     currentModelPreference,
     thinkingCapabilities,
@@ -1009,7 +1000,7 @@ export function NewTaskOverlay({
 
     const backendChanged = rateLimitSuggestion.backend !== currentBackend;
     return findMatchingBackendModelPresetId({
-      presets: backendModelPresets,
+      presets: profilePresets,
       backend: rateLimitSuggestion.backend,
       model:
         rateLimitSuggestion.model ??
@@ -1019,10 +1010,10 @@ export function NewTaskOverlay({
         (backendChanged ? 'default' : currentThinkingEffort),
     });
   }, [
-    backendModelPresets,
     currentBackend,
     currentModelPreference,
     currentThinkingEffort,
+    profilePresets,
     rateLimitSuggestion,
   ]);
   useEffect(() => {
@@ -2064,9 +2055,16 @@ export function NewTaskOverlay({
                   />
                 )}
 
-                {/* Agent backend selector — only show when multiple backends enabled */}
+                {/* Design §5: profiles are the primary control; the raw
+                    backend / model / thinking pickers move behind the
+                    switcher's "Override this step only…" entry. */}
                 {!isNoteMode && currentBackend && (
-                  <BackendModelPresetPicker
+                  <ModelProfileSwitcher
+                    projectId={selectedProjectId}
+                    side="top"
+                    overrideContent={
+                      <div className="flex flex-wrap items-center gap-2">
+                        <BackendModelPresetPicker
                     backend={currentBackend}
                     model={currentModelPreference}
                     selectedPresetId={currentBackendPresetId}
@@ -2097,32 +2095,27 @@ export function NewTaskOverlay({
                         thinkingEffort: normalizeThinkingEffortForModel({
                           backend: selection.backend,
                           model: selection.model,
-                          effort:
-                            selection.thinkingEffort ??
-                            thinkingSettings?.efforts[selection.backend]?.[
-                              selection.model
-                            ] ??
-                            thinkingSettings?.efforts[selection.backend]
-                              ?.default ??
-                            'default',
+                          effort: selection.thinkingEffort ?? 'default',
                           capabilities: nextThinkingCapabilities,
                         }),
                       }));
-                    }}
-                  />
-                )}
-
-                {!isNoteMode && currentBackend && !currentBackendPresetId && (
-                  <ThinkingSelector
-                    value={currentThinkingEffort}
-                    onChange={(thinkingEffort) => {
-                      userTouchedSelectionRef.current = true;
-                      updateDraft({ thinkingEffort });
-                    }}
-                    options={thinkingOptions}
-                    disabled={thinkingOptions.length <= 1}
-                    side="top"
-                    layer={layer}
+                          }}
+                        />
+                        {!currentBackendPresetId && (
+                          <ThinkingSelector
+                            value={currentThinkingEffort}
+                            onChange={(thinkingEffort) => {
+                              userTouchedSelectionRef.current = true;
+                              updateDraft({ thinkingEffort });
+                            }}
+                            options={thinkingOptions}
+                            disabled={thinkingOptions.length <= 1}
+                            side="top"
+                            layer={layer}
+                          />
+                        )}
+                      </div>
+                    }
                   />
                 )}
 

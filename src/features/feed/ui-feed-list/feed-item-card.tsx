@@ -59,13 +59,13 @@ import {
   usePullRequest,
   usePullRequestPolicyEvaluations,
 } from '@/hooks/use-pull-requests';
-import type { MobilePreviewDeviceAssignment } from '@shared/mobile-simulator-types';
 import { useCompleteTask, useTask } from '@/hooks/use-tasks';
 import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
 import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-dialog';
 import { FeedItemDeviceBadge } from './feed-item-device-badge';
 import { formatRelativeTime } from '@/lib/time';
 import { getRunCommandDisplayName } from '@shared/run-command-types';
+import type { MobilePreviewDeviceAssignment } from '@shared/mobile-simulator-types';
 import { PrAutoComplete } from '@/features/pull-request/ui-pr-auto-complete';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
 import { useFeedStore } from '@/stores/feed';

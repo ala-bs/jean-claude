@@ -14,6 +14,7 @@ import {
   getImageMimeTypeFromBytes,
 } from '@shared/image-types';
 import { isOpenAiImageModel } from '@shared/types';
+import { resolveImageModelForRole } from '@shared/model-profiles';
 
 
 import { dbg } from '../lib/debug';
@@ -23,6 +24,7 @@ import { SettingsRepository } from '../database/repositories/settings';
 
 import { encryptionService } from './encryption-service';
 import { generateProjectSummary } from './project-summary-generation-service';
+import { getModelProfileService } from './model-profile-service';
 import { getOpenAiBuiltinBaseImagePath } from './ai-generation-settings-service';
 
 
@@ -36,6 +38,69 @@ function normalizeOpenAiImageModel(model: string | undefined): string {
     throw new Error('OpenAI image model must be a GPT-image model');
   }
   return trimmed;
+}
+
+/**
+ * What the `project-logo` role (an image role, see `shared/model-profiles.ts`)
+ * says about this generation.
+ *
+ * - `off` — the profile disabled project logos. Skip silently: no OpenAI call,
+ *   no error, the project comes back untouched.
+ * - `blocked` — the project's policy does not permit the effective profile.
+ *   Refuse with the policy message rather than quietly generating anyway
+ *   (design §8: an `enforce` project must not silently do the disallowed thing).
+ * - `ok` — `imageModel` overrides `aiGeneration.openAiImageModel` when the role
+ *   binds one, and is `undefined` when the role is unset (today's behaviour).
+ */
+type LogoImageModelDecision =
+  | { status: 'off' }
+  | { status: 'blocked'; message: string }
+  | { status: 'ok'; imageModel?: string };
+
+async function resolveLogoImageModel({
+  projectId,
+  settingModel,
+}: {
+  projectId: string;
+  settingModel: string | undefined;
+}): Promise<LogoImageModelDecision> {
+  try {
+    const service = getModelProfileService();
+    const [profiles, activeProfileId, effectivePolicy] = await Promise.all([
+      service.listProfiles(),
+      SettingsRepository.get('activeModelProfileId'),
+      service.getEffectivePolicy({ projectId }),
+    ]);
+    if (!Array.isArray(profiles)) return { status: 'ok' };
+
+    const resolved = resolveImageModelForRole({
+      role: 'project-logo',
+      profiles,
+      activeProfileId:
+        typeof activeProfileId === 'string' ? activeProfileId : null,
+      policy: effectivePolicy?.policy ?? null,
+      fallbackModel: settingModel?.trim() || DEFAULT_IMAGE_MODEL,
+    });
+
+    if (resolved.off) return { status: 'off' };
+    if (resolved.blocked) {
+      return { status: 'blocked', message: resolved.blocked.message };
+    }
+    // A profile could hold a stale or hand-edited image model. Fall back to the
+    // AI Generation setting rather than throwing into a background job.
+    if (resolved.imageModel && !isOpenAiImageModel(resolved.imageModel)) {
+      dbg.agent(
+        'Ignoring invalid project-logo image model from profile: %s',
+        resolved.imageModel,
+      );
+      return { status: 'ok' };
+    }
+    return { status: 'ok', imageModel: resolved.imageModel ?? undefined };
+  } catch (error) {
+    // Profile resolution must never be the reason a logo fails to generate.
+    dbg.agent('Failed to resolve the project-logo role: %O', error);
+    return { status: 'ok' };
+  }
 }
 
 function buildLogoImagePrompt(project: {
@@ -110,7 +175,12 @@ ${extraContext}
 Follow the original image's visual instructions and art direction. Use it as a style, composition, and quality reference for a new original app icon. Do not copy any exact identity, text, or trademarked elements from the reference image.`;
 }
 
-async function getOpenAiLogoConfig(): Promise<{
+async function getOpenAiLogoConfig({
+  imageModel,
+}: {
+  /** From the `project-logo` role; overrides `aiGeneration.openAiImageModel`. */
+  imageModel?: string;
+} = {}): Promise<{
   apiKey: string;
   model: string;
   baseImagePath: string | null;
@@ -121,7 +191,9 @@ async function getOpenAiLogoConfig(): Promise<{
   if (!setting.openAiImageGenerationEnabled) {
     throw new Error('OpenAI image generation is disabled');
   }
-  const model = normalizeOpenAiImageModel(setting.openAiImageModel);
+  const model = normalizeOpenAiImageModel(
+    imageModel ?? setting.openAiImageModel,
+  );
 
   if (setting.openAiApiKey) {
     try {
@@ -450,7 +522,17 @@ export async function generateProjectLogo({
 }) {
   let project = await ProjectRepository.findById(projectId);
   if (!project) throw new Error('Project not found');
-  const config = await getOpenAiLogoConfig();
+
+  const aiGeneration = await SettingsRepository.get('aiGeneration');
+  const decision = await resolveLogoImageModel({
+    projectId,
+    settingModel: aiGeneration?.openAiImageModel,
+  });
+  // The profile disabled project logos: not generated, not an error.
+  if (decision.status === 'off') return project;
+  if (decision.status === 'blocked') throw new Error(decision.message);
+
+  const config = await getOpenAiLogoConfig({ imageModel: decision.imageModel });
 
   if (!project.summary?.trim()) {
     const summary = await generateProjectSummary({ project });

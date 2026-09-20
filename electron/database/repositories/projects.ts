@@ -4,6 +4,11 @@ import {
   isMobilePreviewProjectConfig,
 } from '@shared/types';
 import {
+  DEFAULT_PROJECT_MODEL_POLICY,
+  PROJECT_MODEL_POLICY_MODES,
+  type ProjectModelPolicy,
+} from '@shared/model-profiles';
+import {
   isWorkItemDisplayConfig,
   type WorkItemDisplayConfig,
 } from '@shared/work-item-display-config-types';
@@ -105,6 +110,73 @@ export function serializeWorkItemDisplayConfigUpdate(
     : { workItemDisplayConfig: serializeWorkItemDisplayConfig(config) };
 }
 
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === 'string')
+  );
+}
+
+function isProjectModelPolicy(value: unknown): value is ProjectModelPolicy {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const policy = value as Record<string, unknown>;
+  if (
+    !PROJECT_MODEL_POLICY_MODES.includes(
+      policy.mode as ProjectModelPolicy['mode'],
+    )
+  ) {
+    return false;
+  }
+  if (
+    policy.allowedBackends !== undefined &&
+    !isStringArray(policy.allowedBackends)
+  ) {
+    return false;
+  }
+  if (
+    policy.allowedProfileIds !== undefined &&
+    !isStringArray(policy.allowedProfileIds)
+  ) {
+    return false;
+  }
+  if (
+    policy.pinnedProfileId !== undefined &&
+    typeof policy.pinnedProfileId !== 'string'
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Parses the `projects.modelPolicy` JSON column. Null, malformed or
+ * guard-failing values fall back to `{ mode: 'inherit' }`.
+ */
+export function parseProjectModelPolicy(
+  value: string | null,
+): ProjectModelPolicy {
+  if (!value) return DEFAULT_PROJECT_MODEL_POLICY;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isProjectModelPolicy(parsed)
+      ? parsed
+      : DEFAULT_PROJECT_MODEL_POLICY;
+  } catch {
+    // Malformed JSON — fall back to the inherit default
+    return DEFAULT_PROJECT_MODEL_POLICY;
+  }
+}
+
+export function serializeProjectModelPolicy(
+  policy: ProjectModelPolicy,
+): string {
+  if (!isProjectModelPolicy(policy)) {
+    throw new TypeError('Invalid project model policy');
+  }
+  return JSON.stringify(policy);
+}
+
 function parseProjectRow(row: ProjectRow) {
   let aiSkillSlots = null;
   if (row.aiSkillSlots) {
@@ -166,6 +238,7 @@ function parseProjectRow(row: ProjectRow) {
     autoAcceptOnTaskCreation: row.autoAcceptOnTaskCreation === 1,
     aiSkillSlots,
     mobilePreviewConfig,
+    modelPolicy: parseProjectModelPolicy(row.modelPolicy),
     workItemTitleParser,
     workItemDisplayConfig,
     protectedBranches,
@@ -314,6 +387,20 @@ export const ProjectRepository = {
         ...(favoriteBranches !== undefined && {
           favoriteBranches: sanitizeBranchList(favoriteBranches),
         }),
+        updatedAt: new Date().toISOString(),
+      })
+      .where('id', '=', id)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return parseProjectRow(row);
+  },
+
+  setModelPolicy: async (id: string, policy: ProjectModelPolicy) => {
+    dbg.db('projects.setModelPolicy id=%s mode=%s', id, policy.mode);
+    const row = await db
+      .updateTable('projects')
+      .set({
+        modelPolicy: serializeProjectModelPolicy(policy),
         updatedAt: new Date().toISOString(),
       })
       .where('id', '=', id)

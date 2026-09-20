@@ -1,6 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { ResolvedModel } from '@shared/model-profiles';
+
 import { createAgentMemorySchedulerService } from './agent-memory-scheduler-service';
+
+function resolvedModel(overrides: Partial<ResolvedModel> = {}): ResolvedModel {
+  return {
+    backend: 'claude-code',
+    model: 'haiku',
+    thinkingEffort: 'default',
+    source: 'profile',
+    ...overrides,
+  };
+}
 
 const enabledSetting = {
   enabled: true,
@@ -29,6 +41,7 @@ function harness(overrides: Record<string, unknown> = {}) {
       lastSuccessAt: null,
     }),
     recordRunTiming: vi.fn().mockResolvedValue(undefined),
+    resolveMemoryModel: vi.fn().mockResolvedValue(resolvedModel()),
     logFailure: vi.fn(),
     logSweepFailure: vi.fn(),
     setInterval: vi.fn(globalThis.setInterval),
@@ -45,6 +58,74 @@ function harness(overrides: Record<string, unknown> = {}) {
 }
 
 describe('AgentMemorySchedulerService', () => {
+  it('runs extraction with the model resolved for the memory role', async () => {
+    const test = harness({
+      resolveMemoryModel: vi.fn().mockResolvedValue(
+        resolvedModel({ backend: 'opencode', model: 'gpt-5.5', thinkingEffort: 'high' }),
+      ),
+    });
+
+    await test.service.runNow();
+
+    expect(test.dependencies.resolveMemoryModel).toHaveBeenCalledWith({
+      projectId: 'project-1',
+    });
+    expect(test.dependencies.resolveMemoryModel).toHaveBeenCalledWith({
+      projectId: null,
+    });
+    expect(test.dependencies.extractProjectMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          backend: 'opencode',
+          model: 'gpt-5.5',
+          thinkingEffort: 'high',
+        }),
+      }),
+    );
+    expect(test.dependencies.mergeGlobalMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          backend: 'opencode',
+          model: 'gpt-5.5',
+        }),
+      }),
+    );
+  });
+
+  it('skips extraction and merge when the memory role is off', async () => {
+    const test = harness({
+      resolveMemoryModel: vi
+        .fn()
+        .mockResolvedValue(resolvedModel({ off: true })),
+    });
+
+    await test.service.runNow();
+
+    expect(test.dependencies.extractProjectMemory).not.toHaveBeenCalled();
+    expect(test.dependencies.mergeGlobalMemory).not.toHaveBeenCalled();
+    expect(test.dependencies.logFailure).not.toHaveBeenCalled();
+  });
+
+  it('skips extraction when the project policy blocks the memory model', async () => {
+    const test = harness({
+      resolveMemoryModel: vi.fn().mockResolvedValue(
+        resolvedModel({
+          source: 'policy',
+          blocked: {
+            reason: 'backend-not-allowed',
+            message: 'Blocked by policy.',
+            allowed: {},
+          },
+        }),
+      ),
+    });
+
+    await test.service.runNow();
+
+    expect(test.dependencies.extractProjectMemory).not.toHaveBeenCalled();
+    expect(test.dependencies.mergeGlobalMemory).not.toHaveBeenCalled();
+  });
+
   it('exits while disabled before reading projects or invoking extraction', async () => {
     const test = harness({
       getSetting: vi.fn().mockResolvedValue({ ...enabledSetting, enabled: false }),

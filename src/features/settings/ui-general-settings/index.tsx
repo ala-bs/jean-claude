@@ -9,7 +9,6 @@ import {
   LogOut,
   RefreshCw,
   Search,
-  Star,
   Trash2,
 } from 'lucide-react';
 import { startTransition, useEffect, useRef, useState } from 'react';
@@ -17,7 +16,11 @@ import { useQueryClient } from '@tanstack/react-query';
 
 
 import {
-  AGENT_MEMORY_EXTRACTION_BACKENDS,
+  api,
+  type DesktopNotificationStatus,
+  type NonExistentClaudeProject,
+} from '@/lib/api';
+import {
   type CalendarNotificationsSetting,
   DEFAULT_AGENT_MEMORY_EXTRACTION_BACKEND,
   DEFAULT_AGENT_MEMORY_EXTRACTION_INTERVAL_MINUTES,
@@ -26,24 +29,11 @@ import {
   DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
   DEFAULT_TASK_NOTIFICATION_MODES,
   type EureciaSetting,
-  type ModelPreference,
   PRESET_EDITORS,
-  type PrReviewAgentSetting,
   type RawMessageCleanupSetting,
   type TaskNotificationEvent,
   type TaskNotificationMode,
-  type ThinkingEffort,
 } from '@shared/types';
-import {
-  api,
-  type DesktopNotificationStatus,
-  type NonExistentClaudeProject,
-} from '@/lib/api';
-import {
-  AVAILABLE_BACKENDS,
-  getModelsForBackend,
-  getModelThinkingCapabilities,
-} from '@/features/agent/ui-backend-selector';
 import {
   type EureciaSettingField,
   isEureciaSettingDraftEquivalent,
@@ -56,41 +46,29 @@ import {
   useAgentMemorySetting,
   useAppearanceSetting,
   useAvailableEditors,
-  useBackendDefaultModelsSetting,
   useBackendsSetting,
   useCalendarNotificationsSetting,
   useEditorAutomationSetting,
   useEditorSetting,
   useEureciaSetting,
   usePromptPrefaceSetting,
-  usePrReviewAgentSetting,
   useRawMessageCleanupSetting,
   useSetting,
-  useSummaryModelsSetting,
   useTaskEventNotificationsSetting,
-  useThinkingSettingsSetting,
   useUpdateAgentMemorySetting,
   useUpdateAppearanceSetting,
-  useUpdateBackendDefaultModelsSetting,
   useUpdateBackendsSetting,
   useUpdateCalendarNotificationsSetting,
   useUpdateEditorAutomationSetting,
   useUpdateEditorSetting,
   useUpdateEureciaSetting,
   useUpdatePromptPrefaceSetting,
-  useUpdatePrReviewAgentSetting,
   useUpdateRawMessageCleanupSetting,
   useUpdateSetting,
-  useUpdateSummaryModelsSetting,
   useUpdateTaskEventNotificationsSetting,
-  useUpdateThinkingSettingsSetting,
   useUpdateUsageDisplaySetting,
   useUsageDisplaySetting,
 } from '@/hooks/use-settings';
-import {
-  getThinkingEffortOptions,
-  normalizeThinkingEffortForModel,
-} from '@shared/thinking-settings';
 import { USAGE_PROVIDERS, type UsageProviderType } from '@shared/usage-types';
 import {
   useCleanupClaudeProjects,
@@ -103,16 +81,16 @@ import {
 } from '@/hooks/use-timesheets';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import { AgentMemoryDashboard } from '@/features/settings/ui-agent-memory-dashboard';
+import {
+  AVAILABLE_BACKENDS,
+} from '@/features/agent/ui-backend-selector';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { Input } from '@/common/ui/input';
-import { ModelSelector } from '@/features/agent/ui-model-selector';
 import { PromptPrefaceList } from '@/features/settings/ui-prompt-preface-list';
 import { Select } from '@/common/ui/select';
 import { Switch } from '@/common/ui/switch';
-import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { UnusedWorktreesCleanup } from '@/features/settings/ui-unused-worktrees-cleanup';
-import { useBackendModels } from '@/hooks/use-backend-models';
 import { useDeleteWorkActivity } from '@/hooks/use-work-activity';
 import { useToastStore } from '@/stores/toasts';
 
@@ -122,7 +100,6 @@ const MEETING_JOIN_TARGET_OPTIONS = [
   { value: 'app', label: 'Teams app' },
 ];
 
-const PR_REVIEW_DEFAULT_BACKEND_VALUE = '__project-default__';
 const EURECIA_DRAFT_STORAGE_KEY =
   'jean-claude:settings:eurecia:draft';
 
@@ -393,24 +370,6 @@ export function AgentMemorySettings() {
     extractionModel: DEFAULT_AGENT_MEMORY_EXTRACTION_MODEL,
     extractionThinkingEffort: DEFAULT_AGENT_MEMORY_EXTRACTION_THINKING_EFFORT,
   };
-  const { data: dynamicModels } = useBackendModels(
-    setting.extractionBackend,
-  );
-  const thinkingCapabilities = getModelThinkingCapabilities(
-    setting.extractionModel,
-    dynamicModels,
-  );
-  const thinkingOptions = getThinkingEffortOptions({
-    backend: setting.extractionBackend,
-    model: setting.extractionModel,
-    capabilities: thinkingCapabilities,
-  });
-  const normalizedThinkingEffort = normalizeThinkingEffortForModel({
-    backend: setting.extractionBackend,
-    model: setting.extractionModel,
-    effort: setting.extractionThinkingEffort,
-    capabilities: thinkingCapabilities,
-  });
 
   const updateSetting = (next: typeof setting) => {
     updateAgentMemory.mutate(next);
@@ -486,76 +445,17 @@ export function AgentMemorySettings() {
             className="mt-2"
           />
         </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
-          <Select
-            value={setting.extractionBackend}
-            options={AVAILABLE_BACKENDS.filter((backend) =>
-              AGENT_MEMORY_EXTRACTION_BACKENDS.includes(
-                backend.value as (typeof AGENT_MEMORY_EXTRACTION_BACKENDS)[number],
-              ),
-            ).map((backend) => ({
-              value: backend.value,
-              label: backend.label,
-              description: backend.description,
-              badge: backend.badge,
-            }))}
-            onChange={(backendValue) => {
-              const extractionBackend = backendValue as AgentBackendType;
-              const extractionModel =
-                extractionBackend === 'claude-code'
-                  ? DEFAULT_AGENT_MEMORY_EXTRACTION_MODEL
-                  : 'default';
-              updateSetting({
-                ...setting,
-                extractionBackend,
-                extractionModel,
-                extractionThinkingEffort:
-                  DEFAULT_AGENT_MEMORY_EXTRACTION_THINKING_EFFORT,
-              });
-            }}
-            label="Backend"
-            disabled={!setting.enabled}
-          />
-          <ModelSelector
-            value={setting.extractionModel}
-            models={getModelsForBackend(
-              setting.extractionBackend,
-              dynamicModels,
-            )}
-            onChange={(extractionModel) => {
-              const nextCapabilities = getModelThinkingCapabilities(
-                extractionModel,
-                dynamicModels,
-              );
-              updateSetting({
-                ...setting,
-                extractionModel,
-                extractionThinkingEffort: normalizeThinkingEffortForModel({
-                  backend: setting.extractionBackend,
-                  model: extractionModel,
-                  effort: setting.extractionThinkingEffort,
-                  capabilities: nextCapabilities,
-                }),
-              });
-            }}
-            disabled={!setting.enabled}
-          />
-          <ThinkingSelector
-            value={normalizedThinkingEffort}
-            options={thinkingOptions}
-            onChange={(extractionThinkingEffort) =>
-              updateSetting({
-                ...setting,
-                extractionThinkingEffort: normalizeThinkingEffortForModel({
-                  backend: setting.extractionBackend,
-                  model: setting.extractionModel,
-                  effort: extractionThinkingEffort,
-                  capabilities: thinkingCapabilities,
-                }),
-              })
-            }
-            disabled={!setting.enabled || thinkingOptions.length <= 1}
-          />
+        <div className="border-glass-border bg-bg-1 mt-4 rounded-lg border px-3 py-2">
+          {/*
+            The extraction backend/model/effort pickers used to live here. The
+            services now resolve the active profile's `memory` role instead, so
+            controls here would write values nothing reads.
+          */}
+          <div className="text-ink-3 text-xs">
+            The extraction model comes from the{' '}
+            <span className="text-ink-1">memory</span> role of your active model
+            profile. Change it in Settings &rarr; Model Profiles.
+          </div>
         </div>
       </div>
 
@@ -824,8 +724,6 @@ export function GeneralSettings() {
       <div className="border-line-soft my-8 border-t" />
       <NotificationsSettings />
       <div className="border-line-soft my-8 border-t" />
-      <PrReviewAgentSettings />
-      <div className="border-line-soft my-8 border-t" />
       <UsageDisplaySettings />
       <div className="border-line-soft my-8 border-t" />
       <WorkActivitySettings />
@@ -862,116 +760,6 @@ function MobilePreviewRecordingSettings() {
         {folder ? <Button size="sm" variant="ghost" onClick={() => update.mutate({ key: 'mobilePreviewRecordingFolder', value: null })}>Reset</Button> : null}
       </div>
     </section>
-  );
-}
-
-function PrReviewAgentSettings() {
-  const { data: prReviewAgentSetting } = usePrReviewAgentSetting();
-  const updatePrReviewAgent = useUpdatePrReviewAgentSetting();
-  const { data: backendsSetting } = useBackendsSetting();
-  const setting: PrReviewAgentSetting = prReviewAgentSetting ?? {
-    backend: null,
-    modelPreference: 'default',
-    thinkingEffort: 'default',
-  };
-  const effectiveBackend =
-    setting.backend ?? backendsSetting?.defaultBackend ?? 'claude-code';
-  const { data: dynamicModels } = useBackendModels(effectiveBackend);
-  const capabilities = getModelThinkingCapabilities(
-    setting.modelPreference,
-    dynamicModels,
-  );
-  const thinkingOptions = getThinkingEffortOptions({
-    backend: effectiveBackend,
-    model: setting.modelPreference,
-    capabilities,
-  });
-  const normalizedThinkingEffort = normalizeThinkingEffortForModel({
-    backend: effectiveBackend,
-    model: setting.modelPreference,
-    effort: setting.thinkingEffort,
-    capabilities,
-  });
-
-  const updateSetting = (next: PrReviewAgentSetting) => {
-    updatePrReviewAgent.mutate(next);
-  };
-
-  return (
-    <div>
-      <h2 className="text-ink-1 text-lg font-semibold">PR Review Agent</h2>
-      <p className="text-ink-3 mt-1 text-sm">
-        Default backend, model, and thinking effort for Ask Agent in PR diffs.
-      </p>
-
-      <div className="border-glass-border bg-bg-1 mt-4 rounded-lg border px-4 py-3">
-        <div className="grid gap-3 md:grid-cols-3">
-          <Select
-            value={setting.backend ?? PR_REVIEW_DEFAULT_BACKEND_VALUE}
-            options={[
-              {
-                value: PR_REVIEW_DEFAULT_BACKEND_VALUE,
-                label: 'Default backend',
-                description: 'Use the default agent backend',
-              },
-              ...AVAILABLE_BACKENDS.map((backend) => ({
-                value: backend.value,
-                label: backend.label,
-                description: backend.description,
-                badge: backend.badge,
-              })),
-            ]}
-            onChange={(value) =>
-              updateSetting({
-                backend:
-                  value === PR_REVIEW_DEFAULT_BACKEND_VALUE
-                    ? null
-                    : (value as AgentBackendType),
-                modelPreference: 'default',
-                thinkingEffort: 'default',
-              })
-            }
-            label="Backend"
-          />
-          <ModelSelector
-            value={setting.modelPreference}
-            models={getModelsForBackend(effectiveBackend, dynamicModels)}
-            onChange={(modelPreference) => {
-              const nextCapabilities = getModelThinkingCapabilities(
-                modelPreference,
-                dynamicModels,
-              );
-              updateSetting({
-                ...setting,
-                modelPreference,
-                thinkingEffort: normalizeThinkingEffortForModel({
-                  backend: effectiveBackend,
-                  model: modelPreference,
-                  effort: setting.thinkingEffort,
-                  capabilities: nextCapabilities,
-                }),
-              });
-            }}
-          />
-          <ThinkingSelector
-            value={normalizedThinkingEffort}
-            options={thinkingOptions}
-            onChange={(thinkingEffort) =>
-              updateSetting({
-                ...setting,
-                thinkingEffort: normalizeThinkingEffortForModel({
-                  backend: effectiveBackend,
-                  model: setting.modelPreference,
-                  effort: thinkingEffort,
-                  capabilities,
-                }),
-              })
-            }
-            disabled={thinkingOptions.length <= 1}
-          />
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -1315,10 +1103,8 @@ export function BackendsSettings() {
   const updateBackends = useUpdateBackendsSetting();
 
   const enabledBackends = backendsSetting?.enabledBackends ?? ['claude-code'];
-  const defaultBackend = backendsSetting?.defaultBackend ?? 'claude-code';
 
   const isEnabled = (id: AgentBackendType) => enabledBackends.includes(id);
-  const isDefault = (id: AgentBackendType) => defaultBackend === id;
 
   const handleToggle = (id: AgentBackendType) => {
     let next: AgentBackendType[];
@@ -1328,32 +1114,24 @@ export function BackendsSettings() {
     } else {
       next = [...enabledBackends, id];
     }
-    const nextDefault = next.includes(defaultBackend)
-      ? defaultBackend
-      : next[0];
     updateBackends.mutate({
       enabledBackends: next,
-      defaultBackend: nextDefault,
+      // is the default now. Nothing reads it any more; `null` is written only
+      // because the (deprecated) field is still required by `BackendsSetting`.
     });
-  };
-
-  const handleSetDefault = (id: AgentBackendType) => {
-    if (!isEnabled(id)) return;
-    updateBackends.mutate({ enabledBackends, defaultBackend: id });
   };
 
   return (
     <div>
       <h2 className="text-ink-1 text-lg font-semibold">Agent Backends</h2>
       <p className="text-ink-3 mt-1 text-sm">
-        Enable or disable agent backends. The default backend is used when
-        creating new tasks.
+        Enable or disable agent backends. Which backend and model each feature
+        uses is set by the active model profile.
       </p>
 
       <div className="mt-4 space-y-2">
         {AVAILABLE_BACKENDS.map((backend) => {
           const enabled = isEnabled(backend.value);
-          const dflt = isDefault(backend.value);
 
           return (
             <div
@@ -1384,209 +1162,10 @@ export function BackendsSettings() {
                     : backend.description
                 }
               />
-
-              {enabled && (
-                <div className="flex items-center gap-2">
-                  <BackendThinkingSettings backend={backend.value} />
-                  <Button
-                    onClick={() => handleSetDefault(backend.value)}
-                    variant={dflt ? 'primary' : 'ghost'}
-                    size="sm"
-                    icon={<Star className={dflt ? 'fill-acc-ink' : ''} />}
-                  >
-                    {dflt ? 'Default' : 'Set as default'}
-                  </Button>
-                </div>
-              )}
             </div>
           );
         })}
       </div>
-    </div>
-  );
-}
-
-function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
-  const { data: backendDefaultModelsSetting } =
-    useBackendDefaultModelsSetting();
-  const updateBackendDefaultModels = useUpdateBackendDefaultModelsSetting();
-  const { data: thinkingSettings } = useThinkingSettingsSetting();
-  const updateThinkingSettings = useUpdateThinkingSettingsSetting();
-  const { data: dynamicModels } = useBackendModels(backend);
-  const model =
-    thinkingSettings?.selectedModels?.[backend] ??
-    backendDefaultModelsSetting?.models[backend] ??
-    'default';
-
-  const capabilities = getModelThinkingCapabilities(model, dynamicModels);
-  const thinkingOptions = getThinkingEffortOptions({
-    backend,
-    model,
-    capabilities,
-  });
-  const backendEfforts = thinkingSettings?.efforts[backend] ?? {
-    default: 'default',
-  };
-  const value = normalizeThinkingEffortForModel({
-    backend,
-    model,
-    effort: backendEfforts[model] ?? backendEfforts.default,
-    capabilities,
-  });
-
-  const handleModelChange = (nextModel: ModelPreference) => {
-    const nextCapabilities = getModelThinkingCapabilities(
-      nextModel,
-      dynamicModels,
-    );
-    updateThinkingSettings.mutate({
-      efforts: {
-        'claude-code': {
-          ...(thinkingSettings?.efforts['claude-code'] ?? {
-            default: 'default',
-          }),
-        },
-        opencode: {
-          ...(thinkingSettings?.efforts.opencode ?? { default: 'default' }),
-        },
-        codex: {
-          ...(thinkingSettings?.efforts.codex ?? { default: 'default' }),
-        },
-        copilot: {
-          ...(thinkingSettings?.efforts.copilot ?? { default: 'default' }),
-        },
-        vibe: {
-          ...(thinkingSettings?.efforts.vibe ?? { default: 'default' }),
-        },
-      },
-      selectedModels: {
-        'claude-code':
-          thinkingSettings?.selectedModels?.['claude-code'] ??
-          backendDefaultModelsSetting?.models['claude-code'] ??
-          'default',
-        opencode:
-          thinkingSettings?.selectedModels?.opencode ??
-          backendDefaultModelsSetting?.models.opencode ??
-          'default',
-        codex:
-          thinkingSettings?.selectedModels?.codex ??
-          backendDefaultModelsSetting?.models.codex ??
-          'default',
-        copilot:
-          thinkingSettings?.selectedModels?.copilot ??
-          backendDefaultModelsSetting?.models.copilot ??
-          'default',
-        vibe:
-          thinkingSettings?.selectedModels?.vibe ??
-          backendDefaultModelsSetting?.models.vibe ??
-          'default',
-        [backend]: nextModel,
-      },
-    });
-    updateBackendDefaultModels.mutate({
-      models: {
-        'claude-code':
-          backendDefaultModelsSetting?.models['claude-code'] ?? 'default',
-        opencode: backendDefaultModelsSetting?.models.opencode ?? 'default',
-        codex: backendDefaultModelsSetting?.models.codex ?? 'default',
-        copilot: backendDefaultModelsSetting?.models.copilot ?? 'default',
-        vibe: backendDefaultModelsSetting?.models.vibe ?? 'default',
-        [backend]: nextModel,
-      },
-    });
-
-    const normalizedEffort = normalizeThinkingEffortForModel({
-      backend,
-      model: nextModel,
-      effort: backendEfforts[nextModel] ?? backendEfforts.default,
-      capabilities: nextCapabilities,
-    });
-
-    if (
-      backendEfforts[nextModel] &&
-      backendEfforts[nextModel] !== normalizedEffort
-    ) {
-      setThinkingEffort(nextModel, normalizedEffort);
-    }
-  };
-
-  const setThinkingEffort = (
-    targetModel: ModelPreference,
-    effort: ThinkingEffort,
-  ) => {
-    const normalizedEffort = normalizeThinkingEffortForModel({
-      backend,
-      model: targetModel,
-      effort,
-      capabilities: getModelThinkingCapabilities(targetModel, dynamicModels),
-    });
-    updateThinkingSettings.mutate({
-      efforts: {
-        ...(thinkingSettings?.efforts ?? {}),
-        'claude-code': {
-          default: 'default',
-          ...(thinkingSettings?.efforts['claude-code'] ?? {}),
-        },
-        opencode: {
-          default: 'default',
-          ...(thinkingSettings?.efforts.opencode ?? {}),
-        },
-        copilot: {
-          default: 'default',
-          ...(thinkingSettings?.efforts.copilot ?? {}),
-        },
-        vibe: {
-          default: 'default',
-          ...(thinkingSettings?.efforts.vibe ?? {}),
-        },
-        codex: {
-          ...(thinkingSettings?.efforts.codex ?? { default: 'default' }),
-        },
-        [backend]: {
-          default: 'default',
-          ...backendEfforts,
-          [targetModel]: normalizedEffort,
-        },
-      },
-      selectedModels: {
-        'claude-code':
-          thinkingSettings?.selectedModels?.['claude-code'] ??
-          backendDefaultModelsSetting?.models['claude-code'] ??
-          'default',
-        opencode:
-          thinkingSettings?.selectedModels?.opencode ??
-          backendDefaultModelsSetting?.models.opencode ??
-          'default',
-        codex:
-          thinkingSettings?.selectedModels?.codex ??
-          backendDefaultModelsSetting?.models.codex ??
-          'default',
-        copilot:
-          thinkingSettings?.selectedModels?.copilot ??
-          backendDefaultModelsSetting?.models.copilot ??
-          'default',
-        vibe:
-          thinkingSettings?.selectedModels?.vibe ??
-          backendDefaultModelsSetting?.models.vibe ??
-          'default',
-        [backend]: targetModel,
-      },
-    });
-  };
-
-  return (
-    <div className="flex items-center gap-2">
-      <ModelSelector
-        value={model}
-        onChange={handleModelChange}
-        models={getModelsForBackend(backend, dynamicModels)}
-      />
-      <ThinkingSelector
-        value={value}
-        options={thinkingOptions}
-        onChange={(effort) => setThinkingEffort(model, effort)}
-        disabled={thinkingOptions.length <= 1}
-      />
     </div>
   );
 }
@@ -2152,106 +1731,6 @@ export function UsageDisplaySettings() {
           Sign in with GitHub is preferred. Manual tokens are only a fallback
           and must belong to a GitHub account with Copilot access.
         </p>
-      </div>
-    </div>
-  );
-}
-
-export function SummaryModelsSettings() {
-  return (
-    <div>
-      <h2 className="text-ink-1 text-lg font-semibold">Summary Models</h2>
-      <p className="text-ink-3 mt-1 text-sm">
-        Model used for <code>{'{{summary(step.<id>)}}'}</code> template
-        functions, including Continue steps. Summaries are generated from saved
-        normalized messages without forking the original session.
-      </p>
-
-      <div className="mt-4 space-y-3">
-        <SummaryModelSettings backend="claude-code" compact />
-        <SummaryModelSettings backend="opencode" compact />
-      </div>
-    </div>
-  );
-}
-
-type SummaryModelBackend = Exclude<AgentBackendType, 'copilot' | 'vibe'>;
-
-const SUMMARY_MODEL_BACKENDS: Record<
-  SummaryModelBackend,
-  { label: string; description: string; defaultModel: string }
-> = {
-  'claude-code': {
-    label: 'Claude Code',
-    description: 'Recommended: Haiku',
-    defaultModel: 'haiku',
-  },
-  opencode: {
-    label: 'OpenCode',
-    description: 'Use a lightweight provider/model when available',
-    defaultModel: 'default',
-  },
-  codex: {
-    label: 'Codex',
-    description: 'Use default Codex model when available',
-    defaultModel: 'default',
-  },
-};
-
-export function SummaryModelSettings({
-  backend,
-  compact = false,
-}: {
-  backend: SummaryModelBackend;
-  compact?: boolean;
-}) {
-  const { data: summaryModelsSetting } = useSummaryModelsSetting();
-  const updateSummaryModels = useUpdateSummaryModelsSetting();
-  const { data: dynamicModels } = useBackendModels(backend);
-  const details = SUMMARY_MODEL_BACKENDS[backend];
-
-  const models = {
-    'claude-code': SUMMARY_MODEL_BACKENDS['claude-code'].defaultModel,
-    opencode: SUMMARY_MODEL_BACKENDS.opencode.defaultModel,
-    codex: SUMMARY_MODEL_BACKENDS.codex.defaultModel,
-    copilot: 'default',
-    vibe: 'default',
-    ...(summaryModelsSetting?.models ?? {}),
-  };
-
-  const setModel = (model: string) => {
-    updateSummaryModels.mutate({
-      models: {
-        ...models,
-        [backend]: model,
-      },
-    });
-  };
-
-  return (
-    <div className="border-glass-border bg-bg-1 rounded-lg border px-4 py-3">
-      {!compact && (
-        <div className="mb-4">
-          <h2 className="text-ink-1 text-lg font-semibold">
-            {details.label} Summary Model
-          </h2>
-          <p className="text-ink-3 mt-1 text-sm">
-            Model used for <code>{'{{summary(step.<id>)}}'}</code> template
-            functions when generating summaries with {details.label}.
-          </p>
-        </div>
-      )}
-
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <div className="text-ink-1 text-sm font-medium">{details.label}</div>
-          <div className="text-ink-3 text-xs">{details.description}</div>
-        </div>
-        <ModelSelector
-          value={models[backend] ?? details.defaultModel}
-          onChange={setModel}
-          models={getModelsForBackend(backend, dynamicModels)}
-        />
       </div>
     </div>
   );

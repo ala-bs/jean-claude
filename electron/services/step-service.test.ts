@@ -15,6 +15,7 @@ const {
   resetTaskRuntimeMock,
   summarizeNormalizedMessagesMock,
   archiveAndDeleteRawMessagesMock,
+  resolveForRoleMock,
 } = vi.hoisted(() => ({
   findMessagesByStepIdMock: vi.fn(),
   findProjectByIdMock: vi.fn(),
@@ -30,6 +31,7 @@ const {
   resetTaskRuntimeMock: vi.fn(),
   summarizeNormalizedMessagesMock: vi.fn(),
   archiveAndDeleteRawMessagesMock: vi.fn(),
+  resolveForRoleMock: vi.fn(),
 }));
 
 vi.mock('../database/repositories/agent-messages', () => ({
@@ -64,6 +66,10 @@ vi.mock('../database/repositories/tasks', () => ({
     findById: findTaskByIdMock,
     update: updateTaskMock,
   },
+}));
+
+vi.mock('./model-profile-service', () => ({
+  getModelProfileService: () => ({ resolveForRole: resolveForRoleMock }),
 }));
 
 vi.mock('./task-runtime-cleanup-service', () => ({
@@ -132,12 +138,12 @@ describe('StepService.resolveAndValidate', () => {
       return { prompt: 'summary prompt' };
     });
     summarizeNormalizedMessagesMock.mockResolvedValue('Generated AI summary.');
-    getSettingMock.mockResolvedValue({
-      models: {
-        'claude-code': 'default',
-        opencode: 'default',
-        codex: 'default',
-      },
+    getSettingMock.mockResolvedValue({});
+    resolveForRoleMock.mockResolvedValue({
+      backend: 'opencode',
+      model: 'gpt-5.5',
+      thinkingEffort: 'default',
+      source: 'profile',
     });
     findStepByIdMock.mockResolvedValue(continueStep);
     findTaskByIdMock.mockResolvedValue({
@@ -254,6 +260,48 @@ describe('StepService.resolveAndValidate', () => {
     expect(result.resolvedPrompt).toBe('Continue from:\nFinal result summary.');
     expect(result.warnings).toEqual([
       'Summary generation failed for step "Step 1" (step-1); used last message fallback.',
+    ]);
+  });
+
+  it('resolves the summary model through the summary role', async () => {
+    findMessagesByStepIdMock.mockResolvedValue([
+      { id: 'msg-1', type: 'assistant-message', value: 'Implemented login.' },
+    ]);
+
+    const result = await StepService.resolveAndValidate('step-2');
+
+    expect(resolveForRoleMock).toHaveBeenCalledWith({
+      role: 'summary',
+      projectId: 'project-1',
+    });
+    expect(summarizeNormalizedMessagesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: 'opencode', model: 'gpt-5.5' }),
+    );
+    expect(result.resolvedPrompt).toBe(
+      'Continue from:\nGenerated AI summary.',
+    );
+  });
+
+  it('skips summary generation when the summary role is off', async () => {
+    resolveForRoleMock.mockResolvedValue({
+      backend: 'opencode',
+      model: 'default',
+      thinkingEffort: 'default',
+      source: 'profile',
+      off: true,
+    });
+    findMessagesByStepIdMock.mockResolvedValue([
+      { id: 'msg-1', type: 'assistant-message', value: 'Implemented login.' },
+    ]);
+
+    const result = await StepService.resolveAndValidate('step-2');
+
+    expect(summarizeNormalizedMessagesMock).not.toHaveBeenCalled();
+    expect(result.resolvedPrompt).toBe(
+      'Continue from:\nImplemented login flow. Added tests. Fixed lint.',
+    );
+    expect(result.warnings).toEqual([
+      'Summary generation is disabled by the active model profile; used captured output fallback for step "Step 1" (step-1).',
     ]);
   });
 

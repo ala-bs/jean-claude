@@ -1,9 +1,9 @@
-import type { MobilePlatform } from '@shared/mobile-simulator-types';
 import type {
   CommandRunStatus,
   ProjectCommand,
 } from '@shared/run-command-types';
 import { getRunCommandLogLineCount } from '@/stores/task-messages';
+import type { MobilePlatform } from '@shared/mobile-simulator-types';
 import { parseMobileBuildCommandId } from '../mobile-preview-pane/utils-setup-operation';
 import { parseMobileDevServerCommandId } from '@/lib/mobile-preview-runtime';
 import type { RunCommandLogs } from '@/stores/task-messages';

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeWellKnownCommandId } from '../command-logs-pane/command-log-tabs';
 import { buildMobileDevVirtualTabs } from './utils-log-tabs';
+import { describeWellKnownCommandId } from '../command-logs-pane/command-log-tabs';
 
 const BASE = {
   projectId: 'project-1',

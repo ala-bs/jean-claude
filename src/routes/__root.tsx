@@ -27,6 +27,7 @@ import { PrCompletionQueueDriver } from '@/features/pull-request/ui-pr-completio
 import { pruneOrphanedReviewComments } from '@/stores/review-comments';
 import { pruneOrphanedTaskPrompts } from '@/stores/task-prompts';
 import { pruneOrphanedTaskReviewDrafts } from '@/stores/task-review-comment-drafts';
+import { RateLimitBanner } from '@/features/agent/ui-rate-limit-banner';
 import { resolveLastLocationRedirect } from '@/lib/navigation';
 import { resolveSetupState } from '@/lib/onboarding-setup-state';
 import { TaskMessageManager } from '@/features/agent/task-message-manager';
@@ -35,6 +36,7 @@ import { useCommands } from '@/common/hooks/use-commands';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useMobilePreviewWorkspaceStore } from '@/stores/mobile-preview-workspace';
 import { useModal } from '@/common/context/modal';
+import { useModelProfileCommands } from '@/common/hooks/use-commands/model-profile-commands';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useProjects } from '@/hooks/use-projects';
@@ -119,6 +121,11 @@ function GlobalCommands() {
   const openChangelog = useChangelogStore((s) => s.open);
   const modal = useModal();
   const addToast = useToastStore((s) => s.addToast);
+
+  // `cmd+.` / `cmd+alt+1..9` are global, so they register here alongside the
+  // other root-level commands rather than inside the switcher component.
+  useModelProfileCommands();
+
   useCommands(
     'global-commands',
     [
@@ -539,7 +546,6 @@ function RootLayout() {
     >
       <ReactScanBridge />
       <NotificationTaskOpenBridge />
-      <RateLimitSwapBridge />
       <AgentMemoryCaptureWarningBridge />
       <TaskMessageManager />
       <PrCompletionQueueDriver />
@@ -574,6 +580,10 @@ function RootLayout() {
 
       <div className="flex h-full w-full flex-1 flex-col overflow-hidden">
         <Header />
+        {/* Replaces the old `RateLimitSwapBridge` toast: both listened to
+            `api.onRateLimitSwap`, and the banner is persistent and offers
+            revert, so shipping both would double-notify one event. */}
+        <RateLimitBanner />
         <main className="flex h-full w-full overflow-hidden">
           <div className="flex h-full min-w-0 flex-1">
             {!isSetupRoute && !hideContentForSetupDecision && <MainSidebar />}
@@ -657,21 +667,6 @@ function NotificationTaskOpenBridge() {
       });
     });
   }, [navigate, pathname]);
-
-  return null;
-}
-
-function RateLimitSwapBridge() {
-  const addToast = useToastStore((s) => s.addToast);
-
-  useEffect(() => {
-    return api.onRateLimitSwap((data) => {
-      addToast({
-        message: `Rate limit approaching for ${data.from} — routing new tasks to ${data.to}`,
-        type: 'success',
-      });
-    });
-  }, [addToast]);
 
   return null;
 }

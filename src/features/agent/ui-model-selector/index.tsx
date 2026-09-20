@@ -8,33 +8,15 @@ import type { ModelPreference } from '@shared/types';
 
 
 
-import type { BackendModelOption } from '../ui-backend-selector';
+import {
+  type BackendModelOption,
+  CLAUDE_CODE_MODELS,
+} from '../ui-backend-selector';
 
-const DEFAULT_MODELS: BackendModelOption[] = [
-  {
-    value: 'default',
-    label: 'Default',
-    description: 'Use the default model',
-  },
-  { value: 'opus', label: 'Opus', description: 'Most capable model' },
-  {
-    value: 'claude-opus-4-5',
-    label: 'Opus 4.5',
-    description: '',
-  },
-  {
-    value: 'sonnet',
-    label: 'Sonnet',
-    description: 'Balanced speed & quality',
-  },
-  {
-    value: 'haiku',
-    label: 'Haiku',
-    description: 'Fastest, lightweight tasks',
-  },
-];
-
-export const MODEL_PREFERENCES = DEFAULT_MODELS.map((m) => m.value);
+// The Claude model list lives in `ui-backend-selector` — this selector's
+// fallback is the same list, not a second copy of it (the copy had drifted and
+// still carried a stale `claude-opus-4-5` entry).
+const DEFAULT_MODELS: BackendModelOption[] = CLAUDE_CODE_MODELS;
 
 export const ModelSelector = forwardRef<
   SelectRef,

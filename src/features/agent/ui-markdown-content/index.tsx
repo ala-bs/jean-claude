@@ -1,4 +1,5 @@
 import { Check, Columns3, Copy, Maximize2, MoveHorizontal } from 'lucide-react';
+import { highlightToHtml, resolveLanguage } from '@/lib/syntax-highlight';
 import React, {
   type ReactNode,
   startTransition,
@@ -9,7 +10,6 @@ import React, {
   useState,
 } from 'react';
 import clsx from 'clsx';
-import { highlightToHtml, resolveLanguage } from '@/lib/syntax-highlight';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 

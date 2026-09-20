@@ -1,31 +1,14 @@
-import {
-  startTransition,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type {
-  AiSkillSlotConfig,
-  AiSkillSlotKey,
-  ThinkingEffort,
-} from '@shared/types';
-import type { AgentBackendType } from '@shared/agent-backend-types';
-import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
+import type { AiSkillSlotConfig, AiSkillSlotKey } from '@shared/types';
+import { roleForSkillSlot } from '@shared/model-profiles';
 import { Select } from '@/common/ui/select';
 import { Switch } from '@/common/ui/switch';
-import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useManagedSkills } from '@/hooks/use-managed-skills';
-
-
+import { useResolvedModelForRole } from '@/hooks/use-model-profiles';
 
 /** Sentinel value used when no skill is selected in the dropdown. */
 const NO_SKILL_VALUE = '__none__';
-
-/** Default model for claude-code slots. */
-export const DEFAULT_CLAUDE_CODE_MODEL = 'haiku';
 
 export const SLOT_DEFINITIONS: {
   key: AiSkillSlotKey;
@@ -51,8 +34,7 @@ export const SLOT_DEFINITIONS: {
   {
     key: 'task-name',
     label: 'Task Name',
-    description:
-      'Auto-generate short task names from prompts (defaults to builtin skill with Haiku)',
+    description: 'Auto-generate short task names from prompts',
   },
   {
     key: 'verification-note',
@@ -80,119 +62,78 @@ export const SLOT_DEFINITIONS: {
   },
 ];
 
+/**
+ * Editor for one AI skill slot.
+ *
+ * A slot decides which **prompt** a feature uses. Which **model** it runs on
+ * belongs to the slot's model-profile role, so the model is shown here
+ * read-only and edited in Settings → Model profiles. The stored
+ * `backend` / `model` / `thinkingEffort` fields are carried through untouched
+ * and are no longer read by the resolver.
+ */
 export function SlotDetail({
+  slotKey,
   label,
   description,
   config,
-  enabledBackends,
   onUpdate,
+  projectId,
   projectPath,
-  fallbackBackend = 'claude-code',
-  fallbackModel = DEFAULT_CLAUDE_CODE_MODEL,
   emptySummary = 'Not configured',
   emptyBadgeLabel = 'Disabled',
   toggleLabel = 'Enabled',
   toggleDescription = 'Disabled slots skip AI generation for this feature.',
 }: {
+  slotKey: AiSkillSlotKey;
   label: string;
   description: string;
   config: AiSkillSlotConfig | null;
-  enabledBackends: { value: AgentBackendType; label: string }[];
   onUpdate: (config: AiSkillSlotConfig | null) => void;
+  projectId?: string;
   projectPath?: string;
-  fallbackBackend?: AgentBackendType;
-  fallbackModel?: string;
   emptySummary?: string;
   emptyBadgeLabel?: string;
   toggleLabel?: string;
   toggleDescription?: string;
 }) {
   const isEnabled = config !== null;
-  const enabledBackendValues = useMemo(
-    () => enabledBackends.map((backend) => backend.value),
-    [enabledBackends],
-  );
-  const effectiveFallbackBackend = enabledBackendValues.includes(
-    fallbackBackend,
-  )
-    ? fallbackBackend
-    : (enabledBackendValues[0] ?? fallbackBackend);
-  const effectiveConfigBackend =
-    config?.backend && enabledBackendValues.includes(config.backend)
-      ? config.backend
-      : effectiveFallbackBackend;
-  const effectiveConfigModel =
-    config?.backend && enabledBackendValues.includes(config.backend)
-      ? config.model
-      : fallbackModel;
-  const effectiveConfigSkillName =
-    config?.backend && enabledBackendValues.includes(config.backend)
-      ? config.skillName
-      : null;
+  const role = roleForSkillSlot(slotKey);
+  const { data: resolvedModel } = useResolvedModelForRole(role, projectId);
 
-  // Local editing state
-  const [localBackend, setLocalBackend] = useState<AgentBackendType>(
-    effectiveConfigBackend,
-  );
-  const [localModel, setLocalModel] = useState(effectiveConfigModel);
-  const [localThinkingEffort, setLocalThinkingEffort] =
-    useState<ThinkingEffort>(config?.thinkingEffort ?? 'default');
-  const [localPresetId, setLocalPresetId] = useState<string | null>(null);
+  // The skills offered are the ones installed for the backend the role
+  // resolves to — the backend this slot will actually run on.
+  const backend = resolvedModel?.backend ?? 'claude-code';
+
+  const configSkillName = config?.skillName ?? null;
   const [localSkillName, setLocalSkillName] = useState<string | null>(
-    effectiveConfigSkillName,
+    configSkillName,
   );
   const hasLocalChangesRef = useRef(false);
 
-  // Sync local state when external config changes (e.g., query refetch)
+  // Sync local state when external config changes (e.g., query refetch).
   useEffect(() => {
-    const matchesLocalState =
-      localBackend === effectiveConfigBackend &&
-      localModel === effectiveConfigModel &&
-      localThinkingEffort === (config?.thinkingEffort ?? 'default') &&
-      localSkillName === effectiveConfigSkillName;
-    if (hasLocalChangesRef.current && !matchesLocalState) return;
+    if (hasLocalChangesRef.current && localSkillName !== configSkillName) return;
 
     hasLocalChangesRef.current = false;
-    startTransition(() => setLocalBackend(effectiveConfigBackend));
-    startTransition(() => setLocalModel(effectiveConfigModel));
-    startTransition(() => setLocalThinkingEffort(config?.thinkingEffort ?? 'default'));
-    startTransition(() => setLocalPresetId(null));
-    startTransition(() => setLocalSkillName(effectiveConfigSkillName));
-  }, [
-    config,
-    effectiveConfigBackend,
-    effectiveConfigModel,
-    effectiveConfigSkillName,
-    localBackend,
-    localModel,
-    localSkillName,
-    localThinkingEffort,
-  ]);
+    startTransition(() => setLocalSkillName(configSkillName));
+  }, [configSkillName, localSkillName]);
 
-  // Skills for the selected backend (enabled or builtin)
-  const { data: skills } = useManagedSkills(localBackend, projectPath);
+  const { data: skills } = useManagedSkills(backend, projectPath);
   const enabledSkills = useMemo(
     () =>
       (skills ?? []).filter(
-        (s) =>
-          s.enabledBackends[localBackend] === true || s.source === 'builtin',
+        (s) => s.enabledBackends[backend] === true || s.source === 'builtin',
       ),
-    [skills, localBackend],
+    [skills, backend],
   );
 
   const skillOptions = useMemo(() => {
     const builtin = enabledSkills
       .filter((s) => s.source === 'builtin')
-      .map((s) => ({
-        value: s.name,
-        label: `${s.name} (Builtin)`,
-      }));
+      .map((s) => ({ value: s.name, label: `${s.name} (Builtin)` }));
     const other = enabledSkills
       .filter((s) => s.source !== 'builtin')
-      .map((s) => ({
-        value: s.name,
-        label: s.name,
-      }));
+      .map((s) => ({ value: s.name, label: s.name }));
     const available = [...builtin, ...other].filter(
       (option, index, options) =>
         options.findIndex((candidate) => candidate.value === option.value) ===
@@ -201,7 +142,12 @@ export function SlotDetail({
     const previousSelection =
       localSkillName &&
       !available.some((option) => option.value === localSkillName)
-        ? [{ value: localSkillName, label: `${localSkillName} (Previously selected)` }]
+        ? [
+            {
+              value: localSkillName,
+              label: `${localSkillName} (Previously selected)`,
+            },
+          ]
         : [];
     return [
       { value: NO_SKILL_VALUE, label: 'None' },
@@ -210,65 +156,54 @@ export function SlotDetail({
     ];
   }, [enabledSkills, localSkillName]);
 
-  const saveLocalConfig = useCallback(() => {
-    onUpdate({
-      backend: localBackend,
-      model: localModel,
-      thinkingEffort: localThinkingEffort,
-      skillName: localSkillName,
-    });
-  }, [localBackend, localModel, localThinkingEffort, localSkillName, onUpdate]);
+  /**
+   * Preserves whatever model fields the slot already stored. They are dead
+   * data — the resolver reads the role instead — but rewriting them here would
+   * silently rewrite settings the user never touched.
+   */
+  const buildConfig = useCallback(
+    (skillName: string | null): AiSkillSlotConfig => ({
+      backend: config?.backend ?? backend,
+      model: config?.model ?? resolvedModel?.model ?? 'default',
+      thinkingEffort: config?.thinkingEffort ?? 'default',
+      skillName,
+    }),
+    [backend, config, resolvedModel?.model],
+  );
 
-  const hasChanges =
-    config !== null &&
-    (localBackend !== config.backend ||
-      localModel !== config.model ||
-      localThinkingEffort !== (config.thinkingEffort ?? 'default') ||
-      localSkillName !== (config.skillName ?? null));
+  const hasChanges = config !== null && localSkillName !== configSkillName;
 
   useEffect(() => {
     if (!hasChanges) return;
 
-    const saveTimeout = window.setTimeout(saveLocalConfig, 500);
+    const saveTimeout = window.setTimeout(
+      () => onUpdate(buildConfig(localSkillName)),
+      500,
+    );
 
     return () => window.clearTimeout(saveTimeout);
-  }, [hasChanges, saveLocalConfig]);
+  }, [buildConfig, hasChanges, localSkillName, onUpdate]);
 
   const handleToggleEnabled = useCallback(
     (checked: boolean) => {
-      if (checked) {
-        // Enable: save current local config (only possible when skill is selected)
-        onUpdate({
-          backend: localBackend,
-          model: localModel,
-          thinkingEffort: localThinkingEffort,
-          skillName: localSkillName,
-        });
-      } else {
-        // Disable: clear config
-        onUpdate(null);
-      }
+      onUpdate(checked ? buildConfig(localSkillName) : null);
     },
-    [localBackend, localModel, localThinkingEffort, localSkillName, onUpdate],
+    [buildConfig, localSkillName, onUpdate],
   );
 
-  // Build summary string
-  const summary = config
-    ? [
-        enabledBackends.find((b) => b.value === config.backend)?.label ??
-          config.backend,
-        config.model,
-        config.thinkingEffort && config.thinkingEffort !== 'default'
-          ? config.thinkingEffort
-          : null,
-        config.skillName ?? 'Builtin',
-      ]
-        .filter(Boolean)
-        .join(' \u00b7 ')
-    : emptySummary;
+  const resolvedModelLabel = resolvedModel?.off
+    ? 'Disabled by the active model profile'
+    : resolvedModel
+      ? `${resolvedModel.backend} / ${resolvedModel.model}${
+          resolvedModel.thinkingEffort && resolvedModel.thinkingEffort !== 'default'
+            ? ` · ${resolvedModel.thinkingEffort}`
+            : ''
+        }`
+      : 'Resolving…';
 
-  // Allow enabling even without a skill (slots can use builtin/default prompt)
-  const canEnable = true;
+  const summary = config
+    ? (config.skillName ?? 'Builtin prompt')
+    : emptySummary;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6">
@@ -292,61 +227,6 @@ export function SlotDetail({
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-4">
               <div>
-                <label className="text-ink-2 text-sm">Backend</label>
-                <p className="text-ink-3 mt-0.5 text-xs">
-                  Backend and model used for this generation slot.
-                </p>
-              </div>
-              <div className="shrink-0">
-                <BackendModelPresetPicker
-                  backend={localBackend}
-                  model={localModel}
-                   selectedPresetId={localPresetId}
-                   enabledBackends={enabledBackends.map((b) => b.value)}
-                   onChange={(selection) => {
-                     if (
-                       selection.backend !== localBackend ||
-                       selection.model !== localModel
-                     ) {
-                       hasLocalChangesRef.current = true;
-                     }
-                     setLocalBackend(selection.backend);
-                     setLocalModel(selection.model);
-                     setLocalPresetId(selection.presetId);
-                   }}
-                />
-              </div>
-            </div>
-
-            <div className="border-glass-border border-t" />
-
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <label className="text-ink-2 text-sm">Thinking</label>
-                <p className="text-ink-3 mt-0.5 text-xs">
-                  Optional thinking level for compatible models.
-                </p>
-              </div>
-              <div className="shrink-0">
-                {!localPresetId && (
-                  <ThinkingSelector
-                    value={localThinkingEffort}
-                    onChange={(thinkingEffort) => {
-                     if (thinkingEffort !== localThinkingEffort) {
-                       hasLocalChangesRef.current = true;
-                     }
-                      setLocalThinkingEffort(thinkingEffort);
-                    }}
-                    size="sm"
-                  />
-                )}
-              </div>
-            </div>
-
-            <div className="border-glass-border border-t" />
-
-            <div className="flex items-center justify-between gap-4">
-              <div>
                 <label className="text-ink-2 text-sm">Skill</label>
                 <p className="text-ink-3 mt-0.5 text-xs">
                   Optional skill prompt applied before generation.
@@ -354,15 +234,16 @@ export function SlotDetail({
               </div>
               <div className="shrink-0">
                 <Select
-                   value={localSkillName ?? NO_SKILL_VALUE}
-                   options={skillOptions}
-                   onChange={(v) => {
-                     const skillName = v === NO_SKILL_VALUE ? null : v;
-                     if (skillName !== localSkillName) {
-                       hasLocalChangesRef.current = true;
-                     }
-                     setLocalSkillName(skillName);
-                   }}
+                  value={localSkillName ?? NO_SKILL_VALUE}
+                  options={skillOptions}
+                  onChange={(value) => {
+                    const skillName =
+                      value === NO_SKILL_VALUE ? null : value;
+                    if (skillName !== localSkillName) {
+                      hasLocalChangesRef.current = true;
+                    }
+                    setLocalSkillName(skillName);
+                  }}
                   label="Skill"
                 />
               </div>
@@ -372,14 +253,25 @@ export function SlotDetail({
 
             <div className="flex items-center justify-between gap-4">
               <div>
+                <label className="text-ink-2 text-sm">Model</label>
+                <p className="text-ink-3 mt-0.5 text-xs">
+                  Set by the <strong>{label}</strong> role in Settings &rarr;
+                  Model profiles.
+                </p>
+              </div>
+              <span className="text-ink-2 shrink-0 font-mono text-xs">
+                {resolvedModelLabel}
+              </span>
+            </div>
+
+            <div className="border-glass-border border-t" />
+
+            <div className="flex items-center justify-between gap-4">
+              <div>
                 <label className="text-ink-2 text-sm">{toggleLabel}</label>
                 <p className="text-ink-3 mt-0.5 text-xs">{toggleDescription}</p>
               </div>
-              <Switch
-                checked={isEnabled}
-                onChange={handleToggleEnabled}
-                disabled={!canEnable && !isEnabled}
-              />
+              <Switch checked={isEnabled} onChange={handleToggleEnabled} />
             </div>
           </div>
           {hasChanges && (

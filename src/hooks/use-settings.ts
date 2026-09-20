@@ -12,24 +12,17 @@ import {
   type AiSkillSlotsSetting,
   type AppearanceSetting,
   type AppSettings,
-  type BackendDefaultModelsSetting,
-  type BackendModelPresetsSetting,
   type BackendsSetting,
   type CalendarNotificationsSetting,
   type EditorAutomationSetting,
   type EditorSetting,
   type EureciaSetting,
-  type ModelQuickSwitcherSetting,
   PRESET_EDITORS,
   type ProjectPromptPrefaceSetting,
   type PromptPrefaceSetting,
   type PromptSnippetsSetting,
-  type PrReviewAgentSetting,
-  type RateLimitSwapSetting,
   type RawMessageCleanupSetting,
-  type SummaryModelsSetting,
   type TaskEventNotificationsSetting,
-  type ThinkingSettingsSetting,
   type UsageDisplaySetting,
 } from '@shared/types';
 import { BUILTIN_SNIPPET_IDS, BUILTIN_SNIPPETS } from '@/lib/builtin-snippets';
@@ -278,142 +271,11 @@ export function useUpdateUsageDisplaySetting() {
   });
 }
 
-export function useSummaryModelsSetting() {
-  return useSetting('summaryModels');
-}
 
-export function useBackendDefaultModelsSetting() {
-  return useSetting('backendDefaultModels');
-}
 
-export function usePrReviewAgentSetting() {
-  return useSetting('prReviewAgent');
-}
 
-export function useUpdatePrReviewAgentSetting() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (value: PrReviewAgentSetting) =>
-      api.settings.set('prReviewAgent', value),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['settings', 'prReviewAgent'],
-      });
-    },
-  });
-}
 
-// Convenience hooks for rate limit swap setting
-export function useRateLimitSwapSetting() {
-  return useSetting('rateLimitSwap');
-}
 
-export function useUpdateRateLimitSwapSetting() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (value: RateLimitSwapSetting) =>
-      api.settings.set('rateLimitSwap', value),
-    onMutate: async (value) => {
-      const queryKey = ['settings', 'rateLimitSwap'] as const;
-      await queryClient.cancelQueries({ queryKey });
-      const previous = queryClient.getQueryData<RateLimitSwapSetting>(queryKey);
-      queryClient.setQueryData(queryKey, value);
-      return { previous };
-    },
-    onError: (_error, _value, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(
-          ['settings', 'rateLimitSwap'],
-          context.previous,
-        );
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['settings', 'rateLimitSwap'],
-      });
-    },
-  });
-}
-
-export function useUpdateBackendDefaultModelsSetting() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (value: BackendDefaultModelsSetting) =>
-      api.settings.set('backendDefaultModels', value),
-    onMutate: async (value) => {
-      const queryKey = ['settings', 'backendDefaultModels'] as const;
-      await queryClient.cancelQueries({ queryKey });
-      const previous =
-        queryClient.getQueryData<BackendDefaultModelsSetting>(queryKey);
-      queryClient.setQueryData(queryKey, value);
-      return { previous };
-    },
-    onError: (_error, _value, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(
-          ['settings', 'backendDefaultModels'],
-          context.previous,
-        );
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['settings', 'backendDefaultModels'],
-      });
-    },
-  });
-}
-
-export function useUpdateSummaryModelsSetting() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (value: SummaryModelsSetting) =>
-      api.settings.set('summaryModels', value),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['settings', 'summaryModels'],
-      });
-    },
-  });
-}
-
-export function useThinkingSettingsSetting() {
-  return useSetting('thinkingSettings');
-}
-
-export function useUpdateThinkingSettingsSetting() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (value: ThinkingSettingsSetting) =>
-      api.settings.set('thinkingSettings', value),
-    onMutate: async (value) => {
-      const queryKey = ['settings', 'thinkingSettings'] as const;
-      await queryClient.cancelQueries({ queryKey });
-      const previous =
-        queryClient.getQueryData<ThinkingSettingsSetting>(queryKey);
-      queryClient.setQueryData(queryKey, value);
-      return { previous };
-    },
-    onError: (_error, _value, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(
-          ['settings', 'thinkingSettings'],
-          context.previous,
-        );
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['settings', 'thinkingSettings'],
-      });
-    },
-  });
-}
-
-export function useBackendModelPresetsSetting() {
-  return useSetting('backendModelPresets');
-}
 
 export function usePromptPrefaceSetting() {
   return useSetting('promptPreface');
@@ -448,67 +310,6 @@ export function useUpdateProjectPromptPrefaceSetting(projectPath: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ['projectPromptPreface', projectPath],
-      });
-    },
-  });
-}
-
-export function useUpdateBackendModelPresetsSetting() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (value: BackendModelPresetsSetting) =>
-      api.settings.set('backendModelPresets', value),
-    onMutate: async (value) => {
-      const queryKey = ['settings', 'backendModelPresets'] as const;
-      await queryClient.cancelQueries({ queryKey });
-      const previous =
-        queryClient.getQueryData<BackendModelPresetsSetting>(queryKey);
-      queryClient.setQueryData(queryKey, value);
-      return { previous };
-    },
-    onError: (_error, _value, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(
-          ['settings', 'backendModelPresets'],
-          context.previous,
-        );
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['settings', 'backendModelPresets'],
-      });
-    },
-  });
-}
-
-export function useModelQuickSwitcherSetting() {
-  return useSetting('modelQuickSwitcher');
-}
-
-export function useUpdateModelQuickSwitcherSetting() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (value: ModelQuickSwitcherSetting) =>
-      api.settings.set('modelQuickSwitcher', value),
-    onMutate: async (value) => {
-      const queryKey = ['settings', 'modelQuickSwitcher'] as const;
-      await queryClient.cancelQueries({ queryKey });
-      const previous = queryClient.getQueryData<ModelQuickSwitcherSetting>(queryKey);
-      queryClient.setQueryData(queryKey, value);
-      return { previous };
-    },
-    onError: (_error, _value, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(
-          ['settings', 'modelQuickSwitcher'],
-          context.previous,
-        );
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['settings', 'modelQuickSwitcher'],
       });
     },
   });

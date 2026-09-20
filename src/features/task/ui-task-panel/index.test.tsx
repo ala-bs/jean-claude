@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
+import { act, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Task, TaskStep } from '@shared/types';
-import { act } from 'react';
 
 import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { RootOverlay } from '@/common/context/overlay';
@@ -19,6 +19,22 @@ import { TaskPanel } from '.';
   .IS_REACT_ACT_ENVIRONMENT = true;
 
 const mocks = vi.hoisted(() => ({
+  addStepDialogProps: null as null | {
+    defaultBackend?: string;
+    defaultModel?: string;
+    defaultThinkingEffort?: string | null;
+  },
+  resolvedAgentModel: {
+    backend: 'claude-code',
+    model: 'opus',
+    thinkingEffort: 'low',
+    source: 'profile',
+  } as {
+    backend: string;
+    model: string;
+    thinkingEffort: string;
+    source: string;
+  } | null,
   agentStreamStepIds: [] as Array<string | null>,
   commands: [] as Array<{
     label: string;
@@ -124,14 +140,17 @@ vi.mock('@/features/task/ui-pr-workspace-summary', () => ({
   ),
 }));
 
+// Deliberately omits the legacy `backends.defaultBackend` /
+// `backendDefaultModels` hooks: the task panel must resolve step defaults
+// through the model-profile resolver instead.
 vi.mock('@/hooks/use-settings', () => ({
   getEditorLabel: () => 'Editor',
-  useBackendDefaultModelsSetting: () => ({ data: { models: {} } }),
-  useBackendsSetting: () => ({
-    data: { defaultBackend: 'claude-code', enabledBackends: ['claude-code', 'opencode'] },
-  }),
   useEditorSetting: () => ({ data: null }),
   usePromptSnippetsSetting: () => ({ data: [] }),
+}));
+
+vi.mock('@/hooks/use-model-profiles', () => ({
+  useResolvedModelForRole: () => ({ data: mocks.resolvedAgentModel }),
 }));
 
 vi.mock('@/hooks/use-step-permissions', () => ({
@@ -262,19 +281,51 @@ vi.mock('@/features/agent/ui-add-permission-modal', () => ({
     </div>
   ),
 }));
-vi.mock('@/features/agent/ui-message-input', () => ({ MessageInput: () => null }));
+// Renders only the composer control slot so the model-profile switcher mount
+// point is observable without pulling in the real textarea.
+vi.mock('@/features/agent/ui-message-input', () => ({
+  MessageInput: ({
+    controlsAboveButtons,
+    toolbarLeading,
+  }: {
+    controlsAboveButtons?: ReactNode;
+    toolbarLeading?: ReactNode;
+  }) => (
+    <div>
+      {controlsAboveButtons}
+      {toolbarLeading}
+    </div>
+  ),
+}));
+
+vi.mock('@/features/agent/ui-model-profile-switcher', () => ({
+  ModelProfileSwitcher: () => <div>Model profile switcher</div>,
+}));
 
 vi.mock('./add-step-dialog', () => ({
   AddStepDialog: ({
     canContinue,
     isOpen,
     onConfirm,
+    defaultBackend,
+    defaultModel,
+    defaultThinkingEffort,
   }: {
     canContinue?: boolean;
     isOpen: boolean;
     onConfirm: (data: unknown) => Promise<boolean>;
-  }) =>
-    isOpen ? (
+    defaultBackend?: string;
+    defaultModel?: string;
+    defaultThinkingEffort?: string | null;
+  }) => {
+    if (isOpen) {
+      mocks.addStepDialogProps = {
+        defaultBackend,
+        defaultModel,
+        defaultThinkingEffort,
+      };
+    }
+    return isOpen ? (
       <div>
         <div>Add Step Dialog</div>
         {canContinue !== false ? <div>Continue preset</div> : null}
@@ -300,7 +351,8 @@ vi.mock('./add-step-dialog', () => ({
           Submit first step
         </button>
       </div>
-    ) : null,
+    ) : null;
+  },
 }));
 
 vi.mock('./command-logs-pane', () => ({
@@ -445,6 +497,13 @@ describe('TaskPanel zero-step PR workspace', () => {
     document.body.append(container);
     root = createRoot(container);
     mocks.agentStreamStepIds = [];
+    mocks.addStepDialogProps = null;
+    mocks.resolvedAgentModel = {
+      backend: 'claude-code',
+      model: 'opus',
+      thinkingEffort: 'low',
+      source: 'profile',
+    };
     mocks.commands = [];
     mocks.steps = [];
     mocks.taskStatus = 'waiting';
@@ -608,6 +667,53 @@ describe('TaskPanel zero-step PR workspace', () => {
         (command) => command.label === 'Open PR Workspace Overview',
       ),
     ).toBe(true);
+  });
+
+  it('seeds a new step from the active profile, not the previous step', async () => {
+    // The previous step ran on opencode/gpt-5/high; the active profile resolves
+    // the `agent` role to claude-code/opus/low. Adding a step must follow the
+    // profile — otherwise activating a profile changes nothing.
+    mocks.steps = [createStep()];
+    useNavigationStore.getState().setActiveStepId('task-1', 'step-1');
+    await renderPanel();
+
+    await act(async () =>
+      mocks.commands.find((command) => command.label === 'Add Step')!.handler(),
+    );
+
+    expect(mocks.addStepDialogProps).toEqual({
+      defaultBackend: 'claude-code',
+      defaultModel: 'opus',
+      defaultThinkingEffort: 'low',
+    });
+  });
+
+  it('persists an explicit per-step override instead of the profile default', async () => {
+    mocks.steps = [createStep()];
+    useNavigationStore.getState().setActiveStepId('task-1', 'step-1');
+    await renderPanel();
+
+    await act(async () =>
+      mocks.commands.find((command) => command.label === 'Add Step')!.handler(),
+    );
+    // The mocked dialog confirms with an explicit opencode/gpt-5/high pick.
+    await act(async () => findButton('Submit first step').click());
+
+    expect(mocks.createStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentBackend: 'opencode',
+        modelPreference: 'gpt-5',
+        thinkingEffort: 'high',
+      }),
+    );
+  });
+
+  it('renders the model profile switcher in the composer', async () => {
+    mocks.steps = [createStep()];
+    useNavigationStore.getState().setActiveStepId('task-1', 'step-1');
+    await renderPanel();
+
+    expect(container.textContent).toContain('Model profile switcher');
   });
 
   it('preserves real generic task deletion flow without calling PR deletion', async () => {

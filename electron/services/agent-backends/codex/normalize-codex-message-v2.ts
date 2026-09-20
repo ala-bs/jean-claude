@@ -4,12 +4,12 @@ import type {
   NormalizedResult,
   TokenUsage,
 } from '@shared/normalized-message-v2';
-import type { InteractionMode } from '@shared/types';
 import type {
   NormalizedQuestion,
   NormalizedQuestionOption,
   NormalizedQuestionRequest,
 } from '@shared/agent-backend-types';
+import type { InteractionMode } from '@shared/types';
 
 type UserPromptEntry = NormalizedEntry & { type: 'user-prompt' };
 type AssistantEntry = NormalizedEntry & { type: 'assistant-message' };

@@ -83,8 +83,6 @@ import {
 } from '@shared/types';
 import {
   getEditorLabel,
-  useBackendDefaultModelsSetting,
-  useBackendsSetting,
   useEditorSetting,
   usePromptSnippetsSetting,
 } from '@/hooks/use-settings';
@@ -157,7 +155,6 @@ import { FilePreviewPane } from '@/features/agent/ui-file-preview-pane';
 import { formatNumber } from '@/lib/number';
 import { getBranchFromWorktreePath } from '@/lib/worktree';
 import { getContextWindowForModel } from '@/lib/model-context-window';
-import { getDefaultModelForBackend } from '@/lib/default-models';
 import { getPrWorkspaceDeletionDestination } from '@/lib/pr-workspace-navigation';
 import { getWorkItemType } from '@shared/work-item-field-types';
 import { Input } from '@/common/ui/input';
@@ -165,6 +162,7 @@ import { Kbd } from '@/common/ui/kbd';
 import { MessageInput } from '@/features/agent/ui-message-input';
 import { MessageStream } from '@/features/agent/ui-message-stream';
 import { Modal } from '@/common/ui/modal';
+import { ModelProfileSwitcher } from '@/features/agent/ui-model-profile-switcher';
 import { ModelSelector } from '@/features/agent/ui-model-selector';
 import { ModeModelComboSelector } from '@/features/agent/ui-mode-model-combo';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
@@ -199,6 +197,7 @@ import { useProjectCommandAvailability } from '@/hooks/use-project-command-avail
 import { usePrWorkspaceActions } from '@/hooks/use-pr-workspace-actions';
 import { usePullBranch } from '@/hooks/use-worktree-diff';
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+import { useResolvedModelForRole } from '@/hooks/use-model-profiles';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { useSkills } from '@/hooks/use-skills';
 import { useTaskMessagesStore } from '@/stores/task-messages';
@@ -1260,21 +1259,19 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       return () => window.clearTimeout(timeout);
     }
   }, [closePermissionModal, permissionModal, permissionModalStep, steps]);
-  const { data: backendsSetting } = useBackendsSetting();
-  const { data: backendDefaultModelsSetting } =
-    useBackendDefaultModelsSetting();
+  // A *new* step follows the active profile / project policy (design §3), not
+  // whatever the previous step happened to run with. The active step is only a
+  // stand-in while the resolver query is in flight.
+  const { data: resolvedAgentModel } = useResolvedModelForRole(
+    'agent',
+    projectId ?? null,
+  );
   const defaultAddStepBackend =
-    activeStep?.agentBackend ??
-    project?.defaultAgentBackend ??
-    backendsSetting?.defaultBackend ??
-    'claude-code';
+    resolvedAgentModel?.backend ?? activeStep?.agentBackend ?? 'claude-code';
   const defaultAddStepModel =
-    activeStep?.modelPreference ??
-    getDefaultModelForBackend({
-      backend: defaultAddStepBackend,
-      project,
-      backendDefaultModels: backendDefaultModelsSetting,
-    });
+    resolvedAgentModel?.model ?? activeStep?.modelPreference ?? 'default';
+  const defaultAddStepThinkingEffort =
+    resolvedAgentModel?.thinkingEffort ?? activeStep?.thinkingEffort ?? 'default';
   const isSkillCreationTask = task?.type === 'skill-creation';
   const isPrWorkspaceTask = task?.type === 'pr-review';
 
@@ -3482,7 +3479,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           onConfirm={handleAddStep}
           defaultBackend={defaultAddStepBackend}
           defaultModel={defaultAddStepModel}
-          defaultThinkingEffort={activeStep?.thinkingEffort ?? 'default'}
+          defaultThinkingEffort={defaultAddStepThinkingEffort}
           taskId={taskId}
           activeStepId={activeStepId ?? undefined}
           projectRoot={taskRootPath}
@@ -3892,8 +3889,12 @@ const TaskInputFooter = memo(function TaskInputFooter({
     stepId: activeStepId ?? undefined,
   });
   const { data: footerSnippets = [] } = usePromptSnippetsSetting();
-  const { data: footerBackendDefaultModelsSetting } =
-    useBackendDefaultModelsSetting();
+  // The composer shows what the *current* step runs with, so its stored triple
+  // wins; the resolver only fills in for a step that has nothing stored yet.
+  const { data: footerResolvedAgentModel } = useResolvedModelForRole(
+    'agent',
+    task?.projectId ?? null,
+  );
 
   const snippetVariableContext: SnippetVariableContext = useMemo(
     () => ({
@@ -3914,25 +3915,33 @@ const TaskInputFooter = memo(function TaskInputFooter({
   );
 
   // Use step values for backend/mode/model (these live on steps now)
-  const effectiveBackend = activeStep?.agentBackend ?? 'claude-code';
+  const effectiveBackend =
+    activeStep?.agentBackend ??
+    footerResolvedAgentModel?.backend ??
+    'claude-code';
   const effectiveMode =
     activeStep?.interactionMode ??
     getDefaultInteractionModeForBackend({ backend: effectiveBackend });
-  const effectiveModel = activeStep?.modelPreference ?? 'default';
-  // Keep the renderer's submission path aligned with the backend capability.
-  // Codex and Claude can accept a follow-up on their live input stream; the
-  // other backends must retain the explicit queued-prompt path.
+  // Ours: fall back to what the profile's `agent` role resolves to, not a bare
+  // `'default'` — that is the whole point of model profiles.
+  const effectiveModel =
+    activeStep?.modelPreference ??
+    (footerResolvedAgentModel?.backend === effectiveBackend
+      ? footerResolvedAgentModel.model
+      : 'default');
+  // From main: keep the renderer's submission path aligned with the backend
+  // capability. Codex and Claude can accept a follow-up on their live input
+  // stream; the other backends must retain the explicit queued-prompt path.
   const promptSteering =
     effectiveBackend === 'claude-code' || effectiveBackend === 'codex';
 
   const { data: dynamicModels } = useBackendModels(effectiveBackend);
+  // `'default'` is not a real model id — ask the resolver what the role points
+  // at so the context-window lookup has something concrete.
   const resolvedModelForContext =
-    effectiveModel === 'default'
-      ? getDefaultModelForBackend({
-          backend: effectiveBackend,
-          project: footerProject,
-          backendDefaultModels: footerBackendDefaultModelsSetting,
-        })
+    effectiveModel === 'default' &&
+    footerResolvedAgentModel?.backend === effectiveBackend
+      ? footerResolvedAgentModel.model
       : effectiveModel;
   const activeModelMeta = dynamicModels?.find(
     (dynamicModel) => dynamicModel.id === resolvedModelForContext,
@@ -3954,7 +3963,11 @@ const TaskInputFooter = memo(function TaskInputFooter({
   const effectiveThinkingEffort = normalizeThinkingEffortForModel({
     backend: effectiveBackend,
     model: effectiveModel,
-    effort: activeStep?.thinkingEffort,
+    effort:
+      activeStep?.thinkingEffort ??
+      (footerResolvedAgentModel?.backend === effectiveBackend
+        ? footerResolvedAgentModel.thinkingEffort
+        : undefined),
     capabilities: thinkingCapabilities,
   });
   const setStepMode = useSetTaskMode();
@@ -4284,6 +4297,29 @@ const TaskInputFooter = memo(function TaskInputFooter({
   const effectiveCanSend =
     !isTaskCompleted && (canSendMessage || openReviewComments.length > 0);
 
+  // Design §5: the raw model / thinking pickers stop being the primary control
+  // and live behind the switcher's "Override this step only…" entry.
+  const rawModelPickers = (
+    <div className="flex items-center gap-1">
+      <ModelSelector
+        value={effectiveModel}
+        onChange={handleModelChange}
+        models={getModelsForBackend(effectiveBackend, dynamicModels)}
+        disabled={isRunning || isTaskCompleted}
+        size="sm"
+      />
+      <ThinkingSelector
+        value={displayedThinkingEffort}
+        onChange={handleThinkingEffortChange}
+        options={thinkingOptions}
+        disabled={
+          isSubmittingPrompt || isTaskCompleted || thinkingOptions.length <= 1
+        }
+        size="sm"
+      />
+    </div>
+  );
+
   const selectorGroup = (
     <div className="[&>button:not(:last-child)]:border-glass-border flex items-center gap-0 rounded-md [&>button]:rounded-none [&>button:first-child]:rounded-l-md [&>button:last-child]:rounded-r-md [&>button:not(:last-child)]:border-r">
       <ModeSelector
@@ -4303,21 +4339,10 @@ const TaskInputFooter = memo(function TaskInputFooter({
         }
         size="sm"
       />
-      <ModelSelector
-        value={effectiveModel}
-        onChange={handleModelChange}
-        models={getModelsForBackend(effectiveBackend, dynamicModels)}
-        disabled={isRunning || isTaskCompleted}
-        size="sm"
-      />
-      <ThinkingSelector
-         value={displayedThinkingEffort}
-        onChange={handleThinkingEffortChange}
-        options={thinkingOptions}
-        disabled={
-          isSubmittingPrompt || isTaskCompleted || thinkingOptions.length <= 1
-        }
-        size="sm"
+      <ModelProfileSwitcher
+        projectId={task?.projectId}
+        side="top"
+        overrideContent={rawModelPickers}
       />
     </div>
   );
@@ -4410,19 +4435,28 @@ const TaskInputFooter = memo(function TaskInputFooter({
             isCompact
             toolbarLeading={
               <>
-                <ModeModelComboSelector
-                  mode={effectiveMode}
-                  onModeChange={handleModeChange}
-                  model={effectiveModel}
-                  onModelChange={handleModelChange}
-                   thinkingEffort={displayedThinkingEffort}
-                  onThinkingEffortChange={handleThinkingEffortChange}
-                  thinkingOptions={thinkingOptions}
-                  backend={effectiveBackend}
-                  models={getModelsForBackend(effectiveBackend, dynamicModels)}
-                  disabled={isSubmittingPrompt || isTaskCompleted}
-                  modeDisabled={isRunning}
-                  modelDisabled={isRunning}
+                <ModelProfileSwitcher
+                  projectId={task?.projectId}
+                  side="top"
+                  overrideContent={
+                    <ModeModelComboSelector
+                      mode={effectiveMode}
+                      onModeChange={handleModeChange}
+                      model={effectiveModel}
+                      onModelChange={handleModelChange}
+                      thinkingEffort={displayedThinkingEffort}
+                      onThinkingEffortChange={handleThinkingEffortChange}
+                      thinkingOptions={thinkingOptions}
+                      backend={effectiveBackend}
+                      models={getModelsForBackend(
+                        effectiveBackend,
+                        dynamicModels,
+                      )}
+                      disabled={isSubmittingPrompt || isTaskCompleted}
+                      modeDisabled={isRunning}
+                      modelDisabled={isRunning}
+                    />
+                  }
                 />
                 <div className="bg-glass-light flex h-7 items-center rounded-md">
                   <AutoAcceptToggle

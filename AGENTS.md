@@ -148,6 +148,7 @@ Key points: wrap in transaction, disable FK before dropping, verify with `PRAGMA
 - **Message normalization**: Backend-specific messages normalized to unified schema (`shared/normalized-message-v2.ts`). Each backend has its own normalizer
 - **Background jobs**: Long-running ops (task creation, merge, deletion, summary generation) run as background jobs via Zustand store (`src/stores/background-jobs.ts`)
 - **Skills**: Managed via `skill-management-service.ts`. Canonical storage in `~/.config/jean-claude/skills/`, symlinked to backend paths. Enable = create symlink, disable = remove symlink
+- **Model profiles**: A `ModelRole` (12 semantic slots) binds to `presetId | 'inherit' | 'off'`; a `ModelProfile` binds every role at once so one switch (`cmd+.`, `cmd+alt+1..9`) moves all models. Per-project `ProjectModelPolicy` (`inherit | prefer | enforce`) comes from `.jean-claude/model-policy.json` else `projects.modelPolicy`. Types in `shared/model-profiles.ts`, resolution in `electron/services/model-profile-service.ts`
 - **Worktrees**: Git worktrees for isolated task branches. Diff calculated between `startCommitHash` and current working tree. Commit, merge, push, PR creation via `worktree-service.ts`
 - **Permissions**: Worktree-specific permissions in `.claude/settings.local.worktrees.json`, merged with base `.claude/settings.local.json`. Bare "Bash" never allowed — must use `Bash(exact command)` format
 

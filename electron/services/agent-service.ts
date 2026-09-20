@@ -84,6 +84,11 @@ import {
   TaskRepository,
 } from '../database/repositories';
 import {
+  assertModelPolicyAllowed,
+  buildSessionIdStepUpdate,
+  resolveRunModelSettings,
+} from './agent-session-update';
+import {
   buildAgentPromptMarkdown,
   getPromptDisplayText,
   textPrompt,
@@ -118,12 +123,12 @@ import { applyConfiguredPromptPreface } from './prompt-preface-service';
 import { assertValidWorkspacePath } from './system-project-service';
 import { buildJcMcpServersConfigForCwd } from './jc-mcp-config';
 import { buildReadOnlyPrReviewSessionRules } from './pr-review-agent-service';
-import { buildSessionIdStepUpdate } from './agent-session-update';
 import { ClaudeCodeBackend } from './agent-backends/claude/claude-code-backend';
 import { CopilotBackend } from './agent-backends/copilot/copilot-backend';
 import { dbg } from '../lib/debug';
 import { generateTaskName } from './name-generation-service';
 import { getAgentBackendProvider } from './agent-backends/providers';
+import { getModelProfileService } from './model-profile-service';
 import { JcMcpBridgeService } from './jc-mcp-bridge-service';
 import { mergeConflictTracker } from './merge-conflict-tracker';
 import { normalizeThinkingEffortForModel } from '../../shared/thinking-settings';
@@ -530,39 +535,11 @@ type FollowUpCaptureContext = {
   previousResultSnapshot?: Promise<string | null>;
 };
 
-/**
- * Model and thinking effort a run should use, given the session's swap
- * overrides and the step's stored preferences.
- *
- * Shared by `runBackend` (which applies them at `query()` time) and
- * `tryContinueRunWithPrompt` (which compares them against what the live run was
- * actually started with). These MUST stay in lockstep: if the comparison
- * recomputed this differently, a false mismatch would silently refuse every
- * injection and fall back to killing the background jobs.
- */
-function resolveRunModelSettings(
-  session: Pick<
-    ActiveSession,
-    'backendType' | 'requestedBackendType' | 'swapModel' | 'swapThinkingEffort'
-  >,
-  step: {
-    modelPreference?: string | null;
-    thinkingEffort?: ThinkingEffort | null;
-  },
-): {
-  modelPreference: string | undefined;
-  thinkingEffort: ThinkingEffort | undefined;
-} {
-  const backendChanged = session.backendType !== session.requestedBackendType;
-  return {
-    modelPreference:
-      session.swapModel ??
-      (backendChanged ? undefined : (step.modelPreference ?? undefined)),
-    thinkingEffort:
-      session.swapThinkingEffort ??
-      (backendChanged ? undefined : (step.thinkingEffort ?? undefined)),
-  };
-}
+// The model/effort a run should use — shared by `runBackend` (which applies
+// them at `query()` time) and `tryContinueRunWithPrompt` (which compares them
+// against what the live run was started with) — now resolves the `agent` role.
+// It lives in `./agent-session-update` so it stays importable without the
+// Electron/native-SQLite chain.
 
 // --- Active session tracking ---
 
@@ -1486,6 +1463,22 @@ class AgentService {
     const requestedBackend: AgentBackendType = (step.agentBackend ??
       'claude-code') as AgentBackendType;
 
+    // Policy boundary (design §2): a stale step row or a global profile switch
+    // must never leak a disallowed backend/preset into an `enforce` project.
+    // The picker filter is only ergonomics; this is the real check, so a
+    // blocked resolution throws a visible error instead of silently spawning.
+    assertModelPolicyAllowed(
+      await getModelProfileService().resolveForRole({
+        role: 'agent',
+        projectId: task.projectId,
+        override: {
+          backend: requestedBackend,
+          model: step.modelPreference ?? null,
+          thinkingEffort: step.thinkingEffort ?? null,
+        },
+      }),
+    );
+
     const backendType = requestedBackend;
     const swapModel: string | undefined = undefined;
     const swapThinkingEffort: ThinkingEffort | undefined = undefined;
@@ -1771,7 +1764,7 @@ class AgentService {
     // either since this run started, restart so the change takes effect.
     // Resolved through the SAME helper `runBackend` uses, so this can only
     // report a real change and never a spurious one.
-    const wanted = resolveRunModelSettings(session, step);
+    const wanted = await resolveRunModelSettings({ session, step });
     const wantedModel = wanted.modelPreference ?? null;
     const wantedEffort = wanted.thinkingEffort ?? null;
     if (
@@ -2056,10 +2049,10 @@ class AgentService {
       autoAccept: this.autoAcceptSteps.has(stepId),
     });
 
-    const { modelPreference, thinkingEffort } = resolveRunModelSettings(
+    const { modelPreference, thinkingEffort } = await resolveRunModelSettings({
       session,
       step,
-    );
+    });
     const normalizedThinkingEffort = normalizeThinkingEffortForModel({
       backend: session.backendType,
       model: modelPreference ?? 'default',
@@ -3065,6 +3058,25 @@ class AgentService {
         step: runningStep,
         provider: preflightProvider,
       });
+
+      // Check the model policy HERE, not only inside `createSession`. The
+      // catch below starts with `if (!session) throw error`, so anything
+      // thrown by `createSession` bypasses `errorStep()` and the synthetic
+      // timeline entry, and `startAgentForStep(...).catch()` only writes a
+      // debug line. A policy violation raised there left the step stuck on
+      // `running` forever with nothing shown to the user. This is the same
+      // reason the two checks above are preflights.
+      assertModelPolicyAllowed(
+        await getModelProfileService().resolveForRole({
+          role: 'agent',
+          projectId: preflightTask.projectId,
+          override: {
+            backend: preflightBackend,
+            model: runningStep.modelPreference ?? null,
+            thinkingEffort: runningStep.thinkingEffort ?? null,
+          },
+        }),
+      );
 
       // Surface work immediately while continue-summary synthesis runs.
       await StepService.update(stepId, { status: 'running' });

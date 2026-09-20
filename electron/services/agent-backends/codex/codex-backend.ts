@@ -14,8 +14,8 @@ import type {
   PromptImagePart,
   PromptPart,
 } from '@shared/agent-backend-types';
-import type { NormalizedQuestionRequest } from '@shared/agent-backend-types';
 import type { InteractionMode } from '@shared/types';
+import type { NormalizedQuestionRequest } from '@shared/agent-backend-types';
 import type { QuestionResponseMetadata } from '@shared/agent-types';
 
 import {
@@ -23,11 +23,11 @@ import {
   normalizeCodexNotification,
   normalizeCodexQuestionRequest,
 } from './normalize-codex-message-v2';
+import { dbg } from '../../../lib/debug';
 import { flattenScope } from '../../permission-settings-service';
 import { getAllowedDirectories } from '../../directory-access';
 import { getOrCreateCodexAppServer } from './codex-app-server';
 import { interleavePromptParts } from '../../prompt-utils';
-import { dbg } from '../../../lib/debug';
 
 import type {
   CodexJsonRpcId,

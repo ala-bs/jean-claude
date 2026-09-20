@@ -3,6 +3,8 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { nanoid } from 'nanoid';
+import type { ProfilePreset } from '@shared/model-profiles';
+import { useQuery } from '@tanstack/react-query';
 
 
 
@@ -29,39 +31,41 @@ import {
   useRateLimitSwapPreview,
 } from '@/features/agent/ui-rate-limit-swap-preview';
 import {
-  useBackendDefaultModelsSetting,
-  useBackendModelPresetsSetting,
   useBackendsSetting,
   useCompletionSetting,
-  useModelQuickSwitcherSetting,
-  useThinkingSettingsSetting,
 } from '@/hooks/use-settings';
 import {
   useProject,
   useProjectBranches,
   useProjectFeatureMap,
 } from '@/hooks/use-projects';
+import { api } from '@/lib/api';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { BranchSelect } from '@/common/ui/branch-select';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
-import { getDefaultModelForBackend } from '@/lib/default-models';
 import { getOriginalTaskAgentMemoryPrompt } from '@/lib/agent-memory-prompt-input';
 import { Input } from '@/common/ui/input';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import { PromptTextarea } from '@/features/common/ui-prompt-textarea';
+import { resolveAgentModelSelection } from '@/lib/default-models';
 import { resolveBackendModelSelection } from '@/features/agent/utils-backend-model-selection';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useCreateTaskWithWorktree } from '@/hooks/use-tasks';
+import { useEffectiveModelProfile } from '@/hooks/use-model-profiles';
 import { useNewTaskFormStore } from '@/stores/new-task-form';
 import { useProjectCanCreateWorktree } from '@/hooks/use-project-git';
 import { useProjectSkills } from '@/hooks/use-skills';
 import { WorkItemsBrowser } from '@/features/agent/ui-work-items-browser';
 
 
+
+/** Stable fallbacks for the active profile's presets / quick list. */
+const EMPTY_PROFILE_PRESETS: ProfilePreset[] = [];
+const EMPTY_QUICK_PRESET_IDS: string[] = [];
 
 export const Route = createFileRoute('/projects/$projectId/tasks/new')({
   component: NewTask,
@@ -127,29 +131,57 @@ function NewTask() {
     [branchInfos, useExistingBranch],
   );
 
-  // Sync draft backend with project→global default on mount
   const { data: backendsSetting } = useBackendsSetting();
-  const { data: backendDefaultModelsSetting } =
-    useBackendDefaultModelsSetting();
-  const { data: backendModelPresets = [] } = useBackendModelPresetsSetting();
-  const { data: thinkingSettings } = useThinkingSettingsSetting();
-  const { data: quickSwitcherSetting } = useModelQuickSwitcherSetting();
-  const resolvedDefaultBackend =
-    project?.defaultAgentBackend ?? backendsSetting?.defaultBackend;
-  const effectiveAgentBackend =
-    agentBackend ??
-    (resolvedDefaultBackend &&
-    backendsSetting?.enabledBackends.includes(resolvedDefaultBackend)
-      ? resolvedDefaultBackend
-      : backendsSetting?.enabledBackends[0]) ??
-    null;
-  // Must be derived from the *validated* backend — pairing a backend with
-  // another backend's default model breaks preset matching.
-  const effectiveDefaultModelPreference = getDefaultModelForBackend({
-    backend: effectiveAgentBackend,
-    project,
-    backendDefaultModels: backendDefaultModelsSetting,
+  const {
+    profile: effectiveProfile,
+    profiles,
+    activeProfileId,
+  } = useEffectiveModelProfile(projectId);
+  // Revision 1: presets and the quick list are owned by a profile, and the one
+  // that counts here is the *effective* profile — the project may pin a
+  // different profile than the globally active one.
+  const profilePresets = effectiveProfile?.presets ?? EMPTY_PROFILE_PRESETS;
+  const quickPresetIds =
+    effectiveProfile?.quickPresetIds ?? EMPTY_QUICK_PRESET_IDS;
+  const { data: effectivePolicy } = useQuery({
+    queryKey: ['projects', 'effective-model-policy', projectId],
+    queryFn: () => api.projects.getEffectivePolicy(projectId),
+    enabled: Boolean(projectId),
   });
+
+  // The `agent` role is the single source of truth for what a new task runs.
+  // The draft's own model fields are an explicit per-task override and still win.
+  const resolvedAgentModel = useMemo(
+    () =>
+      resolveAgentModelSelection({
+        profiles,
+        activeProfileId,
+        policy: effectivePolicy?.policy ?? null,
+        enabledBackends: backendsSetting?.enabledBackends,
+        draft: {
+          agentBackend,
+          modelPreference,
+          thinkingEffort,
+          backendModelPresetId,
+        },
+      }),
+    [
+      activeProfileId,
+      agentBackend,
+      backendModelPresetId,
+      backendsSetting?.enabledBackends,
+      effectivePolicy?.policy,
+      modelPreference,
+      profiles,
+      thinkingEffort,
+    ],
+  );
+  // Null until the enabled-backend list has loaded: resolving against an empty
+  // list would fall back to a backend the user may not even have enabled.
+  const effectiveAgentBackend = backendsSetting
+    ? resolvedAgentModel.backend
+    : null;
+  const effectiveDefaultModelPreference = resolvedAgentModel.model;
   const { data: dynamicModels, isFetched: areBackendModelsFetched } =
     useBackendModels(effectiveAgentBackend);
   const availableModelPreferences = useMemo(
@@ -162,7 +194,8 @@ function NewTask() {
   const backendModelSelection = useMemo(
     () =>
       resolveBackendModelSelection({
-        presets: backendModelPresets,
+        presets: profilePresets,
+        quickPresetIds,
         backend: effectiveAgentBackend,
         defaultModel: effectiveDefaultModelPreference,
         draftModelPreference: modelPreference,
@@ -170,7 +203,6 @@ function NewTask() {
         draftPresetId: backendModelPresetId,
         shouldAutoSelectPreset: draft.shouldAutoSelectBackendModelPreset,
         enabledBackends: backendsSetting?.enabledBackends,
-        quickSwitcherEnabled: quickSwitcherSetting?.enabled,
         availableModels: availableModelPreferences,
         areModelsFetched: areBackendModelsFetched,
       }),
@@ -179,13 +211,13 @@ function NewTask() {
       areBackendModelsFetched,
       availableModelPreferences,
       backendModelPresetId,
-      backendModelPresets,
+      profilePresets,
       backendsSetting?.enabledBackends,
       draft.shouldAutoSelectBackendModelPreset,
       effectiveAgentBackend,
       effectiveDefaultModelPreference,
       modelPreference,
-      quickSwitcherSetting?.enabled,
+      quickPresetIds,
     ],
   );
   const effectiveModelPreference = backendModelSelection.model;
@@ -207,15 +239,7 @@ function NewTask() {
       effort:
         thinkingEffort ??
         effectiveBackendModelPreset?.thinkingEffort ??
-        (effectiveAgentBackend
-          ? thinkingSettings?.efforts[effectiveAgentBackend]?.[
-              effectiveModelPreference
-            ]
-          : undefined) ??
-        (effectiveAgentBackend
-          ? thinkingSettings?.efforts[effectiveAgentBackend]?.default
-          : undefined) ??
-        'default',
+        resolvedAgentModel.thinkingEffort,
       capabilities: thinkingCapabilities,
     });
   const { data: rateLimitSuggestion } = useRateLimitSwapPreview(
@@ -227,7 +251,7 @@ function NewTask() {
 
     const backendChanged = rateLimitSuggestion.backend !== effectiveAgentBackend;
     return findMatchingBackendModelPresetId({
-      presets: backendModelPresets,
+      presets: profilePresets,
       backend: rateLimitSuggestion.backend,
       model:
         rateLimitSuggestion.model ??
@@ -237,7 +261,7 @@ function NewTask() {
         (backendChanged ? 'default' : effectiveThinkingEffort),
     });
   }, [
-    backendModelPresets,
+    profilePresets,
     effectiveAgentBackend,
     effectiveModelPreference,
     effectiveThinkingEffort,
@@ -281,59 +305,10 @@ function NewTask() {
     setDraft,
     userTouchedSelection,
   ]);
-  useEffect(() => {
-    if (
-      !backendsSetting ||
-      !project ||
-      hasDraft ||
-      rateLimitSuggestion?.swapped
-    )
-      return;
-
-    const resolved =
-      project.defaultAgentBackend ?? backendsSetting.defaultBackend;
-    if (!resolved) return;
-    if (!backendsSetting.enabledBackends.includes(resolved)) return;
-
-    // Seed through the shared resolver so this route lands on the same preset
-    // (including the quick-switcher default) as the new-task overlay.
-    const { presetId, preset, model } = resolveBackendModelSelection({
-      presets: backendModelPresets,
-      backend: resolved,
-      defaultModel: getDefaultModelForBackend({
-        backend: resolved,
-        project,
-        backendDefaultModels: backendDefaultModelsSetting,
-      }),
-      enabledBackends: backendsSetting.enabledBackends,
-      quickSwitcherEnabled: quickSwitcherSetting?.enabled,
-    });
-
-    setDraft({
-      agentBackend: resolved,
-      modelPreference: model,
-      thinkingEffort:
-        preset?.thinkingEffort ??
-        thinkingSettings?.efforts[resolved]?.[model] ??
-        thinkingSettings?.efforts[resolved]?.default ??
-        'default',
-      backendModelPresetId: presetId,
-      shouldAutoSelectBackendModelPreset: true,
-      // interactionMode deliberately omitted: this effect only runs when the
-      // draft does not exist yet, so there is no explicit choice to preserve,
-      // and writing the resolved default here is what used to pin it.
-    });
-  }, [
-    backendModelPresets,
-    backendDefaultModelsSetting,
-    backendsSetting,
-    hasDraft,
-    project,
-    quickSwitcherSetting?.enabled,
-    rateLimitSuggestion?.swapped,
-    setDraft,
-    thinkingSettings,
-  ]);
+  // No default-seeding effect any more. Writing the resolved default into the
+  // draft turned it into an explicit per-task override, which is exactly why
+  // activating a profile did not change what a new task ran. Defaults now stay
+  // derived (`resolvedAgentModel`); the draft holds only real user choices.
 
   // Determine the effective source branch (draft value or project default)
   const effectiveSourceBranch =
@@ -595,14 +570,7 @@ function NewTask() {
                       thinkingEffort: normalizeThinkingEffortForModel({
                         backend: selection.backend,
                         model: selection.model,
-                        effort:
-                          selection.thinkingEffort ??
-                          thinkingSettings?.efforts[selection.backend]?.[
-                            selection.model
-                          ] ??
-                          thinkingSettings?.efforts[selection.backend]
-                            ?.default ??
-                          'default',
+                        effort: selection.thinkingEffort ?? 'default',
                         capabilities: nextThinkingCapabilities,
                       }),
                       interactionMode: renormalizeDraftInteractionMode({

@@ -1,8 +1,8 @@
 import { ChevronDown, ChevronRight, MessageSquarePlus } from 'lucide-react';
 import { memo, useCallback, useMemo } from 'react';
 import clsx from 'clsx';
-import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { HighlightToken } from '@/lib/syntax-highlight';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 
 
 

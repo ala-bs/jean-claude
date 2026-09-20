@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import type { HighlightLines, LanguageName } from './syntax-highlight';
 import {
   clearHighlightCache,
   DEFAULT_LANGUAGE,
@@ -9,6 +8,7 @@ import {
   resolveLanguage,
   tokenizeLines,
 } from './syntax-highlight';
+import type { HighlightLines, LanguageName } from './syntax-highlight';
 
 beforeEach(() => {
   clearHighlightCache();

@@ -10,26 +10,26 @@ import {
   getModelsForBackend,
 } from '@/features/agent/ui-backend-selector';
 import type { ModelPreference, ThinkingEffort } from '@shared/types';
-import {
-  useBackendDefaultModelsSetting,
-  useBackendModelPresetsSetting,
-  useBackendsSetting,
-  useModelQuickSwitcherSetting,
-} from '@/hooks/use-settings';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import { BackendPresetSelector } from '@/features/agent/ui-backend-preset-selector';
 import type { BindingKey } from '@/common/context/keyboard-bindings/types';
-import { getDefaultModelForBackend } from '@/lib/default-models';
 import type { KeyboardLayer } from '@/common/context/keyboard-bindings';
 import { ModelSelector } from '@/features/agent/ui-model-selector';
+import type { ProfilePreset } from '@shared/model-profiles';
 import { useBackendModels } from '@/hooks/use-backend-models';
+import { useBackendsSetting } from '@/hooks/use-settings';
+import { useEffectiveModelProfile } from '@/hooks/use-model-profiles';
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+import { useResolvedModelForRole } from '@/hooks/use-model-profiles';
 
 const ACTIVE_PICKER_STYLE = {
   background: 'color-mix(in oklch, oklch(0.78 0.18 295) 14%, transparent)',
   border: '1px solid color-mix(in oklch, oklch(0.78 0.18 295) 30%, transparent)',
   color: 'oklch(0.78 0.18 295)',
 };
+
+/** Stable empty list so a profile-less state never yields a fresh `[]`. */
+const EMPTY_PRESETS: ProfilePreset[] = [];
 
 
 
@@ -38,6 +38,7 @@ export function BackendModelPresetPicker({
   model,
   selectedPresetId,
   enabledBackends,
+  projectId,
   onChange,
   disabled,
   backendShortcut,
@@ -51,6 +52,8 @@ export function BackendModelPresetPicker({
   model: ModelPreference;
   selectedPresetId?: string | null;
   enabledBackends?: AgentBackendType[];
+  /** Scopes the resolver's defaults to the project's model policy. */
+  projectId?: string | null;
   onChange: (selection: {
     backend: AgentBackendType;
     model: ModelPreference;
@@ -65,10 +68,19 @@ export function BackendModelPresetPicker({
   modelClassName?: string;
   layer?: KeyboardLayer;
 }) {
-  const { data: presets = [] } = useBackendModelPresetsSetting();
+  // Presets and the quick chips both come from the *effective* profile — the
+  // one the project pins under `prefer`/`enforce`, else the globally active
+  // one. Reading the active profile here would offer presets from a profile
+  // that is not in effect (design Revision 1, §2 project policy).
+  const { profile } = useEffectiveModelProfile(projectId);
+  const presets = profile?.presets ?? EMPTY_PRESETS;
   const { data: backendsSetting } = useBackendsSetting();
-  const { data: quickSwitcherSetting } = useModelQuickSwitcherSetting();
-  const { data: backendDefaultModels } = useBackendDefaultModelsSetting();
+  // This picker is the "override this step only" surface (design §5); its own
+  // defaults still come from the resolver, not from legacy settings keys.
+  const { data: resolvedAgentModel } = useResolvedModelForRole(
+    'agent',
+    projectId ?? null,
+  );
   const { data: dynamicModels, isFetched } = useBackendModels(backend);
   const pickerId = useId();
   const [customBackend, setCustomBackend] = useState<AgentBackendType>(backend);
@@ -92,15 +104,17 @@ export function BackendModelPresetPicker({
 
     return selectedPreset.id;
   }, [enabledBackends, presets, selectedPresetId]);
-  const quickPresets = useMemo(
-    () =>
-      presets.filter(
-        (preset) =>
-          preset.showInQuickSwitcher !== false &&
+  const quickPresetIds = profile?.quickPresetIds;
+  const quickPresets = useMemo(() => {
+    if (!quickPresetIds?.length) return EMPTY_PRESETS;
+    return quickPresetIds
+      .map((id) => presets.find((preset) => preset.id === id))
+      .filter(
+        (preset): preset is ProfilePreset =>
+          preset != null &&
           (!enabledBackends || enabledBackends.includes(preset.backend)),
-      ),
-    [enabledBackends, presets],
-  );
+      );
+  }, [enabledBackends, presets, quickPresetIds]);
   const matchingQuickPresetId = useMemo(
     () =>
       quickPresets.find(
@@ -121,8 +135,9 @@ export function BackendModelPresetPicker({
     bottom: 0,
     left: 0,
   });
-  const useQuickSwitcher =
-    quickSwitcherSetting?.enabled === true && quickPresets.length > 0;
+  // The global `modelQuickSwitcher` toggle is gone: a profile that pins quick
+  // presets *is* the opt-in.
+  const useQuickSwitcher = quickPresets.length > 0;
   const isCustomSelected = !selectedQuickPresetId;
   const customModelOptions = useMemo(() => {
     const options = getModelsForBackend(
@@ -230,7 +245,7 @@ export function BackendModelPresetPicker({
           onChange({
             backend: nextPreset.backend,
             model: nextPreset.model,
-            thinkingEffort: nextPreset.thinkingEffort ?? 'default',
+            thinkingEffort: nextPreset.thinkingEffort,
             presetId: nextPreset.id,
           });
           return true;
@@ -272,7 +287,7 @@ export function BackendModelPresetPicker({
                   onChange({
                     backend: preset.backend,
                     model: preset.model,
-                    thinkingEffort: preset.thinkingEffort ?? 'default',
+                    thinkingEffort: preset.thinkingEffort,
                     presetId: preset.id,
                   });
                 }}
@@ -426,6 +441,7 @@ export function BackendModelPresetPicker({
       <BackendPresetSelector
         backend={backend}
         selectedPresetId={validSelectedPresetId}
+        presets={presets}
         enabledBackends={enabledBackends}
         onChange={(selection) => {
           if (selection.presetId) {
@@ -440,11 +456,14 @@ export function BackendModelPresetPicker({
 
           onChange({
             backend: selection.backend,
-            model: getDefaultModelForBackend({
-              backend: selection.backend,
-              backendDefaultModels,
-            }),
-            thinkingEffort: 'default',
+            model:
+              resolvedAgentModel?.backend === selection.backend
+                ? resolvedAgentModel.model
+                : 'default',
+            thinkingEffort:
+              resolvedAgentModel?.backend === selection.backend
+                ? resolvedAgentModel.thinkingEffort
+                : 'default',
             presetId: null,
           });
         }}

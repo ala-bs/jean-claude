@@ -28,12 +28,12 @@ import {
   computeDiff,
   parseUnifiedPatchToStrings,
 } from '../../ui-diff-view/diff-utils';
-import { CommentableTextEntry } from '../ui-commentable-text-entry';
 import {
   DEFAULT_LANGUAGE,
   getLanguageFromPath,
   tokenizeLines,
 } from '@/lib/syntax-highlight';
+import { CommentableTextEntry } from '../ui-commentable-text-entry';
 import { MarkdownContent } from '../../ui-markdown-content';
 import { MergeResolutionEntry } from '../ui-merge-resolution-entry';
 import { TodoListEntry } from '../ui-todo-list-entry';

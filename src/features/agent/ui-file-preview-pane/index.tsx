@@ -1,6 +1,6 @@
 import { ExternalLink, X } from 'lucide-react';
-import { startTransition, useEffect, useMemo, useState } from 'react';
 import { highlightToHtml, resolveLanguage } from '@/lib/syntax-highlight';
+import { startTransition, useEffect, useMemo, useState } from 'react';
 
 
 

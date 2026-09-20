@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 
+import {
+  acceptsRunCommandLogGeneration,
+  type RunCommandLogStream,
+  type RunStatus,
+} from '@shared/run-command-types';
 import type {
   AgentBackgroundTask,
   AgentQuestion,
@@ -9,11 +14,6 @@ import type {
   NormalizedEntry,
   NormalizedPermissionRequest,
 } from '@shared/normalized-message-v2';
-import {
-  acceptsRunCommandLogGeneration,
-  type RunCommandLogStream,
-  type RunStatus,
-} from '@shared/run-command-types';
 import type { TaskStatus, TaskStepStatus } from '@shared/types';
 
 import { clearReviewCommentsForTask } from './review-comments';
