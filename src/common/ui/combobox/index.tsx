@@ -50,6 +50,7 @@ export function Combobox({
   contentClassName,
   renderOptionTrailing,
   onOpenChange,
+  triggerContent,
 }: {
   value: string;
   options: ComboboxOption[];
@@ -70,6 +71,12 @@ export function Combobox({
    */
   renderOptionTrailing?: (option: ComboboxOption) => React.ReactNode;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Replaces the trigger's default "selected label + chevron" content. Use for
+   * compact triggers (e.g. a "…" chip) where the selection is already shown
+   * elsewhere. The dropdown and its selection behavior are unchanged.
+   */
+  triggerContent?: React.ReactNode;
 }) {
   const id = useId();
   const listboxId = `combobox-listbox-${id}`;
@@ -183,6 +190,8 @@ export function Combobox({
           className,
         )}
       >
+        {triggerContent ?? (
+          <>
         {selectedOption?.indicator === 'active' && (
           <span
             aria-hidden
@@ -198,6 +207,8 @@ export function Combobox({
           {selectedOption?.label ?? placeholder}
         </span>
         <ChevronDown className={chevronSize} aria-hidden />
+          </>
+        )}
       </button>
 
       {isOpen &&

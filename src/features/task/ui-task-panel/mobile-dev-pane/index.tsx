@@ -1,6 +1,7 @@
 import {
   ChevronRight,
   Hammer,
+  MoreHorizontal,
   Play,
   RefreshCw,
   RotateCcw,
@@ -48,6 +49,7 @@ import { useToastStore } from '@/stores/toasts';
 
 import {
   buildDeviceOptions,
+  getDeviceChips,
   getFavoriteDevices,
   isFavoriteDevice,
   PLATFORM_LABELS,
@@ -308,6 +310,13 @@ export function MobileDevPane({
   const favorites = useMemo(
     () => getFavoriteDevices({ devices, favoriteDevices }),
     [devices, favoriteDevices],
+  );
+  // What the chip row renders: favorites, plus the selected device when it is
+  // not starred (see `getDeviceChips`). Layout still keys off `favorites`, so a
+  // user with no favorites keeps the full combobox row.
+  const deviceChips = useMemo(
+    () => getDeviceChips({ devices, favoriteDevices, activeDeviceKey }),
+    [activeDeviceKey, devices, favoriteDevices],
   );
   const isActiveDeviceFavorite = activeDevice
     ? isFavoriteDevice({
@@ -1025,66 +1034,50 @@ export function MobileDevPane({
             </p>
           ) : (
             <>
-              <div className="flex items-center gap-2">
-                <Combobox
-                  value={activeDeviceKey}
-                  options={deviceOptions}
-                  onChange={handleSelectDevice}
-                  renderOptionTrailing={renderOptionTrailing}
-                  onOpenChange={handlePickerOpenChange}
-                  size="sm"
-                  className="min-w-0 flex-1"
-                  label="Select a device"
-                  placeholder="Select a device…"
-                  searchPlaceholder="Search devices…"
-                  emptyLabel="No matching devices"
-                />
-                <IconButton
-                  onClick={handleToggleFavorite}
-                  size="sm"
-                  disabled={!activeDevice}
-                  icon={
-                    <Star
-                      className={clsx(
-                        isActiveDeviceFavorite &&
-                          'fill-current text-amber-400',
-                      )}
-                    />
-                  }
-                  tooltip={
-                    isActiveDeviceFavorite
-                      ? 'Remove from favorites'
-                      : 'Add to favorites'
-                  }
-                />
-                <Button
-                  onClick={handleBootDevice}
-                  size="sm"
-                  variant="secondary"
-                  loading={isActiveDeviceBooting}
-                  disabled={
-                    !activeDeviceKey ||
-                    isActiveDeviceBooted ||
-                    isDeviceUnavailable
-                  }
-                  title={
-                    isDeviceUnavailable
-                      ? (activeDevice?.unavailableReason ??
-                        'Device is unavailable')
-                      : isActiveDeviceBooted
-                        ? 'Device is already booted'
-                        : 'Boot this device'
-                  }
-                >
-                  {isActiveDeviceBooted ? 'Booted' : 'Boot'}
-                </Button>
-              </div>
+              {/* With favorites the chips ARE the picker: the full-width
+                  combobox collapses into a "…" chip, which buys back a row of
+                  vertical space in a pane that is mostly logs. */}
+              {favorites.length === 0 && (
+                <div className="flex items-center gap-2">
+                  <Combobox
+                    value={activeDeviceKey}
+                    options={deviceOptions}
+                    onChange={handleSelectDevice}
+                    renderOptionTrailing={renderOptionTrailing}
+                    onOpenChange={handlePickerOpenChange}
+                    size="sm"
+                    className="min-w-0 flex-1"
+                    label="Select a device"
+                    placeholder="Select a device…"
+                    searchPlaceholder="Search devices…"
+                    emptyLabel="No matching devices"
+                  />
+                  <IconButton
+                    onClick={handleToggleFavorite}
+                    size="sm"
+                    disabled={!activeDevice}
+                    icon={
+                      <Star
+                        className={clsx(
+                          isActiveDeviceFavorite &&
+                            'fill-current text-amber-400',
+                        )}
+                      />
+                    }
+                    tooltip={
+                      isActiveDeviceFavorite
+                        ? 'Remove from favorites'
+                        : 'Add to favorites'
+                    }
+                  />
+                </div>
+              )}
 
               {/* One-click row for starred devices, so the common case skips
                   the dropdown entirely. */}
               {favorites.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {favorites.map((device) => {
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {deviceChips.map((device) => {
                     const deviceKey = makeMobileDevDeviceKey({
                       platform: device.platform,
                       deviceId: device.id,
@@ -1127,6 +1120,23 @@ export function MobileDevPane({
                       </button>
                     );
                   })}
+                  <Combobox
+                    value={activeDeviceKey}
+                    options={deviceOptions}
+                    onChange={handleSelectDevice}
+                    renderOptionTrailing={renderOptionTrailing}
+                    onOpenChange={handlePickerOpenChange}
+                    size="sm"
+                    // Matches the chips beside it (same pill, same border,
+                    // same height) so the row reads as one control strip.
+                    className="border-line text-ink-2 hover:bg-bg-1 !h-auto shrink-0 !rounded-full border !bg-transparent !px-2 !py-0.5 !text-xs"
+                    label="Select a device"
+                    searchPlaceholder="Search devices…"
+                    emptyLabel="No matching devices"
+                    triggerContent={
+                      <MoreHorizontal className="size-3.5" aria-hidden />
+                    }
+                  />
                 </div>
               )}
             </>
@@ -1164,6 +1174,27 @@ export function MobileDevPane({
               </span>
             </span>
             <div className="flex items-center gap-2">
+              {/* Boots the selected device. Lives on this row (not under the
+                  device picker) so the device section stays one line tall. */}
+              <Button
+                onClick={handleBootDevice}
+                size="sm"
+                variant="secondary"
+                loading={isActiveDeviceBooting}
+                disabled={
+                  !activeDeviceKey || isActiveDeviceBooted || isDeviceUnavailable
+                }
+                title={
+                  isDeviceUnavailable
+                    ? (activeDevice?.unavailableReason ??
+                      'Device is unavailable')
+                    : isActiveDeviceBooted
+                      ? 'Device is already booted'
+                      : 'Boot this device'
+                }
+              >
+                {isActiveDeviceBooted ? 'Booted' : 'Boot'}
+              </Button>
               {/* Build & run onto the selected device. The command comes from
                   project settings (or detection) and, where the CLI is
                   recognized, is pointed at this exact device rather than the

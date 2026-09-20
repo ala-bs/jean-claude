@@ -7,6 +7,7 @@ import { makeMobileDevDeviceKey } from '@/stores/mobile-dev-pane';
 import {
   buildDeviceOptions,
   FAVORITES_GROUP_LABEL,
+  getDeviceChips,
   getFavoriteDevices,
   isFavoriteDevice,
   PLATFORM_LABELS,
@@ -22,6 +23,13 @@ const SE = device({ id: 'sim-se', name: 'iPhone SE' });
 const PRO = device({ id: 'sim-pro', name: 'iPhone 16 Pro', state: 'booted' });
 const PIXEL = device({ id: 'Pixel_8', name: 'Pixel 8', platform: 'android' });
 const NEXUS = device({ id: 'Nexus_5', name: 'Nexus 5', platform: 'android' });
+
+function key(entry: MobilePreviewDevice) {
+  return makeMobileDevDeviceKey({
+    platform: entry.platform,
+    deviceId: entry.id,
+  });
+}
 
 function favorites(...devices: MobilePreviewDevice[]) {
   return Object.fromEntries(
@@ -228,5 +236,47 @@ describe('isFavoriteDevice', () => {
         deviceId: 'sim-se',
       }),
     ).toBe(false);
+  });
+});
+
+describe('getDeviceChips', () => {
+  it('returns favorites unchanged when the selection is starred', () => {
+    expect(
+      getDeviceChips({
+        devices: [PRO, SE, PIXEL],
+        favoriteDevices: favorites(PRO),
+        activeDeviceKey: key(PRO),
+      }),
+    ).toEqual([PRO]);
+  });
+
+  it('appends the selected non-favorite device last', () => {
+    expect(
+      getDeviceChips({
+        devices: [PRO, SE, PIXEL],
+        favoriteDevices: favorites(PRO),
+        activeDeviceKey: key(PIXEL),
+      }),
+    ).toEqual([PRO, PIXEL]);
+  });
+
+  it('ignores a selection that is not in the live device list', () => {
+    expect(
+      getDeviceChips({
+        devices: [PRO],
+        favoriteDevices: favorites(PRO),
+        activeDeviceKey: 'ios:gone',
+      }),
+    ).toEqual([PRO]);
+  });
+
+  it('returns favorites when nothing is selected', () => {
+    expect(
+      getDeviceChips({
+        devices: [PRO, PIXEL],
+        favoriteDevices: favorites(PRO),
+        activeDeviceKey: '',
+      }),
+    ).toEqual([PRO]);
   });
 });

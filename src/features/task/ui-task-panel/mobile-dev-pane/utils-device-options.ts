@@ -54,6 +54,48 @@ export function getFavoriteDevices({
 }
 
 /**
+ * Chips shown under "Device": the starred devices, plus the selected one when
+ * it is not starred.
+ *
+ * Picking a non-favorite from the "…" dropdown would otherwise leave the row
+ * showing only favorites, none of them highlighted -- the selection would look
+ * lost. The guest chip is appended last (never reordering the favorites) and
+ * disappears as soon as another device is selected, so it reads as temporary.
+ */
+export function getDeviceChips({
+  devices,
+  favoriteDevices,
+  activeDeviceKey,
+}: {
+  devices: MobilePreviewDevice[];
+  favoriteDevices: Record<string, MobileDevPaneDeviceSelection>;
+  activeDeviceKey: string;
+}): MobilePreviewDevice[] {
+  const favorites = getFavoriteDevices({ devices, favoriteDevices });
+  if (
+    !activeDeviceKey ||
+    favorites.some(
+      (device) =>
+        makeMobileDevDeviceKey({
+          platform: device.platform,
+          deviceId: device.id,
+        }) === activeDeviceKey,
+    )
+  ) {
+    return favorites;
+  }
+
+  const active = devices.find(
+    (device) =>
+      makeMobileDevDeviceKey({
+        platform: device.platform,
+        deviceId: device.id,
+      }) === activeDeviceKey,
+  );
+  return active ? [...favorites, active] : favorites;
+}
+
+/**
  * Dropdown options for the merged iOS + Android list.
  *
  * Ordering is Favorites, then iOS, then Android. `<Combobox>` renders a sticky
