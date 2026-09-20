@@ -41,7 +41,7 @@
     "eurecia:record": "node scripts/eurecia-api-recorder/record.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.220",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.278",
     "@blocknote/core": "^0.51.2",
     "@blocknote/mantine": "^0.51.2",
     "@blocknote/react": "^0.51.2",
