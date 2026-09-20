@@ -36,18 +36,44 @@ const IOS_BUILD_COMMAND_ID = 'mobile-build:.:ios:IOS-1';
 const mocks = vi.hoisted(() => ({
   devices: [] as unknown[],
   statusByCommandId: {} as Record<string, { status: string }>,
+  statusCommands: [] as { id: string; status: string; ports?: number[] }[],
   startAdHocCommand: vi.fn(),
   stopCommand: vi.fn(),
 }));
 
 vi.mock('@/hooks/use-run-commands', () => ({
   useRunCommands: () => ({
+    status: {
+      isRunning: mocks.statusCommands.length > 0,
+      commands: mocks.statusCommands,
+    },
     statusByCommandId: mocks.statusByCommandId,
     isCommandStarting: () => false,
     isCommandStopping: () => false,
+    isStartingAnyCommand: false,
+    startCommand: vi.fn(),
     startAdHocCommand: mocks.startAdHocCommand,
     stopCommand: mocks.stopCommand,
+    portsInUseError: null,
+    confirmKillPorts: vi.fn(),
+    dismissPortsError: vi.fn(),
   }),
+}));
+
+vi.mock('@/hooks/use-project-command-availability', () => ({
+  useProjectCommandAvailability: () => ({
+    commands: [],
+    allCommands: [],
+    groups: [],
+    items: [],
+    state: 'ready' as const,
+    hasConfiguredItems: false,
+    retry: vi.fn(),
+  }),
+}));
+
+vi.mock('@/features/common/interactive-log', () => ({
+  InteractiveLog: () => <div data-command-log-content />,
 }));
 
 vi.mock('@/hooks/use-mobile-preview', () => ({
@@ -102,6 +128,16 @@ function buttonByText(text: string) {
   return button;
 }
 
+function tabByText(text: string) {
+  return [
+    ...container.querySelectorAll(
+      '[data-command-logs-section] button[aria-pressed]',
+    ),
+  ].find(
+    (candidate) => candidate.textContent?.includes(text),
+  );
+}
+
 async function click(element: Element) {
   await act(async () => {
     element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -127,6 +163,7 @@ beforeEach(() => {
 
   mocks.devices = [IPHONE, PIXEL];
   mocks.statusByCommandId = {};
+  mocks.statusCommands = [];
   mocks.startAdHocCommand.mockReset().mockResolvedValue(undefined);
   mocks.stopCommand.mockReset().mockResolvedValue(undefined);
   vi.spyOn(api.runCommands, 'resetLogs').mockResolvedValue(1);
@@ -138,7 +175,7 @@ beforeEach(() => {
   });
   useMobileDevPaneStore.setState({
     deviceByTaskId: {},
-    logsExpandedByTaskId: {},
+    selectedLogTabByTaskId: {},
     favoriteDevices: {},
   });
 });
@@ -166,17 +203,30 @@ describe('MobileDevPane build button', () => {
     });
   });
 
-  it('keeps clearing the watched build log after the device selection changes', async () => {
+  it('keeps the watched build selected and clearable after the device changes', async () => {
     selectDevice(IPHONE);
     await renderPane();
 
     await click(buttonByText('Build'));
 
-    // The build is now running; the user switches device while it continues.
+    // Starting a build focuses its log tab.
+    expect(
+      useMobileDevPaneStore.getState().selectedLogTabByTaskId['task-1'],
+    ).toBe(IOS_BUILD_COMMAND_ID);
+
+    // The build is now running -- with no output yet -- and the user switches
+    // device while it continues.
     mocks.statusByCommandId = { [IOS_BUILD_COMMAND_ID]: { status: 'running' } };
+    mocks.statusCommands = [{ id: IOS_BUILD_COMMAND_ID, status: 'running' }];
     await act(async () => {
       selectDevice(PIXEL);
     });
+
+    // The sticky tab keeps the iPhone build addressable even though the command
+    // id is scoped to a device that is no longer selected. Nothing else would:
+    // it has produced no log lines, so only "is running" earns it a tab, and
+    // only stickiness keeps that tab among the pane's own leading slots.
+    expect(tabByText('iOS build')).toBeTruthy();
 
     // Clear must still target the stream the user is watching, not the Pixel's
     // never-started build and not Metro.

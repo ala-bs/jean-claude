@@ -9,7 +9,11 @@ import type {
   NormalizedEntry,
   NormalizedPermissionRequest,
 } from '@shared/normalized-message-v2';
-import type { RunCommandLogStream, RunStatus } from '@shared/run-command-types';
+import {
+  acceptsRunCommandLogGeneration,
+  type RunCommandLogStream,
+  type RunStatus,
+} from '@shared/run-command-types';
 import type { TaskStatus, TaskStepStatus } from '@shared/types';
 
 import { clearReviewCommentsForTask } from './review-comments';
@@ -903,7 +907,8 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
       const now = Date.now();
       const currentGeneration =
         state.runCommandLogGenerations[taskId]?.[runCommandId] ?? 0;
-      if (generation < currentGeneration) return state;
+      if (!acceptsRunCommandLogGeneration({ generation, currentGeneration }))
+        return state;
 
       const taskLogs = state.runCommandLogs[taskId] ?? {};
       const existingLog = taskLogs[runCommandId] ?? {
@@ -1009,7 +1014,8 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
     set((state) => {
       const currentGeneration =
         state.runCommandLogGenerations[taskId]?.[runCommandId] ?? 0;
-      if (generation < currentGeneration) return state;
+      if (!acceptsRunCommandLogGeneration({ generation, currentGeneration }))
+        return state;
 
       const taskLogs = state.runCommandLogs[taskId];
       const restLogs = taskLogs

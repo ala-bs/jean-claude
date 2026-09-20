@@ -8,6 +8,7 @@ import { act } from 'react';
 import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { RootOverlay } from '@/common/context/overlay';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
+import { useMobileDevPaneStore } from '@/stores/mobile-dev-pane';
 import { useNavigationStore } from '@/stores/navigation';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useToastStore } from '@/stores/toasts';
@@ -19,7 +20,13 @@ import { TaskPanel } from '.';
 
 const mocks = vi.hoisted(() => ({
   agentStreamStepIds: [] as Array<string | null>,
-  commands: [] as Array<{ label: string; handler: () => void }>,
+  commands: [] as Array<{
+    label: string;
+    handler: () => void;
+    shortcut?: string;
+    section?: string;
+    keywords?: string[];
+  }>,
   createStep: vi.fn(),
   deleteTask: vi.fn(),
   deleteTaskDialogProps: null as null | {
@@ -35,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   pathname: '/projects/project-1/tasks/task-1',
   removeSessionAllowedTool: vi.fn(),
   removalResult: null as Promise<void> | null,
+  mobilePreviewRuntimeKey: null as string | null,
   startCommand: vi.fn(),
   steps: [] as TaskStep[] | undefined,
   taskStatus: 'waiting' as Task['status'],
@@ -48,8 +56,8 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 vi.mock('@/common/hooks/use-commands', () => ({
-  useCommands: (_scope: string, commands: Array<false | null | undefined | { label: string; handler: () => void }>) => {
-    mocks.commands.push(...commands.filter((command): command is { label: string; handler: () => void } => Boolean(command)));
+  useCommands: (_scope: string, commands: Array<false | null | undefined | (typeof mocks.commands)[number]>) => {
+    mocks.commands.push(...commands.filter((command): command is (typeof mocks.commands)[number] => Boolean(command)));
   },
 }));
 
@@ -298,6 +306,13 @@ vi.mock('./add-step-dialog', () => ({
 vi.mock('./command-logs-pane', () => ({
   CommandLogsPane: () => <div>Existing command logs pane</div>,
 }));
+vi.mock('./mobile-dev-pane', () => ({
+  MobileDevPane: () => <div>Mobile dev pane</div>,
+}));
+vi.mock('@/features/mobile-preview/utils-mobile-preview-task-action', () => ({
+  getTaskMobilePreviewRuntimeKey: () => mocks.mobilePreviewRuntimeKey,
+  openTaskMobilePreviewWorkspace: vi.fn(),
+}));
 vi.mock('./task-name-editor', () => ({
   getTaskTitle: ({ name }: { name: string | null }) => name ?? '',
   TaskNameEditor: () => <div>PR #42</div>,
@@ -448,6 +463,8 @@ describe('TaskPanel zero-step PR workspace', () => {
     mocks.removeSessionAllowedTool.mockReset().mockResolvedValue(undefined);
     mocks.removalResult = null;
     mocks.startCommand.mockReset().mockResolvedValue({ started: true });
+    mocks.mobilePreviewRuntimeKey = null;
+    useMobileDevPaneStore.setState({ selectedLogTabByTaskId: {} });
     useNavigationStore.setState({ taskState: {}, addStepDrafts: {} });
     useBackgroundJobsStore.setState({ jobs: [] });
     useTaskMessagesStore.setState({ steps: {}, runCommandLogs: {}, runCommandRunning: {} });
@@ -867,6 +884,182 @@ describe('TaskPanel zero-step PR workspace', () => {
     await renderPanel();
     expect(useNavigationStore.getState().taskState['task-1']?.rightPane).toBeNull();
     expect(container.textContent).not.toContain('Task settings pane');
+  });
+
+  it('routes cmd+l to command logs when mobile dev is unavailable', async () => {
+    mocks.steps = [createStep()];
+    useNavigationStore.getState().setActiveStepId('task-1', 'step-1');
+    mocks.commands = [];
+    await renderPanel();
+
+    const toggle = mocks.commands.find(
+      (command) => command.label === 'Open Command Logs',
+    );
+    expect(toggle).toBeDefined();
+    expect(toggle!.shortcut).toBe('cmd+l');
+    expect(toggle!.keywords).toContain('logs');
+    await act(async () => toggle!.handler());
+    expect(
+      useNavigationStore.getState().taskState['task-1']?.rightPane?.type,
+    ).toBe('commandLogs');
+    expect(container.textContent).toContain('Existing command logs pane');
+  });
+
+  it('routes cmd+l to the mobile dev pane when mobile dev is available', async () => {
+    mocks.mobilePreviewRuntimeKey = 'runtime-1';
+    mocks.steps = [createStep()];
+    useNavigationStore.getState().setActiveStepId('task-1', 'step-1');
+    mocks.commands = [];
+    await renderPanel();
+
+    const toggle = mocks.commands.find(
+      (command) => command.label === 'Open Mobile Dev',
+    );
+    expect(toggle).toBeDefined();
+    expect(toggle!.shortcut).toBe('cmd+l');
+    // Searchability must survive the suppression of the shortcut-less twin.
+    expect(toggle!.keywords).toContain('metro');
+    expect(toggle!.keywords).toContain('simulator');
+    expect(toggle!.keywords).toContain('emulator');
+    expect(toggle!.keywords).toContain('device');
+    await act(async () => toggle!.handler());
+    expect(
+      useNavigationStore.getState().taskState['task-1']?.rightPane?.type,
+    ).toBe('mobileDev');
+    expect(container.textContent).toContain('Mobile dev pane');
+
+    // The standalone logs pane stays reachable without cmd+L.
+    mocks.commands = [];
+    await renderPanel();
+    const logsCommand = mocks.commands.find(
+      (command) => command.label === 'Open Command Logs',
+    );
+    expect(logsCommand).toBeDefined();
+    expect(logsCommand!.shortcut).toBeUndefined();
+    await act(async () => logsCommand!.handler());
+    expect(
+      useNavigationStore.getState().taskState['task-1']?.rightPane?.type,
+    ).toBe('commandLogs');
+  });
+
+  describe('pane toggle palette entries', () => {
+    async function renderAndCollect({
+      mobileDevAvailable,
+      prWorkspaceOverview,
+    }: {
+      mobileDevAvailable: boolean;
+      prWorkspaceOverview: boolean;
+    }) {
+      mocks.mobilePreviewRuntimeKey = mobileDevAvailable ? 'runtime-1' : null;
+      mocks.taskType = 'pr-review';
+      if (prWorkspaceOverview) {
+        // Zero-step PR workspaces render the overview instead of a step.
+        mocks.steps = [];
+      } else {
+        mocks.steps = [createStep()];
+        useNavigationStore.getState().setActiveStepId('task-1', 'step-1');
+      }
+      mocks.commands = [];
+      await renderPanel();
+      return mocks.commands.filter((command) => command.section === 'Task');
+    }
+
+    const cases = [
+      { mobileDevAvailable: true, prWorkspaceOverview: false },
+      { mobileDevAvailable: true, prWorkspaceOverview: true },
+      { mobileDevAvailable: false, prWorkspaceOverview: false },
+      { mobileDevAvailable: false, prWorkspaceOverview: true },
+    ];
+
+    for (const testCase of cases) {
+      it(`registers no duplicate labels (mobileDev=${testCase.mobileDevAvailable}, overview=${testCase.prWorkspaceOverview})`, async () => {
+        const taskCommands = await renderAndCollect(testCase);
+        const labels = taskCommands.map((command) => command.label);
+        expect(labels.length).toBeGreaterThan(0);
+        expect(labels).toEqual([...new Set(labels)]);
+      });
+    }
+
+    it('gives cmd+l to mobile dev and keeps a bare command logs entry', async () => {
+      const taskCommands = await renderAndCollect({
+        mobileDevAvailable: true,
+        prWorkspaceOverview: false,
+      });
+      const mobile = taskCommands.filter((command) =>
+        command.label.endsWith('Mobile Dev'),
+      );
+      const logs = taskCommands.filter((command) =>
+        command.label.endsWith('Command Logs'),
+      );
+      expect(mobile).toHaveLength(1);
+      expect(logs).toHaveLength(1);
+      expect(mobile[0].shortcut).toBe('cmd+l');
+      expect(mobile[0].keywords).toContain('metro');
+      expect(logs[0].shortcut).toBeUndefined();
+      expect(logs[0].keywords).toContain('logs');
+    });
+
+    it('gives cmd+l to command logs and keeps a bare mobile dev entry on the workspace overview', async () => {
+      const taskCommands = await renderAndCollect({
+        mobileDevAvailable: true,
+        prWorkspaceOverview: true,
+      });
+      const mobile = taskCommands.filter((command) =>
+        command.label.endsWith('Mobile Dev'),
+      );
+      const logs = taskCommands.filter((command) =>
+        command.label.endsWith('Command Logs'),
+      );
+      expect(mobile).toHaveLength(1);
+      expect(logs).toHaveLength(1);
+      expect(mobile[0].shortcut).toBeUndefined();
+      expect(mobile[0].keywords).toContain('metro');
+      expect(logs[0].shortcut).toBe('cmd+l');
+      expect(logs[0].keywords).toContain('logs');
+    });
+
+    for (const prWorkspaceOverview of [false, true]) {
+      it(`registers only the cmd+l command logs entry without mobile dev (overview=${prWorkspaceOverview})`, async () => {
+        const taskCommands = await renderAndCollect({
+          mobileDevAvailable: false,
+          prWorkspaceOverview,
+        });
+        expect(
+          taskCommands.filter((command) =>
+            command.label.endsWith('Mobile Dev'),
+          ),
+        ).toHaveLength(0);
+        const logs = taskCommands.filter((command) =>
+          command.label.endsWith('Command Logs'),
+        );
+        expect(logs).toHaveLength(1);
+        expect(logs[0].shortcut).toBe('cmd+l');
+        expect(logs[0].keywords).toContain('logs');
+      });
+    }
+  });
+
+  it('selects the run command log tab before opening the mobile dev pane', async () => {
+    mocks.mobilePreviewRuntimeKey = 'runtime-1';
+    mocks.steps = [createStep()];
+    useNavigationStore.getState().setActiveStepId('task-1', 'step-1');
+    await renderPanel();
+
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Run command"]')!
+        .click(),
+    );
+    await act(async () => findButton('Dev server').click());
+
+    expect(mocks.startCommand).toHaveBeenCalledWith('command-1');
+    expect(
+      useMobileDevPaneStore.getState().selectedLogTabByTaskId['task-1'],
+    ).toBe('command-1');
+    expect(
+      useNavigationStore.getState().taskState['task-1']?.rightPane?.type,
+    ).toBe('mobileDev');
+    expect(container.textContent).toContain('Mobile dev pane');
   });
 
   function findButton(label: string): HTMLButtonElement {

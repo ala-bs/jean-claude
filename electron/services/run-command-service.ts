@@ -395,6 +395,11 @@ interface TrackedProcess {
   pendingLogBatches: Record<RunCommandLogStream, string>;
   logFlushTimer: ReturnType<typeof setTimeout> | null;
   logGeneration: number;
+  /**
+   * Whether the last emitted stdout chunk ended on a line break. Synthetic
+   * markers use this to avoid gluing themselves onto a partial line.
+   */
+  lastLogEndedWithNewline: boolean;
   /** Set to true once the 'exit' event fires */
   exited: boolean;
   /** Resolves when the process exits */
@@ -471,6 +476,30 @@ interface GroupRunCancellation {
   cancelled: boolean;
   cancel: () => void;
   cancelled$: Promise<void>;
+}
+
+/**
+ * Bracketed marker written into the log when a process ends, so the run always
+ * leaves something readable behind even when the command printed nothing.
+ */
+export function formatProcessExitLogLine({
+  exitCode,
+  signal,
+}: {
+  exitCode: number;
+  signal?: number;
+}): string {
+  if (signal) {
+    return `[process terminated by signal ${signal}]`;
+  }
+  return `[process exited with code ${exitCode}]`;
+}
+
+/** "[port 3000 is already in use - not started]" */
+export function formatPortsInUseLogLine(ports: number[]): string {
+  const label = ports.length > 1 ? 'ports' : 'port';
+  const verb = ports.length > 1 ? 'are' : 'is';
+  return `[${label} ${ports.join(', ')} ${verb} already in use - not started]`;
 }
 
 export class RunCommandService {
@@ -744,6 +773,9 @@ export class RunCommandService {
     chunk: string;
   }): void {
     tracked.pendingLogBatches[stream] += chunk;
+    if (stream === 'stdout' && chunk.length > 0) {
+      tracked.lastLogEndedWithNewline = chunk.endsWith('\n');
+    }
 
     if (
       tracked.pendingLogBatches[stream].length >= RUN_COMMAND_LOG_FLUSH_BYTES
@@ -757,6 +789,49 @@ export class RunCommandService {
         this.flushLogBatches({ taskId, tracked });
       }, RUN_COMMAND_LOG_FLUSH_INTERVAL_MS);
     }
+  }
+
+  /**
+   * Emits one bracketed, app-generated line into the command's normal log
+   * stream. This is what keeps a log (and therefore its tab) non-empty when a
+   * command fails without printing anything, or is refused before it ever
+   * spawns.
+   *
+   * It must carry the *current* log generation, otherwise `resetLogs` (which
+   * bumps the generation, and always runs just before a start) makes the
+   * renderer discard it on arrival.
+   */
+  private appendSyntheticLogLine({
+    taskId,
+    runCommandId,
+    text,
+  }: {
+    taskId: string;
+    runCommandId: string;
+    text: string;
+  }): void {
+    const tracked = this.runningProcesses.get(taskId)?.get(runCommandId);
+
+    // The PTY merges stderr into stdout, so synthetic lines use 'stdout' too.
+    if (tracked) {
+      const prefix = tracked.lastLogEndedWithNewline ? '' : '\n';
+      this.appendLogChunk({
+        taskId,
+        tracked,
+        stream: 'stdout',
+        chunk: `${prefix}${text}\n`,
+      });
+      this.flushLogBatches({ taskId, tracked });
+      return;
+    }
+
+    this.notifyLog(
+      taskId,
+      runCommandId,
+      'stdout',
+      `${text}\n`,
+      this.getLogGeneration(taskId, runCommandId),
+    );
   }
 
   private async getPortsInUse(
@@ -1043,6 +1118,7 @@ export class RunCommandService {
       pendingLogBatches: { stdout: '', stderr: '' },
       logFlushTimer: null,
       logGeneration: this.getLogGeneration(taskId, command.id),
+      lastLogEndedWithNewline: true,
       exited: false,
       exitPromise,
     };
@@ -1096,6 +1172,13 @@ export class RunCommandService {
         signal,
       );
       this.flushLogBatches({ taskId, tracked: trackedProcess });
+      // A command that fails without printing anything would otherwise leave an
+      // empty log, and an empty log means no tab to read the failure in.
+      this.appendSyntheticLogLine({
+        taskId,
+        runCommandId: trackedProcess.commandId,
+        text: formatProcessExitLogLine({ exitCode, signal }),
+      });
       trackedProcess.exited = true;
       trackedProcess.status = exitCode === 0 ? 'stopped' : 'errored';
       exitResolve!({ exitCode, signal });
@@ -1307,17 +1390,32 @@ export class RunCommandService {
         runCommandId,
         projectId,
       );
+      this.appendSyntheticLogLine({
+        taskId,
+        runCommandId,
+        text: '[command not found in this project - it may have been deleted]',
+      });
       return this.getRunStatus(taskId);
     }
     // A renderer holding a stale command cache can still ask for a command that
     // has since been hidden, so visibility is enforced here too.
     if (command.isHidden) {
       dbg.runCommand('Command %s is hidden, refusing to start', runCommandId);
+      this.appendSyntheticLogLine({
+        taskId,
+        runCommandId,
+        text: `[command "${command.name ?? runCommandId}" is hidden - not started]`,
+      });
       return this.getRunStatus(taskId);
     }
 
     const didStop = await this.stopCommandWithoutLock({ taskId, runCommandId });
     if (!didStop) {
+      this.appendSyntheticLogLine({
+        taskId,
+        runCommandId,
+        text: '[could not stop the previous instance of this command - not restarted]',
+      });
       return this.getRunStatus(taskId);
     }
     await options.afterStop?.();
@@ -1328,6 +1426,11 @@ export class RunCommandService {
 
     if (blockingPortsInUse.length > 0) {
       dbg.runCommand('Ports in use, cannot start: %o', blockingPortsInUse);
+      this.appendSyntheticLogLine({
+        taskId,
+        runCommandId,
+        text: formatPortsInUseLogLine(blockingPortsInUse.map((p) => p.port)),
+      });
       return {
         type: 'PortsInUseError',
         message: `Ports in use: ${blockingPortsInUse.map((p) => p.port).join(', ')}`,
@@ -1468,6 +1571,16 @@ export class RunCommandService {
               'All commands in group are hidden, refusing to start: %o',
               runCommandIds,
             );
+            // The renderer resets every member's log right before starting a
+            // group, so returning silently here would leave every member empty
+            // (no line -> no tab -> the group looks like it did nothing).
+            for (const command of commands as ProjectCommand[]) {
+              this.appendSyntheticLogLine({
+                taskId,
+                runCommandId: command.id,
+                text: `[command "${command.name ?? command.id}" is hidden - not started]`,
+              });
+            }
             return this.getRunStatus(taskId);
           }
           return this.startGroupWithoutLock({
@@ -1546,6 +1659,16 @@ export class RunCommandService {
       ),
     );
     if (stopResults.some((didStop) => !didStop)) {
+      // Same reason as the hidden case: the member's log was just reset, so it
+      // needs a line or its tab never appears.
+      for (const [index, didStop] of stopResults.entries()) {
+        if (didStop) continue;
+        this.appendSyntheticLogLine({
+          taskId,
+          runCommandId: validCommands[index].id,
+          text: '[could not stop the previous instance of this command - not restarted]',
+        });
+      }
       const status = this.getRunStatus(taskId);
       onStarted(status);
       return status;
@@ -1559,6 +1682,19 @@ export class RunCommandService {
     );
     if (blockingPortsInUse.length > 0) {
       dbg.runCommand('Group ports in use, cannot start: %o', blockingPortsInUse);
+      const blockedPortsByCommandId = new Map<string, number[]>();
+      for (const portInUse of blockingPortsInUse) {
+        const ports = blockedPortsByCommandId.get(portInUse.commandId) ?? [];
+        ports.push(portInUse.port);
+        blockedPortsByCommandId.set(portInUse.commandId, ports);
+      }
+      for (const [commandId, ports] of blockedPortsByCommandId) {
+        this.appendSyntheticLogLine({
+          taskId,
+          runCommandId: commandId,
+          text: formatPortsInUseLogLine(ports),
+        });
+      }
       const portsError: PortsInUseErrorData = {
         type: 'PortsInUseError',
         message: `Ports in use: ${blockingPortsInUse.map((p) => p.port).join(', ')}`,
@@ -1778,13 +1914,27 @@ export class RunCommandService {
             taskId,
             runCommandId,
           });
-          if (!didStop) return this.getRunStatus(taskId);
+          if (!didStop) {
+            this.appendSyntheticLogLine({
+              taskId,
+              runCommandId,
+              text: '[could not stop the previous instance of this command - not restarted]',
+            });
+            return this.getRunStatus(taskId);
+          }
 
           const portsInUse = await this.getPortsInUse([adHocCommand]);
           const blockingPortsInUse = this.getBlockingPortsInUse(portsInUse, [
             adHocCommand,
           ]);
           if (blockingPortsInUse.length > 0) {
+            this.appendSyntheticLogLine({
+              taskId,
+              runCommandId,
+              text: formatPortsInUseLogLine(
+                blockingPortsInUse.map((p) => p.port),
+              ),
+            });
             return {
               type: 'PortsInUseError',
               message: `Ports in use: ${blockingPortsInUse.map((p) => p.port).join(', ')}`,
@@ -1891,6 +2041,7 @@ export class RunCommandService {
       tracked.logFlushTimer = null;
     }
     tracked.pendingLogBatches = { stdout: '', stderr: '' };
+    tracked.lastLogEndedWithNewline = true;
     tracked.logGeneration = nextGeneration;
     return nextGeneration;
   }

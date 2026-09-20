@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   mergePersistedMobileDevPaneState,
+  migrateMobileDevPaneState,
+  setMobileDevPaneSelectedLogTab,
   useMobileDevPaneStore,
 } from './mobile-dev-pane';
 
 function resetStore() {
   useMobileDevPaneStore.setState({
     deviceByTaskId: {},
-    logsExpandedByTaskId: {},
+    selectedLogTabByTaskId: {},
     favoriteDevices: {},
   });
 }
@@ -92,23 +94,76 @@ describe('mobile dev pane store', () => {
     expect(deviceByTaskId['task-0']).toBeUndefined();
   });
 
-  it('tracks the log section per task and clears both records', () => {
-    const { setLogsExpanded, selectDevice, clearTask } =
+  it('tracks the selected log tab per task and clears both records', () => {
+    const { setSelectedLogTab, selectDevice, clearTask } =
       useMobileDevPaneStore.getState();
     selectDevice('task-a', {
       platform: 'ios',
       deviceId: 'sim-1',
       deviceName: 'iPhone 16',
     });
-    setLogsExpanded('task-a', false);
-    expect(useMobileDevPaneStore.getState().logsExpandedByTaskId['task-a']).toBe(
-      false,
-    );
+    setSelectedLogTab('task-a', 'run-metro');
+    setSelectedLogTab('task-b', 'run-ios');
+    expect(
+      useMobileDevPaneStore.getState().selectedLogTabByTaskId['task-a'],
+    ).toBe('run-metro');
 
     clearTask('task-a');
     const state = useMobileDevPaneStore.getState();
-    expect(state.logsExpandedByTaskId['task-a']).toBeUndefined();
+    expect(state.selectedLogTabByTaskId['task-a']).toBeUndefined();
     expect(state.deviceByTaskId['task-a']).toBeUndefined();
+    expect(state.selectedLogTabByTaskId['task-b']).toBe('run-ios');
+  });
+
+  it('caps stored log tabs and keeps the most recently selected task', () => {
+    const { setSelectedLogTab } = useMobileDevPaneStore.getState();
+    setSelectedLogTab('task-old', 'run-old');
+    for (let index = 0; index < 99; index += 1) {
+      setSelectedLogTab(`task-${index}`, `run-${index}`);
+    }
+    // Touch the oldest entry, then overflow the cap by one.
+    setSelectedLogTab('task-old', 'run-old');
+    setSelectedLogTab('task-new', 'run-new');
+
+    const { selectedLogTabByTaskId } = useMobileDevPaneStore.getState();
+    expect(Object.keys(selectedLogTabByTaskId)).toHaveLength(100);
+    expect(selectedLogTabByTaskId['task-old']).toBe('run-old');
+    expect(selectedLogTabByTaskId['task-0']).toBeUndefined();
+  });
+
+  it('sets the log tab imperatively outside React', () => {
+    setMobileDevPaneSelectedLogTab({ taskId: 'task-a', commandId: 'run-metro' });
+    expect(
+      useMobileDevPaneStore.getState().selectedLogTabByTaskId['task-a'],
+    ).toBe('run-metro');
+  });
+});
+
+describe('mobile dev pane persisted-state migration', () => {
+  it('drops the v1 logs-expanded record and seeds the log tabs', () => {
+    const migrated = migrateMobileDevPaneState(
+      {
+        deviceByTaskId: {
+          'task-a': {
+            platform: 'ios',
+            deviceId: 'sim-1',
+            deviceName: 'iPhone 16',
+          },
+        },
+        logsExpandedByTaskId: { 'task-a': false },
+        favoriteDevices: {},
+      },
+      1,
+    ) as Record<string, unknown>;
+
+    expect(migrated.logsExpandedByTaskId).toBeUndefined();
+    expect(migrated.selectedLogTabByTaskId).toEqual({});
+    expect(Object.keys(migrated.deviceByTaskId as object)).toEqual(['task-a']);
+  });
+
+  it('leaves a v2 payload untouched', () => {
+    const payload = { selectedLogTabByTaskId: { 'task-a': 'run-metro' } };
+    expect(migrateMobileDevPaneState(payload, 2)).toBe(payload);
   });
 });
 
@@ -128,13 +183,13 @@ describe('mobile dev pane persisted-state sanitizing', () => {
           missingName: { platform: 'ios', deviceId: 'sim-2' },
           notAnObject: 'nope',
         },
-        logsExpandedByTaskId: { a: true, b: 'yes', c: 1 },
+        selectedLogTabByTaskId: { a: 'run-metro', b: '', c: 1, d: null },
       },
       current(),
     );
 
     expect(Object.keys(merged.deviceByTaskId)).toEqual(['good']);
-    expect(merged.logsExpandedByTaskId).toEqual({ a: true });
+    expect(merged.selectedLogTabByTaskId).toEqual({ a: 'run-metro' });
   });
 
   it('survives a corrupt or absent payload', () => {
@@ -185,19 +240,19 @@ describe('mobile dev pane favorites', () => {
   });
 
   it('is global rather than per task', () => {
-    const { toggleFavoriteDevice, clearTask, selectDevice, setLogsExpanded } =
+    const { toggleFavoriteDevice, clearTask, selectDevice, setSelectedLogTab } =
       useMobileDevPaneStore.getState();
     // Populate the task first: clearing an empty task would pass even if
     // clearTask wiped favorites.
     selectDevice('task-a', IPHONE);
-    setLogsExpanded('task-a', false);
+    setSelectedLogTab('task-a', 'run-metro');
     toggleFavoriteDevice(PIXEL);
 
     clearTask('task-a');
 
     const state = useMobileDevPaneStore.getState();
     expect(state.deviceByTaskId['task-a']).toBeUndefined();
-    expect(state.logsExpandedByTaskId['task-a']).toBeUndefined();
+    expect(state.selectedLogTabByTaskId['task-a']).toBeUndefined();
     expect(state.favoriteDevices).toEqual({ 'android:Pixel_8': PIXEL });
   });
 
@@ -236,7 +291,7 @@ describe('mobile dev pane favorites', () => {
 
   it('defaults favorites to empty for a payload written before the feature', () => {
     const merged = mergePersistedMobileDevPaneState(
-      { deviceByTaskId: {}, logsExpandedByTaskId: {} },
+      { deviceByTaskId: {}, selectedLogTabByTaskId: {} },
       useMobileDevPaneStore.getState(),
     );
     expect(merged.favoriteDevices).toEqual({});

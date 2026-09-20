@@ -18,18 +18,47 @@ import { useToastStore } from '@/stores/toasts';
 
 const mocks = vi.hoisted(() => ({
   refetchDevices: vi.fn(),
+  statusCommands: [] as { id: string; status: string; ports?: number[] }[],
 }));
 
 // The real hook subscribes to run-command status over IPC on mount; none of
 // that is what this file is about.
 vi.mock('@/hooks/use-run-commands', () => ({
   useRunCommands: () => ({
+    status: {
+      isRunning: mocks.statusCommands.length > 0,
+      commands: mocks.statusCommands,
+    },
     statusByCommandId: {},
     isCommandStarting: () => false,
     isCommandStopping: () => false,
+    isStartingAnyCommand: false,
+    startCommand: vi.fn(),
     startAdHocCommand: vi.fn(),
     stopCommand: vi.fn(),
+    portsInUseError: null,
+    confirmKillPorts: vi.fn(),
+    dismissPortsError: vi.fn(),
   }),
+}));
+
+// Project commands come over IPC through React Query; the pane only needs the
+// shape so the merged logs section can name and gate tabs.
+vi.mock('@/hooks/use-project-command-availability', () => ({
+  useProjectCommandAvailability: () => ({
+    commands: [],
+    allCommands: [],
+    groups: [],
+    items: [],
+    state: 'ready' as const,
+    hasConfiguredItems: false,
+    retry: vi.fn(),
+  }),
+}));
+
+// The real terminal view wants layout APIs happy-dom does not provide.
+vi.mock('@/features/common/interactive-log', () => ({
+  InteractiveLog: () => <div data-command-log-content />,
 }));
 
 // Device listing is a React Query hook over IPC; stubbing it keeps the pane
@@ -107,6 +136,9 @@ beforeEach(() => {
   root = createRoot(container);
 
   mocks.refetchDevices.mockReset().mockResolvedValue(undefined);
+  // Metro is running, which is what puts its tab on the rail and makes it the
+  // clear target. A tab only exists while its command runs or still has output.
+  mocks.statusCommands = [{ id: METRO_COMMAND_ID, status: 'running' }];
   vi.spyOn(api.runCommands, 'resetLogs').mockResolvedValue(1);
 
   useToastStore.setState({ toasts: [] });
@@ -116,7 +148,7 @@ beforeEach(() => {
   });
   useMobileDevPaneStore.setState({
     deviceByTaskId: {},
-    logsExpandedByTaskId: {},
+    selectedLogTabByTaskId: {},
     favoriteDevices: {},
   });
 });

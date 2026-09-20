@@ -1,5 +1,4 @@
 import {
-  ChevronRight,
   Hammer,
   MoreHorizontal,
   Play,
@@ -9,7 +8,6 @@ import {
   Smartphone,
   Square,
   Star,
-  Trash2,
   X,
 } from 'lucide-react';
 import {
@@ -35,16 +33,17 @@ import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { cleanIpcError } from '@/lib/ipc-error';
 import { Combobox } from '@/common/ui/combobox';
+import { CommandLogsSection } from '../command-logs-pane/command-logs-section';
 import { createMobileDevServerCommandId } from '@/lib/mobile-preview-runtime';
 import { DeeplinkButton } from './ui-deeplink-button';
+import { focusOnNonInteractiveMouseDown } from '../command-logs-pane/utils-log-pane-focus';
 import { IconButton } from '@/common/ui/icon-button';
-import { InteractiveLog } from '@/features/common/interactive-log';
 import { Separator } from '@/common/ui/separator';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useMobileDevPaneWidth } from '@/stores/navigation';
 import { useMobilePreviewDevices } from '@/hooks/use-mobile-preview';
+import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
 import { useRunCommands } from '@/hooks/use-run-commands';
-import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useToastStore } from '@/stores/toasts';
 
 import {
@@ -58,6 +57,7 @@ import {
   createStartLaunchRequestId,
   resolveStartLaunchDecision,
 } from './utils-start-launch';
+import { buildMobileDevVirtualTabs } from './utils-log-tabs';
 import { reloadAppOnMetro } from './utils-reload-app';
 import { resolveActiveDevice } from './utils-active-device';
 import { resolveAndroidProjectPath } from './utils-android-project-path';
@@ -122,7 +122,7 @@ export function MobileDevPane({
     onWidthChange: setWidth,
   });
 
-  const { selectedDevice, logsExpanded, selectDevice, setLogsExpanded } =
+  const { selectedDevice, selectedLogTab, selectDevice, setSelectedLogTab } =
     useMobileDevPaneTaskState(taskId);
   const { favoriteDevices, toggleFavoriteDevice } = useMobileDevPaneFavorites();
 
@@ -153,20 +153,15 @@ export function MobileDevPane({
   const activeDeviceKeyRef = useRef('');
   const paneRef = useRef<HTMLDivElement>(null);
   const [bootError, setBootError] = useState<string | null>(null);
-  // The pane has two log streams (Metro and the build); one box shows the
-  // selected one. Starting a build switches here so its output is not silently
-  // written to a stream nobody is looking at.
-  //
-  // Holds the *command id* being watched rather than a bare 'build' flag,
-  // because build ids are device-scoped: with a flag, switching device (or
-  // stopping Metro, which clears the selection) silently re-points the box at a
-  // never-started stream and makes Clear act on it, while the running build's
-  // output keeps accumulating out of reach.
+  // The last build this pane put on screen. Build command ids are
+  // device-scoped, so without this, switching device (or stopping Metro, which
+  // clears the selection) would drop a running build's tab while its output
+  // kept accumulating out of reach.
   //
   // Tagged with its task (logs are task-keyed) and compared during render
   // rather than reset in an effect, which would cascade renders -- the same
   // shape as `useRunCommands`'s own `statusTaskId` guard.
-  const [watchedBuild, setWatchedBuild] = useState<{
+  const [stickyBuild, setStickyBuild] = useState<{
     taskId: string;
     commandId: string;
   } | null>(null);
@@ -198,6 +193,7 @@ export function MobileDevPane({
     8081;
 
   const runCommands = useRunCommands({ taskId, projectId, workingDir });
+  const commandAvailability = useProjectCommandAvailability(projectId);
   const devServerStatus = runCommands.statusByCommandId[devServerCommandId];
   const devServerStarting = runCommands.isCommandStarting(devServerCommandId);
   const devServerStopping = runCommands.isCommandStopping(devServerCommandId);
@@ -427,16 +423,16 @@ export function MobileDevPane({
     // nothing to build onto and no command id to scope the run to.
     if (!activeDevice || !buildCommandId) return;
     if (buildRunning) {
-      setWatchedBuild({ taskId, commandId: buildCommandId });
-      setLogsExpanded(true);
+      setStickyBuild({ taskId, commandId: buildCommandId });
+      setSelectedLogTab(buildCommandId);
       void runCommands.stopCommand(buildCommandId);
       return;
     }
     // Guards run before any UI state changes, so a click that cannot start a
     // build does not yank the log box onto an empty stream.
     if (!build.command || !activeDevice) return;
-    setWatchedBuild({ taskId, commandId: buildCommandId });
-    setLogsExpanded(true);
+    setStickyBuild({ taskId, commandId: buildCommandId });
+    setSelectedLogTab(buildCommandId);
     void runCommands.startAdHocCommand({
       runCommandId: buildCommandId,
       // Matches the preview pane's labels for the same command id.
@@ -450,79 +446,50 @@ export function MobileDevPane({
     buildCommandId,
     buildRunning,
     runCommands,
-    setLogsExpanded,
+    setSelectedLogTab,
     taskId,
   ]);
 
-  // Sticky to the build actually being watched: switching device (or stopping
-  // Metro, which clears the selection) must not silently re-point the box at a
-  // different -- possibly never-started -- stream.
-  const watchedBuildCommandId =
-    watchedBuild?.taskId === taskId ? watchedBuild.commandId : null;
-  const showingBuildLog = watchedBuildCommandId !== null;
-  const logCommandId = watchedBuildCommandId ?? devServerCommandId;
-  const watchedBuildRunning =
-    watchedBuildCommandId !== null &&
-    runCommands.statusByCommandId[watchedBuildCommandId]?.status === 'running';
-
-  // Subscribing only while the log section is expanded keeps Metro's very
-  // chatty output from re-rendering a collapsed pane.
-  const activeLog =
-    useTaskMessagesStore((state) =>
-      logsExpanded ? state.runCommandLogs[taskId]?.[logCommandId] : undefined,
-    ) ?? null;
-
-  // Bump the generation before the IPC call so late chunks from the old
-  // generation are dropped instead of repopulating the box after the clear.
-  const resetRunCommandLogs = useTaskMessagesStore(
-    (state) => state.resetRunCommandLogs,
+  const stickyBuildCommandId =
+    stickyBuild?.taskId === taskId ? stickyBuild.commandId : null;
+  const virtualTabs = useMemo(
+    () =>
+      buildMobileDevVirtualTabs({
+        projectId,
+        devServerCommandId,
+        buildCommandId,
+        stickyBuildCommandId,
+        activeDevice,
+        // Build tabs are device-scoped; without the list two simulators on one
+        // platform would both render as plain "iOS build".
+        devices,
+      }),
+    [
+      activeDevice,
+      buildCommandId,
+      devServerCommandId,
+      devices,
+      projectId,
+      stickyBuildCommandId,
+    ],
   );
-  const handleClearLogs = useCallback(() => {
-    const generation = resetRunCommandLogs(taskId, logCommandId);
-    void api.runCommands.resetLogs({
-      taskId,
-      runCommandId: logCommandId,
-      generation,
-    });
-  }, [logCommandId, resetRunCommandLogs, taskId]);
 
-  // Scoped to the pane: ⌘K is already bound elsewhere (command logs pane, run
-  // commands overlay), so this must only fire while focus is inside here.
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
-        return;
-      }
-      if (event.key.toLowerCase() !== 'k') return;
+  // Tabs are only visible while their command is running or still holds output,
+  // so *any* of these ids -- including Metro's -- can be absent: a fresh task has
+  // no tabs at all, and clearing a stopped command's logs retires its tab.
+  // `CommandLogsSection` falls back to the first visible tab and, with none,
+  // shows `emptyText` instead of an empty log box. So a stale or retired
+  // selection degrades rather than blanking the pane.
+  const selectedCommandId = selectedLogTab ?? devServerCommandId;
 
-      const target = event.target;
-      if (!(target instanceof Node) || !paneRef.current?.contains(target)) {
-        return;
-      }
-
-      event.preventDefault();
-      handleClearLogs();
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleClearLogs]);
-
-  // Without this the pane never holds focus (clicks land on body, and the only
-  // focusable child is the log box, which exists only while expanded), so the
-  // containment gate above would reject every ⌘K. Interactive targets are left
-  // alone so the device combobox keeps managing its own focus.
-  const focusPane = useCallback((event: ReactMouseEvent) => {
-    const target = event.target;
-    if (
-      target instanceof HTMLElement &&
-      target.closest('input, textarea, select, button, [contenteditable]')
-    ) {
-      return;
-    }
-    paneRef.current?.focus();
-  }, []);
+  // Without this the pane never holds focus (clicks land on body), so the
+  // containment gate on the logs section's shortcuts would reject every ⌘K.
+  // Interactive targets are left alone so the device combobox and the log
+  // search box keep managing their own focus.
+  const focusPane = useCallback(
+    (event: ReactMouseEvent) => focusOnNonInteractiveMouseDown(paneRef)(event),
+    [],
+  );
 
   const handleSelectDevice = useCallback(
     (deviceKey: string) => {
@@ -974,6 +941,8 @@ export function MobileDevPane({
       onMouseDown={focusPane}
       style={{ width }}
       data-mobile-dev-pane
+      // The project panel defers ⌘F to whichever pane owns a command log.
+      data-command-logs-pane
       className="panel-edge-shadow bg-bg-0 relative flex h-full flex-col"
     >
       <div
@@ -998,10 +967,10 @@ export function MobileDevPane({
       </div>
       <Separator />
 
-      {/* Scrollable rather than shrink-0 so a short window clips nothing: the
-          controls keep their natural height and scroll internally instead of
-          pushing the logs (or the Start/Stop buttons) out of the pane. */}
-      <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-4 py-3">
+      {/* Fixed on top and capped: the controls keep their natural height and
+          scroll internally rather than either being clipped by a short window
+          or growing until they eat the log below. */}
+      <div className="flex max-h-[55%] shrink-0 flex-col gap-3 overflow-y-auto px-4 py-3">
         {/* Device */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
@@ -1327,91 +1296,21 @@ export function MobileDevPane({
 
       <Separator />
 
-      {/* Logs */}
-      <div className="flex shrink-0 items-center justify-between pr-2">
-        <button
-          type="button"
-          onClick={() => setLogsExpanded(!logsExpanded)}
-          className="text-ink-2 hover:bg-bg-1 flex flex-1 items-center gap-1.5 px-4 py-2 text-xs font-medium"
-          aria-expanded={logsExpanded}
-        >
-          <ChevronRight
-            aria-hidden
-            className={clsx(
-              'size-3.5 transition-transform',
-              logsExpanded && 'rotate-90',
-            )}
-          />
-          Logs
-        </button>
-        {/* Two streams share one box; the tabs say which one is shown. The
-            Build tab stays available while a watched build has output, even
-            after the device selection moved on. */}
-        <div className="flex items-center gap-1 pr-1">
-          <button
-            type="button"
-            onClick={() => {
-              setWatchedBuild(null);
-              setLogsExpanded(true);
-            }}
-            aria-pressed={!showingBuildLog}
-            className={clsx(
-              'rounded px-1.5 py-0.5 text-[11px] transition-colors',
-              !showingBuildLog
-                ? 'bg-acc/15 text-ink-1'
-                : 'text-ink-3 hover:bg-bg-1',
-            )}
-          >
-            Metro
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              // Falls back to the selected device's build when nothing is being
-              // watched yet; disabled when there is neither.
-              const commandId = watchedBuildCommandId ?? buildCommandId;
-              if (commandId) setWatchedBuild({ taskId, commandId });
-              setLogsExpanded(true);
-            }}
-            aria-pressed={showingBuildLog}
-            disabled={!watchedBuildCommandId && !buildCommandId}
-            className={clsx(
-              'rounded px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-40',
-              showingBuildLog
-                ? 'bg-acc/15 text-ink-1'
-                : 'text-ink-3 hover:bg-bg-1',
-            )}
-          >
-            Build
-          </button>
-        </div>
-        <IconButton
-          onClick={handleClearLogs}
-          size="sm"
-          icon={<Trash2 />}
-          tooltip="Clear logs (⌘K)"
-        />
-      </div>
-
-      {logsExpanded && (
-        <InteractiveLog
-          log={activeLog}
-          taskId={taskId}
-          runCommandId={logCommandId}
-          isRunning={showingBuildLog ? watchedBuildRunning : devServerRunning}
-          workingDir={workingDir}
-          ignoreBrowserShortcuts
-          emptyText={
-            showingBuildLog
-              ? 'Run Build to see output.'
-              : 'Start Metro to see output.'
-          }
-          // The floor matters because the logs box has flex-basis 0: without it
-          // flexbox hands every pixel of a squeeze to the controls block above
-          // and the log silently renders at zero height.
-          className="min-h-[120px] overflow-hidden"
-        />
-      )}
+      <CommandLogsSection
+        className="flex-1"
+        keyScopeRef={paneRef}
+        virtualTabs={virtualTabs}
+        emptyText="No logs yet. Start Metro or run a build to see output here."
+        selectedCommandId={selectedCommandId}
+        onSelectCommand={(id) => {
+          if (id) setSelectedLogTab(id);
+        }}
+        runCommands={runCommands}
+        commandAvailability={commandAvailability}
+        taskId={taskId}
+        projectId={projectId}
+        workingDir={workingDir}
+      />
     </div>
   );
 }

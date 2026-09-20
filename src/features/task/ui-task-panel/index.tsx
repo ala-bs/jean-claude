@@ -17,6 +17,7 @@ import {
   Search,
   Settings,
   Smartphone,
+  Terminal,
   Trash2,
 } from 'lucide-react';
 import type { ComponentProps, PointerEvent, ReactNode } from 'react';
@@ -176,6 +177,7 @@ import { PrWorkspaceEmptyState } from '@/features/task/ui-pr-workspace-empty-sta
 import { QuestionOptions } from '@/features/agent/ui-question-options';
 import { RunButton } from '@/features/agent/ui-run-button';
 import { Separator } from '@/common/ui/separator';
+import { setMobileDevPaneSelectedLogTab } from '@/stores/mobile-dev-pane';
 import { shouldShowPrWorkspaceEmptyState } from '@/features/task/ui-pr-workspace-empty-state';
 import { SkillPublishAction } from '@/features/task/ui-skill-publish-action';
 import type { SnippetVariableContext } from '@/lib/resolve-snippet-template';
@@ -1219,6 +1221,11 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     isPrWorkspaceOverview && isPaneHiddenOnPrWorkspaceOverview
       ? null
       : rightPane;
+  // The Mobile Dev pane owns cmd+L (and the run button's log chevron) whenever
+  // it is available. On the PR workspace overview it is force-closed, so the
+  // standalone command logs pane takes cmd+L back there.
+  const logsShortcutTargetsMobileDev =
+    mobileDevPaneEnabled && !isPrWorkspaceOverview;
 
   useEffect(() => {
     if (isPrWorkspaceOverview && isPaneHiddenOnPrWorkspaceOverview) {
@@ -2304,31 +2311,72 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       section: 'Task',
       handler: toggleReviewFiles,
     },
-    mobileDevPaneEnabled && {
-      label:
-        rightPane?.type === 'mobileDev'
-          ? 'Close Mobile Dev'
-          : 'Open Mobile Dev',
-      section: 'Task',
-      keywords: ['metro', 'simulator', 'emulator', 'device', 'mobile'],
-      handler: () => {
-        if (rightPane?.type === 'mobileDev') {
-          closeRightPane();
-        } else {
-          openMobileDev();
-        }
+    // Keeps the Mobile Dev pane reachable when cmd+L is routed to the
+    // standalone command logs pane. Shortcut-less on purpose — registering
+    // cmd+l here too would double-bind the key within a single scope. Skipped
+    // when the cmd+L entry below already *is* Mobile Dev, to avoid a duplicate
+    // palette row (that entry inherits these keywords in that case).
+    mobileDevPaneEnabled &&
+      !logsShortcutTargetsMobileDev && {
+        label:
+          rightPane?.type === 'mobileDev'
+            ? 'Close Mobile Dev'
+            : 'Open Mobile Dev',
+        section: 'Task',
+        keywords: ['metro', 'simulator', 'emulator', 'device', 'mobile'],
+        handler: () => {
+          if (rightPane?.type === 'mobileDev') {
+            closeRightPane();
+          } else {
+            openMobileDev();
+          }
+        },
       },
-    },
-    {
+    // Keeps the standalone logs pane reachable when cmd+L is routed to Mobile
+    // Dev. Shortcut-less on purpose — registering cmd+l here too would
+    // double-bind the key within a single scope. Skipped when the cmd+L entry
+    // below already *is* Command Logs, to avoid a duplicate palette row (that
+    // entry inherits these keywords in that case).
+    logsShortcutTargetsMobileDev && {
       label:
         rightPane?.type === 'commandLogs'
           ? 'Close Command Logs'
           : 'Open Command Logs',
-      shortcut: 'cmd+l',
       section: 'Task',
+      keywords: ['logs', 'terminal', 'run', 'command'],
       handler: () => {
         if (rightPane?.type === 'commandLogs') {
           closeRightPane();
+        } else {
+          openCommandLogs();
+        }
+      },
+    },
+    {
+      label: logsShortcutTargetsMobileDev
+        ? rightPane?.type === 'mobileDev'
+          ? 'Close Mobile Dev'
+          : 'Open Mobile Dev'
+        : rightPane?.type === 'commandLogs'
+          ? 'Close Command Logs'
+          : 'Open Command Logs',
+      // Static label for scripts/list-shortcuts.mjs (the live label is the
+      // ternary above): label: 'Toggle Mobile Dev / Command Logs'
+      shortcut: 'cmd+l',
+      section: 'Task',
+      // Inherits the keywords of whichever pane it currently targets, since the
+      // shortcut-less twin above is suppressed in that state.
+      keywords: logsShortcutTargetsMobileDev
+        ? ['metro', 'simulator', 'emulator', 'device', 'mobile']
+        : ['logs', 'terminal', 'run', 'command'],
+      handler: () => {
+        const target = logsShortcutTargetsMobileDev
+          ? 'mobileDev'
+          : 'commandLogs';
+        if (rightPane?.type === target) {
+          closeRightPane();
+        } else if (logsShortcutTargetsMobileDev) {
+          openMobileDev();
         } else {
           openCommandLogs();
         }
@@ -2692,16 +2740,35 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       workingDir={taskRootPath}
       dropdownRef={runButtonRef}
       onToggleLogs={() => {
-        if (rightPane?.type === 'commandLogs') {
+        const target = logsShortcutTargetsMobileDev
+          ? 'mobileDev'
+          : 'commandLogs';
+        if (rightPane?.type === target) {
           closeRightPane();
+        } else if (logsShortcutTargetsMobileDev) {
+          openMobileDev();
         } else {
           openCommandLogs();
         }
       }}
       onRunCommand={(runCommandIds) => {
-        openCommandLogs(runCommandIds[0] ?? null);
+        const first = runCommandIds[0] ?? null;
+        if (logsShortcutTargetsMobileDev) {
+          // Write the selected tab before opening so it applies whether or not
+          // the pane was already mounted.
+          if (first) {
+            setMobileDevPaneSelectedLogTab({ taskId, commandId: first });
+          }
+          openMobileDev();
+          return;
+        }
+        openCommandLogs(first);
       }}
-      isLogsPaneOpen={rightPane?.type === 'commandLogs'}
+      isLogsPaneOpen={
+        logsShortcutTargetsMobileDev
+          ? rightPane?.type === 'mobileDev'
+          : rightPane?.type === 'commandLogs'
+      }
       showAvailabilityState={!isPrWorkspaceOverview}
     />
   );
@@ -2967,6 +3034,19 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Mobile Dev
                   </DropdownItem>
                 )}
+                <DropdownItem
+                  icon={<Terminal />}
+                  onClick={() => {
+                    if (rightPane?.type === 'commandLogs') {
+                      closeRightPane();
+                    } else {
+                      openCommandLogs();
+                    }
+                  }}
+                  checked={rightPane?.type === 'commandLogs'}
+                >
+                  Command Logs
+                </DropdownItem>
 
                 <DropdownDivider />
 

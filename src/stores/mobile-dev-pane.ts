@@ -28,8 +28,8 @@ export type MobileDevPaneState = {
    * different simulators, and the pane is scoped to a task.
    */
   deviceByTaskId: Record<string, MobileDevPaneDeviceSelection>;
-  /** Collapsed/expanded state of the inline log tail, per task. */
-  logsExpandedByTaskId: Record<string, boolean>;
+  /** Which run command's logs are shown in the log tab strip, per task. */
+  selectedLogTabByTaskId: Record<string, string>;
   /**
    * Starred devices, keyed by `platform:deviceId`. Global rather than per task:
    * the handful of simulators someone actually uses is a property of their
@@ -40,7 +40,7 @@ export type MobileDevPaneState = {
     taskId: string,
     device: MobileDevPaneDeviceSelection | null,
   ) => void;
-  setLogsExpanded: (taskId: string, expanded: boolean) => void;
+  setSelectedLogTab: (taskId: string, commandId: string) => void;
   toggleFavoriteDevice: (device: MobileDevPaneDeviceSelection) => void;
   clearTask: (taskId: string) => void;
 };
@@ -99,12 +99,13 @@ function sanitizeDeviceRecord(value: unknown) {
   }, {});
 }
 
-function sanitizeBooleanRecord(value: unknown) {
+function sanitizeStringRecord(value: unknown) {
   if (!value || typeof value !== 'object') return {};
   return Object.entries(value as Record<string, unknown>).reduce<
-    Record<string, boolean>
+    Record<string, string>
   >((accumulator, [taskId, entry]) => {
-    if (typeof entry === 'boolean') accumulator[taskId] = entry;
+    if (typeof entry === 'string' && entry.length > 0)
+      accumulator[taskId] = entry;
     return accumulator;
   }, {});
 }
@@ -124,7 +125,9 @@ export function mergePersistedMobileDevPaneState(
   return {
     ...current,
     deviceByTaskId: sanitizeDeviceRecord(stored.deviceByTaskId),
-    logsExpandedByTaskId: sanitizeBooleanRecord(stored.logsExpandedByTaskId),
+    selectedLogTabByTaskId: capRecord(
+      sanitizeStringRecord(stored.selectedLogTabByTaskId),
+    ),
     // Drops entries whose key no longer matches their payload, so a renamed or
     // hand-edited key cannot produce a favorite that never matches a device.
     favoriteDevices: Object.fromEntries(
@@ -135,11 +138,30 @@ export function mergePersistedMobileDevPaneState(
   };
 }
 
+/**
+ * v1 stored a boolean `logsExpandedByTaskId`; the log tail is now a tab strip,
+ * so the old record is dropped rather than translated. Exported for tests: the
+ * persist middleware is inert under test.
+ */
+export function migrateMobileDevPaneState(persisted: unknown, version: number) {
+  if (version >= 2 || !persisted || typeof persisted !== 'object') {
+    return persisted as MobileDevPaneState;
+  }
+  const { logsExpandedByTaskId: _dropped, ...rest } = persisted as Record<
+    string,
+    unknown
+  >;
+  return {
+    ...rest,
+    selectedLogTabByTaskId: {},
+  } as unknown as MobileDevPaneState;
+}
+
 export const useMobileDevPaneStore = create<MobileDevPaneState>()(
   persist(
     (set) => ({
       deviceByTaskId: {},
-      logsExpandedByTaskId: {},
+      selectedLogTabByTaskId: {},
       favoriteDevices: {},
 
       selectDevice: (taskId, device) =>
@@ -154,11 +176,13 @@ export const useMobileDevPaneStore = create<MobileDevPaneState>()(
             : omitKey(state.deviceByTaskId, taskId),
         })),
 
-      setLogsExpanded: (taskId, expanded) =>
+      setSelectedLogTab: (taskId, commandId) =>
         set((state) => ({
-          logsExpandedByTaskId: capRecord({
-            ...omitKey(state.logsExpandedByTaskId, taskId),
-            [taskId]: expanded,
+          selectedLogTabByTaskId: capRecord({
+            // Re-insert the key so the most recently used task sorts last
+            // and survives capping.
+            ...omitKey(state.selectedLogTabByTaskId, taskId),
+            [taskId]: commandId,
           }),
         })),
 
@@ -179,18 +203,19 @@ export const useMobileDevPaneStore = create<MobileDevPaneState>()(
       clearTask: (taskId) =>
         set((state) => ({
           deviceByTaskId: omitKey(state.deviceByTaskId, taskId),
-          logsExpandedByTaskId: omitKey(state.logsExpandedByTaskId, taskId),
+          selectedLogTabByTaskId: omitKey(state.selectedLogTabByTaskId, taskId),
         })),
     }),
     {
       name: 'mobile-dev-pane',
-      version: 1,
+      version: 2,
       merge: mergePersistedMobileDevPaneState,
       partialize: (state) => ({
         deviceByTaskId: state.deviceByTaskId,
-        logsExpandedByTaskId: state.logsExpandedByTaskId,
+        selectedLogTabByTaskId: state.selectedLogTabByTaskId,
         favoriteDevices: state.favoriteDevices,
       }),
+      migrate: migrateMobileDevPaneState,
     },
   ),
 );
@@ -203,7 +228,19 @@ export function clearMobileDevPaneStateForTask(taskId: string) {
   useMobileDevPaneStore.getState().clearTask(taskId);
 }
 
-const DEFAULT_LOGS_EXPANDED = true;
+/**
+ * Imperative log-tab setter for callers outside React (e.g. a command that
+ * focuses a run's logs when it starts).
+ */
+export function setMobileDevPaneSelectedLogTab({
+  taskId,
+  commandId,
+}: {
+  taskId: string;
+  commandId: string;
+}) {
+  useMobileDevPaneStore.getState().setSelectedLogTab(taskId, commandId);
+}
 
 /**
  * Favorites accessor. Returns the raw record (a stable reference) rather than a
@@ -228,14 +265,14 @@ export function useMobileDevPaneTaskState(taskId: string) {
   const selectedDevice = useMobileDevPaneStore(
     (state) => state.deviceByTaskId[taskId] ?? null,
   );
-  const logsExpanded = useMobileDevPaneStore(
-    (state) => state.logsExpandedByTaskId[taskId] ?? DEFAULT_LOGS_EXPANDED,
+  const selectedLogTab = useMobileDevPaneStore(
+    (state) => state.selectedLogTabByTaskId[taskId] ?? null,
   );
   const selectDeviceAction = useMobileDevPaneStore(
     (state) => state.selectDevice,
   );
-  const setLogsExpandedAction = useMobileDevPaneStore(
-    (state) => state.setLogsExpanded,
+  const setSelectedLogTabAction = useMobileDevPaneStore(
+    (state) => state.setSelectedLogTab,
   );
 
   const selectDevice = useCallback(
@@ -243,10 +280,10 @@ export function useMobileDevPaneTaskState(taskId: string) {
       selectDeviceAction(taskId, device),
     [taskId, selectDeviceAction],
   );
-  const setLogsExpanded = useCallback(
-    (expanded: boolean) => setLogsExpandedAction(taskId, expanded),
-    [taskId, setLogsExpandedAction],
+  const setSelectedLogTab = useCallback(
+    (commandId: string) => setSelectedLogTabAction(taskId, commandId),
+    [taskId, setSelectedLogTabAction],
   );
 
-  return { selectedDevice, logsExpanded, selectDevice, setLogsExpanded };
+  return { selectedDevice, selectedLogTab, selectDevice, setSelectedLogTab };
 }
