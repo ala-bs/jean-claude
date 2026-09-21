@@ -860,7 +860,7 @@ export function NewTaskOverlay({
   const {
     profile: effectiveProfile,
     profiles,
-    activeProfileId,
+    effectiveProfileId,
   } = useEffectiveModelProfile(selectedProjectId);
   // Revision 1: presets and the quick list are owned by a profile, and the one
   // that counts here is the *effective* profile — the project may pin a
@@ -881,7 +881,7 @@ export function NewTaskOverlay({
     () =>
       resolveAgentModelSelection({
         profiles,
-        activeProfileId,
+        activeProfileId: effectiveProfileId,
         policy: effectivePolicy?.policy ?? null,
         enabledBackends: backendsSetting?.enabledBackends,
         draft: {
@@ -892,13 +892,13 @@ export function NewTaskOverlay({
         },
       }),
     [
-      activeProfileId,
       backendsSetting?.enabledBackends,
       draft?.agentBackend,
       draft?.backendModelPresetId,
       draft?.modelPreference,
       draft?.thinkingEffort,
       effectivePolicy?.policy,
+      effectiveProfileId,
       profiles,
     ],
   );
@@ -939,11 +939,10 @@ export function NewTaskOverlay({
         availableModels: availableModelPreferences,
         areModelsFetched: areBackendModelsFetched,
         profiles,
-        activeProfileId,
+        activeProfileId: effectiveProfileId,
         policy: effectivePolicy?.policy ?? null,
       }),
     [
-      activeProfileId,
       areBackendModelsFetched,
       availableModelPreferences,
       backendsSetting?.enabledBackends,
@@ -953,6 +952,7 @@ export function NewTaskOverlay({
       draft?.modelPreference,
       draft?.shouldAutoSelectBackendModelPreset,
       effectivePolicy?.policy,
+      effectiveProfileId,
       profilePresets,
       profiles,
       quickPresetIds,

@@ -11,6 +11,7 @@ import type {
 const state = vi.hoisted(() => ({
   profiles: [] as ModelProfile[],
   activeProfileId: null as string | null,
+  effectiveProfileId: null as string | null,
   policy: undefined as EffectiveProjectModelPolicy | undefined,
   activate: vi.fn(),
   openOverlay: vi.fn(),
@@ -22,6 +23,15 @@ vi.mock('@/hooks/use-model-profiles', () => ({
     activeProfileId: state.activeProfileId,
     profile: state.profiles.find(
       (entry) => entry.id === state.activeProfileId,
+    ),
+    isLoading: false,
+  }),
+  useEffectiveModelProfile: () => ({
+    profiles: state.profiles,
+    activeProfileId: state.activeProfileId,
+    effectiveProfileId: state.effectiveProfileId,
+    profile: state.profiles.find(
+      (entry) => entry.id === (state.effectiveProfileId ?? state.activeProfileId),
     ),
     isLoading: false,
   }),
@@ -128,6 +138,7 @@ describe('ModelProfileSwitcher', () => {
   beforeEach(() => {
     state.profiles = PROFILES;
     state.activeProfileId = 'anthropic';
+    state.effectiveProfileId = null;
     state.policy = undefined;
     state.activate = vi.fn();
     state.openOverlay = vi.fn();
@@ -266,6 +277,22 @@ describe('ModelProfileSwitcher', () => {
     const labels = menuItems().map((item) => item.textContent ?? '');
     expect(labels.some((label) => label.includes('Codex fallback'))).toBe(true);
     expect(labels.some((label) => label.includes('Anthropic'))).toBe(false);
+  });
+
+  it('displays the project-effective profile when the global profile is disallowed', async () => {
+    state.policy = {
+      policy: { mode: 'enforce', allowedProfileIds: ['codex'] },
+      source: 'project',
+    };
+    state.effectiveProfileId = 'codex';
+
+    await render('project-1');
+
+    const trigger = container.querySelector('button[aria-haspopup="menu"]');
+    expect(trigger?.textContent).toContain('Codex fallback');
+    expect(container.querySelector('[aria-current="true"]')?.textContent).toContain(
+      'Codex fallback',
+    );
   });
 
   it('keeps every profile selectable under prefer', async () => {

@@ -85,7 +85,8 @@ export const PROJECT_MODEL_POLICY_QUERY_KEY = [
  * stays right for genuinely global decisions (e.g. which profiles the switcher
  * lets you switch between).
  *
- * With no `projectId` this behaves exactly like `useActiveModelProfile`.
+ * With no `projectId` this follows the global active profile, falling back to
+ * the first profile for a deterministic UI default when no profile is active.
  */
 export function useEffectiveModelProfile(projectId?: string | null) {
   const normalizedProjectId = projectId ?? null;
@@ -105,7 +106,11 @@ export function useEffectiveModelProfile(projectId?: string | null) {
 
   const profile = useMemo<ModelProfile | undefined>(
     () =>
-      pickEffectiveProfile({ profiles, activeProfileId, policy }) ?? undefined,
+      // Keep the shared resolver's null result for main-process fallback
+      // semantics, but give the UI a deterministic initial profile when the
+      // settings have not selected one yet.
+      pickEffectiveProfile({ profiles, activeProfileId, policy }) ??
+      profiles[0],
     [activeProfileId, policy, profiles],
   );
 

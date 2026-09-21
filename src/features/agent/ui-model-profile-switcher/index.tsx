@@ -18,6 +18,7 @@ import {
 import {
   useActivateModelProfile,
   useActiveModelProfile,
+  useEffectiveModelProfile,
 } from '@/hooks/use-model-profiles';
 import { api } from '@/lib/api';
 import type { BindingKey } from '@/common/context/keyboard-bindings/types';
@@ -88,7 +89,13 @@ export function ModelProfileSwitcher({
   side?: 'top' | 'bottom';
   className?: string;
 }) {
-  const { profile: activeProfile, profiles } = useActiveModelProfile();
+  const { profiles } = useActiveModelProfile();
+  // The global active profile is not necessarily the profile this project can
+  // use. The policy-aware profile must drive both the trigger and selection
+  // marker, otherwise the header can display Anthropic while this project
+  // resolves Codex.
+  const { profile: effectiveProfile } = useEffectiveModelProfile(projectId);
+  const activeProfile = effectiveProfile;
   const activate = useActivateModelProfile();
   const openOverlay = useOverlaysStore((state) => state.open);
   const [isOverrideOpen, setIsOverrideOpen] = useState(false);

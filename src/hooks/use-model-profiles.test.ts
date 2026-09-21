@@ -340,6 +340,16 @@ describe('useEffectiveModelProfile', () => {
     });
   });
 
+  it('defaults the UI to the first profile when none is active', async () => {
+    const seen = await renderEffective({
+      activeProfileId: null,
+      projectId: 'project-1',
+    });
+    await act(async () => {
+      await vi.waitFor(() => expect(seen.at(-1)?.id).toBe('anthropic'));
+    });
+  });
+
   it('returns the pinned profile under `enforce`', async () => {
     const seen = await renderEffective({
       activeProfileId: 'anthropic',

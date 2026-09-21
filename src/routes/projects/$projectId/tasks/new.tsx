@@ -135,7 +135,7 @@ function NewTask() {
   const {
     profile: effectiveProfile,
     profiles,
-    activeProfileId,
+    effectiveProfileId,
   } = useEffectiveModelProfile(projectId);
   // Revision 1: presets and the quick list are owned by a profile, and the one
   // that counts here is the *effective* profile — the project may pin a
@@ -155,7 +155,7 @@ function NewTask() {
     () =>
       resolveAgentModelSelection({
         profiles,
-        activeProfileId,
+        activeProfileId: effectiveProfileId,
         policy: effectivePolicy?.policy ?? null,
         enabledBackends: backendsSetting?.enabledBackends,
         draft: {
@@ -166,11 +166,11 @@ function NewTask() {
         },
       }),
     [
-      activeProfileId,
       agentBackend,
       backendModelPresetId,
       backendsSetting?.enabledBackends,
       effectivePolicy?.policy,
+      effectiveProfileId,
       modelPreference,
       profiles,
       thinkingEffort,
