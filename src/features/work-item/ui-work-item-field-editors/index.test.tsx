@@ -125,7 +125,8 @@ describe('WorkItemOwnerEditor', () => {
       providerId: 'p1',
       workItemId: 42,
       field: 'System.AssignedTo',
-      value: 'ada@example.com',
+      // Disambiguated form: a bare email can match several Azure identities.
+      value: 'Ada Lovelace <ada@example.com>',
     });
   });
 

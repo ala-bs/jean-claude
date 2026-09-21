@@ -380,3 +380,23 @@ export function getIterationPath(
 ): string | undefined {
   return getStringField(item, FIELD_ITERATION_PATH);
 }
+
+/**
+ * Azure resolves `System.AssignedTo` by string match. Sending a bare email
+ * fails with `WorkItemFieldInvalidException` (errorCode 600171) whenever the
+ * org holds more than one identity behind that address — typically a stale
+ * identity whose display name *is* the email plus the real AAD user. The
+ * unambiguous form Azure documents is `Display Name <unique.name>`, so build
+ * that whenever we know both halves.
+ */
+export function formatAssignedToValue(owner: {
+  displayName?: string | null;
+  value?: string | null;
+}): string {
+  const displayName = owner.displayName?.trim() ?? '';
+  const value = owner.value?.trim() ?? '';
+  if (!value) return '';
+  // Already a combined `Name <unique>` string, or nothing extra to add.
+  if (value.includes('<') || !displayName || displayName === value) return value;
+  return `${displayName} <${value}>`;
+}

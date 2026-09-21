@@ -20,6 +20,7 @@ import {
   FIELD_TEAM_PROJECT,
   FIELD_TITLE,
   FIELD_WORK_ITEM_TYPE,
+  formatAssignedToValue,
   getAcceptanceCriteriaHtml,
   getAssignee,
   getBoardColumn,
@@ -280,5 +281,34 @@ describe('core field constants', () => {
       expect(CORE_FIELD_REFNAMES, refName).toContain(refName);
       expect(CORE_FIELD_METADATA[refName].readOnly, refName).toBe(false);
     }
+  });
+});
+
+describe('formatAssignedToValue', () => {
+  it('combines display name and unique name so Azure resolves one identity', () => {
+    expect(
+      formatAssignedToValue({
+        displayName: 'Belén Reyes',
+        value: 'Belen.Reyes@squirel.fr',
+      }),
+    ).toBe('Belén Reyes <Belen.Reyes@squirel.fr>');
+  });
+
+  it('keeps unassigned empty so the patch stays a remove', () => {
+    expect(formatAssignedToValue({ displayName: 'Unassigned', value: '' })).toBe(
+      '',
+    );
+  });
+
+  it('leaves display-name-only and already-combined values untouched', () => {
+    expect(
+      formatAssignedToValue({
+        displayName: 'Ada Lovelace',
+        value: 'Ada Lovelace',
+      }),
+    ).toBe('Ada Lovelace');
+    expect(
+      formatAssignedToValue({ displayName: 'Ada', value: 'Ada <ada@x.io>' }),
+    ).toBe('Ada <ada@x.io>');
   });
 });

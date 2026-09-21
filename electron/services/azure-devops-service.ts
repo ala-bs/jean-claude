@@ -949,6 +949,14 @@ export async function queryWorkItems(params: {
   });
 }
 
+/**
+ * True when an owner record carries no real display name — its display name is
+ * just the unique name (email) again, which cannot disambiguate anything.
+ */
+function isDegenerateOwner(owner: { displayName: string; value: string }): boolean {
+  return owner.displayName.toLocaleLowerCase() === owner.value.toLocaleLowerCase();
+}
+
 export async function queryWorkItemOwners(params: {
   providerId: string;
   projectName: string;
@@ -1014,9 +1022,17 @@ export async function queryWorkItemOwners(params: {
       );
       const displayName = identity?.displayName.trim();
       const value = identity?.uniqueName?.trim() || displayName;
-      if (displayName && value && !ownersByKey.has(value.toLocaleLowerCase())) {
-        ownersByKey.set(value.toLocaleLowerCase(), { displayName, value });
-      }
+      if (!displayName || !value) continue;
+      const key = value.toLocaleLowerCase();
+      const existing = ownersByKey.get(key);
+      // An address can carry several Azure identities — typically a stale one
+      // whose display name *is* the address, plus the real user. Only a record
+      // with a distinct display name can be written back as the unambiguous
+      // `Display Name <unique>` form, so upgrade to it rather than keeping
+      // whichever identity the parallel batch scan happened to see first.
+      if (existing && !isDegenerateOwner(existing)) continue;
+      if (existing && isDegenerateOwner({ displayName, value })) continue;
+      ownersByKey.set(key, { displayName, value });
     }
   }
   return [...ownersByKey.values()].sort((a, b) =>

@@ -3,6 +3,7 @@ import { useCallback, useRef } from 'react';
 
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import { getOwnerColor, normalizeOwnerName } from '@/features/work-item/utils-owner-color';
+import { formatAssignedToValue } from '@shared/work-item-field-types';
 import { UserAvatar } from '@/common/ui/user-avatar';
 import { useUpdateWorkItemField } from '@/hooks/use-work-items';
 
@@ -114,7 +115,9 @@ export function WorkItemOwnerEditor({
         providerId,
         workItemId,
         field: 'System.AssignedTo',
-        value: nextOwner.value,
+        // Bare emails can be ambiguous in Azure when several identities share
+        // an address; `Display Name <email>` always resolves to one.
+        value: formatAssignedToValue(nextOwner),
       });
     },
     [currentOwnerValue, providerId, updateField, workItemId],

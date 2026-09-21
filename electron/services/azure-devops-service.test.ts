@@ -773,6 +773,62 @@ describe('queryWorkItemOwners', () => {
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
+
+  it('prefers the identity with a real display name over a stale email-named one', async () => {
+    // Same address, two identities: the stale one is seen FIRST. Keeping it
+    // would leave the owner unable to be written back as `Name <unique>`.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            workItems: [
+              { id: 1, url: 'work-item-1' },
+              { id: 2, url: 'work-item-2' },
+            ],
+          },
+          { ok: true },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            count: 2,
+            value: [
+              {
+                id: 1,
+                fields: {
+                  'System.AssignedTo': {
+                    displayName: 'belen.reyes@squirel.fr',
+                    uniqueName: 'belen.reyes@squirel.fr',
+                  },
+                },
+              },
+              {
+                id: 2,
+                fields: {
+                  'System.AssignedTo': {
+                    displayName: 'Belén Reyes',
+                    uniqueName: 'Belen.Reyes@squirel.fr',
+                  },
+                },
+              },
+            ],
+          },
+          { ok: true },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      queryWorkItemOwners({
+        providerId: 'provider-1',
+        projectName: 'Team Project',
+      }),
+    ).resolves.toEqual([
+      { displayName: 'Belén Reyes', value: 'Belen.Reyes@squirel.fr' },
+    ]);
+  });
 });
 
 describe('buildIterationPathsCondition', () => {
