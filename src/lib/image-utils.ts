@@ -126,6 +126,7 @@ export async function processImageFile(
     data: agent.data,
     mimeType: agent.mimeType,
     filename: file.name,
+    sizeBytes: file.size,
     width,
     height,
     storageData: storage.data,

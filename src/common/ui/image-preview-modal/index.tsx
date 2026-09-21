@@ -5,6 +5,7 @@ import {
   KeyboardLayerProvider,
   useKeyboardLayer,
 } from '@/common/context/keyboard-bindings';
+import { formatBytes } from '@/lib/format-bytes';
 import { Modal } from '@/common/ui/modal';
 import { ZoomableImage } from '@/common/ui/zoomable-image';
 
@@ -12,6 +13,7 @@ export type PreviewImage = {
   src?: string;
   alt?: string;
   fallbackLabel?: string;
+  sizeBytes?: number;
 };
 
 // Fit the panel to the image instead of the Modal size presets.
@@ -121,6 +123,17 @@ export function ImagePreviewModal({
         {count > 1 && (
           <div className="text-ink-2 fixed bottom-4 left-1/2 -translate-x-1/2 text-sm">
             {currentIndex + 1} / {count}
+          </div>
+        )}
+
+        {current.sizeBytes !== undefined && (
+          <div className="bg-bg-1/80 text-ink-1 fixed bottom-4 left-4 flex max-w-[70vw] items-center gap-2 rounded px-2.5 py-1 text-xs backdrop-blur-sm">
+            {current.alt && (
+              <span className="inline-block max-w-[50vw] truncate align-bottom">
+                {current.alt}
+              </span>
+            )}
+            <span>{formatBytes(current.sizeBytes)}</span>
           </div>
         )}
       </Modal>

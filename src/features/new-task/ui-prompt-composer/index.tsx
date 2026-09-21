@@ -1371,6 +1371,7 @@ export function ImagePreviewDialog({
         src: previewUrls[index],
         alt: img.filename || 'Image preview',
         fallbackLabel: img.filename ?? img.mimeType,
+        sizeBytes: img.sizeBytes,
       }))}
       initialIndex={initialIndex}
       onClose={onClose}
