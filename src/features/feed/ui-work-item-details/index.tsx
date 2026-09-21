@@ -10,6 +10,7 @@ import {
   Link2,
   Loader2,
   MessagesSquare,
+  Paperclip,
   RefreshCw,
   X,
 } from 'lucide-react';
@@ -24,9 +25,10 @@ import {
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
 
-import type {
-  AzureDevOpsPullRequestStatus,
-  AzureDevOpsWorkItem,
+import {
+  api,
+  type AzureDevOpsPullRequestStatus,
+  type AzureDevOpsWorkItem,
 } from '@/lib/api';
 import {
   collectExtraFieldRefNames,
@@ -101,7 +103,7 @@ import { WorkItemTabButton } from '@/features/work-item/ui-work-item-tab-button'
 import { WorkItemTagEditor } from '@/features/work-item/ui-work-item-tag-editor';
 import { WorkItemTypeIcon } from '@/features/work-item/ui-work-item-shared';
 
-type DetailsTab = 'comments' | 'history' | 'test-cases';
+type DetailsTab = 'attachments' | 'comments' | 'history' | 'test-cases';
 
 type LinkDetailModal =
   | { type: 'work-item'; workItemId: number }
@@ -274,6 +276,8 @@ export function WorkItemDetails({
   }, [workItem, linkedWorkItems, relatedTestCases]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [isUploadingAttachments, setIsUploadingAttachments] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const handleRefresh = useCallback(() => {
     setIsRefreshing(true);
     void Promise.allSettled([
@@ -319,6 +323,51 @@ export function WorkItemDetails({
     if (!workItemUrl) return;
     window.open(workItemUrl, '_blank', 'noopener,noreferrer');
   }, [workItemUrl]);
+
+  async function handleAttachDocuments(files: FileList | null) {
+      if (!files || !providerId || !projectName || isUploadingAttachments) return;
+      setAttachmentError(null);
+      setIsUploadingAttachments(true);
+      const failures: string[] = [];
+      try {
+        for (const file of [...files]) {
+          if (file.size === 0) {
+            failures.push(`${file.name}: empty files cannot be attached`);
+            continue;
+          }
+          if (file.size > 50 * 1024 * 1024) {
+            failures.push(`${file.name}: files must be 50 MB or smaller`);
+            continue;
+          }
+          try {
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            let binary = '';
+            const chunkSize = 0x8000;
+            for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+              binary += String.fromCharCode(
+                ...bytes.subarray(offset, offset + chunkSize),
+              );
+            }
+            await api.azureDevOps.uploadWorkItemAttachment({
+              providerId,
+              projectName,
+              workItemId,
+              filename: file.name,
+              mimeType: file.type || 'application/octet-stream',
+              base64: btoa(binary),
+            });
+          } catch (error) {
+            failures.push(
+              `${file.name}: ${error instanceof Error ? error.message : 'upload failed'}`,
+            );
+          }
+        }
+        await refetchWorkItem();
+      } finally {
+        setIsUploadingAttachments(false);
+        if (failures.length > 0) setAttachmentError(failures.join('\n'));
+      }
+  }
 
   useRegisterKeyboardBindings(`work-item-details:${workItemId}`, {
     'cmd+shift+c': () => {
@@ -433,11 +482,13 @@ export function WorkItemDetails({
   const showCommentsTab = isTabVisible('comments');
   const showHistoryTab = isTabVisible('history');
   const showTestCasesTab = hasTestCases && isTabVisible('testCases');
+  const showAttachmentsTab = isTabVisible('attachments');
   // A tab the config hides must not stay selected. Derived rather than fixed in
   // an effect: everything here runs after the loading/error bail-outs, so a
   // hook at this point would change the render's hook count.
   const visibleTabs = (
     [
+      showAttachmentsTab ? 'attachments' : null,
       showCommentsTab ? 'comments' : null,
       showHistoryTab ? 'history' : null,
       showTestCasesTab ? 'test-cases' : null,
@@ -810,6 +861,15 @@ export function WorkItemDetails({
           />
 
           <div className="border-glass-border flex gap-0 border-b px-3">
+            {showAttachmentsTab && (
+              <WorkItemTabButton
+                active={effectiveTab === 'attachments'}
+                onClick={() => setActiveTab('attachments')}
+                icon={<Paperclip className="h-3.5 w-3.5" />}
+                label="Attachments"
+                count={workItem.attachments?.length ?? 0}
+              />
+            )}
             {showCommentsTab && (
               <WorkItemTabButton
                 active={effectiveTab === 'comments'}
@@ -840,6 +900,15 @@ export function WorkItemDetails({
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            {effectiveTab === 'attachments' && (
+              <WorkItemAttachments
+                attachments={workItem.attachments ?? []}
+                disabled={!providerId || !projectName || isUploadingAttachments}
+                isUploading={isUploadingAttachments}
+                error={attachmentError}
+                onSelect={handleAttachDocuments}
+              />
+            )}
             {effectiveTab === 'comments' && (
               <WorkItemComments
                 comments={comments}
@@ -905,6 +974,77 @@ export function WorkItemDetails({
         onClose={() => setLinkDetailModal(null)}
       />
     </div>
+  );
+}
+
+function WorkItemAttachments({
+  attachments,
+  disabled,
+  isUploading,
+  error,
+  onSelect,
+}: {
+  attachments: Array<{ name: string; url: string }>;
+  disabled: boolean;
+  isUploading: boolean;
+  error: string | null;
+  onSelect: (files: FileList | null) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <section className="border-glass-border/50 shrink-0 border-b px-4 py-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="text-ink-1 flex items-center gap-1.5 text-xs font-semibold">
+          <Paperclip className="h-3.5 w-3.5" />
+          Attachments
+          {attachments.length > 0 && (
+            <span className="text-ink-4">({attachments.length})</span>
+          )}
+        </h2>
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            onSelect(event.target.files);
+            event.target.value = '';
+          }}
+        />
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => inputRef.current?.click()}
+          className="text-ink-2 hover:text-ink-1 disabled:text-ink-4 flex items-center gap-1 rounded px-1.5 py-1 text-[11px] disabled:cursor-default"
+        >
+          <Paperclip className="h-3 w-3" />
+          {isUploading ? 'Uploading…' : 'Attach document'}
+        </button>
+      </div>
+      {attachments.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          {attachments.map((attachment) => (
+            <a
+              key={attachment.url}
+              href={attachment.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-acc-ink hover:text-acc flex min-w-0 items-center gap-1.5 truncate text-xs"
+              title={attachment.name}
+            >
+              <FileText className="h-3 w-3 shrink-0" />
+              <span className="truncate">{attachment.name}</span>
+              <ExternalLink className="h-3 w-3 shrink-0" />
+            </a>
+          ))}
+        </div>
+      ) : (
+        <p className="text-ink-4 text-[11px]">No documents attached.</p>
+      )}
+      {error && (
+        <p className="text-danger mt-2 whitespace-pre-line text-[11px]">{error}</p>
+      )}
+    </section>
   );
 }
 

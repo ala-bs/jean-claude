@@ -631,6 +631,7 @@ contextBridge.exposeInMainWorld('api', {
     uploadWorkItemAttachment: (params: {
       providerId: string;
       projectName: string;
+      workItemId?: number;
       filename: string;
       mimeType: string;
       base64: string;

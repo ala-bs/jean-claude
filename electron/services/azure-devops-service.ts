@@ -127,6 +127,7 @@ export interface AzureDevOpsWorkItem {
   relatedWorkItemIds?: number[];
   linkedPrs?: LinkedPr[];
   relatedTestCaseIds?: number[];
+  attachments?: Array<{ name: string; url: string }>;
   /**
    * Extra refNames Azure refused (F3). Present only when the request had to be
    * retried without the configured extras.
@@ -311,6 +312,28 @@ interface WorkItemRelation {
     name?: string;
     isLocked?: boolean;
   };
+}
+
+function extractWorkItemAttachments(
+  relations?: WorkItemRelation[],
+): Array<{ name: string; url: string }> {
+  if (!relations) return [];
+  return relations
+    .filter((relation) => relation.rel === 'AttachedFile')
+    .map((relation) => {
+      let name = relation.attributes.name?.trim() ?? '';
+      if (!name) {
+        try {
+          name = new URL(relation.url).searchParams.get('fileName') ?? '';
+        } catch {
+          // Keep the safe fallback below for malformed provider URLs.
+        }
+      }
+      return {
+        name: name || 'Untitled attachment',
+        url: relation.url,
+      };
+    });
 }
 
 interface WorkItemsBatchResponse {
@@ -1103,6 +1126,7 @@ export async function queryAssignedWorkItems(params: {
     relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
     linkedPrs: extractLinkedPrs(wi.relations),
     relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
+    attachments: extractWorkItemAttachments(wi.relations),
   }));
 }
 
@@ -1335,6 +1359,7 @@ export async function getWorkItemById(params: {
     relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
     linkedPrs: extractLinkedPrs(wi.relations),
     relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
+    attachments: extractWorkItemAttachments(wi.relations),
   };
   if (partialFieldFailure) item.partialFieldFailure = partialFieldFailure;
   return item;
@@ -2100,21 +2125,16 @@ export async function addWorkItemComment(params: {
 export async function uploadWorkItemAttachment(params: {
   providerId: string;
   projectName: string;
+  workItemId?: number;
   filename: string;
   mimeType: string;
   base64: string;
 }): Promise<{ url: string }> {
-  const supportedMimeTypes = new Set([
-    'image/gif',
-    'image/jpeg',
-    'image/png',
-    'image/webp',
-  ]);
-  if (!supportedMimeTypes.has(params.mimeType)) {
-    throw new Error('Only image attachments are supported');
+  if (!params.filename.trim() || params.filename.length > 255) {
+    throw new Error('Attachment filename must be between 1 and 255 characters');
   }
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(params.base64) || params.base64.length % 4 !== 0) {
-    throw new Error('Invalid image attachment data');
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(params.base64) || params.base64.length % 4 !== 0) {
+    throw new Error('Invalid attachment data');
   }
   const padding = params.base64.endsWith('==')
     ? 2
@@ -2123,19 +2143,14 @@ export async function uploadWorkItemAttachment(params: {
       : 0;
   const decodedSize = (params.base64.length / 4) * 3 - padding;
   if (decodedSize > 50 * 1024 * 1024) {
-    throw new Error('Image attachment exceeds 50 MB');
+    throw new Error('Attachment exceeds 50 MB');
   }
   const content = Buffer.from(params.base64, 'base64');
-  const hasValidSignature =
-    (params.mimeType === 'image/gif' && content.toString('ascii', 0, 3) === 'GIF') ||
-    (params.mimeType === 'image/jpeg' && content[0] === 0xff && content[1] === 0xd8) ||
-    (params.mimeType === 'image/png' && content.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
-    (params.mimeType === 'image/webp' && content.toString('ascii', 0, 4) === 'RIFF' && content.toString('ascii', 8, 12) === 'WEBP');
-  if (!hasValidSignature || content.length === 0) {
-    throw new Error('Image attachment content does not match MIME type');
+  if (content.length === 0) {
+    throw new Error('Attachment cannot be empty');
   }
   if (content.length > 50 * 1024 * 1024) {
-    throw new Error('Image attachment exceeds 50 MB');
+    throw new Error('Attachment exceeds 50 MB');
   }
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
   const url = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/attachments?fileName=${encodeURIComponent(params.filename)}&api-version=7.0`;
@@ -2149,6 +2164,32 @@ export async function uploadWorkItemAttachment(params: {
   }
   const result: { url?: string } = await response.json();
   if (!result.url) throw new Error('Azure DevOps did not return an attachment URL');
+  if (params.workItemId !== undefined) {
+    const workItemUrl = `https://dev.azure.com/${orgName}/_apis/wit/workitems/${params.workItemId}?api-version=7.0`;
+    const linkResponse = await fetch(workItemUrl, {
+      method: 'PATCH',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json-patch+json',
+      },
+      body: JSON.stringify([
+        {
+          op: 'add',
+          path: '/relations/-',
+          value: {
+            rel: 'AttachedFile',
+            url: result.url,
+            attributes: { name: params.filename },
+          },
+        },
+      ]),
+    });
+    if (!linkResponse.ok) {
+      throw new Error(
+        `Attachment uploaded but could not be linked to work item ${params.workItemId}: ${await linkResponse.text()}`,
+      );
+    }
+  }
   return { url: result.url };
 }
 

@@ -53,6 +53,7 @@ import {
   updateWorkItemBoardColumn,
   sniffImageExtension,
   uploadPullRequestAttachment,
+  uploadWorkItemAttachment,
 } from './azure-devops-service';
 
 describe('getWorkItemById', () => {
@@ -1566,6 +1567,59 @@ describe('uploadPullRequestAttachment', () => {
     // Uploading must not depend on a pull request ownership lookup.
     const urls = vi.mocked(fetch).mock.calls.map(([input]) => String(input));
     expect(urls.some((url) => url.includes('/pullrequests/123?'))).toBe(false);
+  });
+});
+
+describe('uploadWorkItemAttachment', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('uploads arbitrary content and links it to the work item', async () => {
+    const attachmentUrl =
+      'https://dev.azure.com/org/Project/_apis/wit/attachments/attachment-id?fileName=spec.pdf';
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse({ url: attachmentUrl }, { ok: true }))
+      .mockResolvedValueOnce(jsonResponse({}, { ok: true }));
+
+    await expect(
+      uploadWorkItemAttachment({
+        providerId: 'provider-1',
+        projectName: 'Project',
+        workItemId: 299,
+        filename: 'spec.pdf',
+        mimeType: 'application/pdf',
+        base64: Buffer.from('%PDF arbitrary bytes').toString('base64'),
+      }),
+    ).resolves.toEqual({ url: attachmentUrl });
+
+    expect(vi.mocked(fetch).mock.calls[1]).toEqual([
+      'https://dev.azure.com/org/_apis/wit/workitems/299?api-version=7.0',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify([
+          {
+            op: 'add',
+            path: '/relations/-',
+            value: {
+              rel: 'AttachedFile',
+              url: attachmentUrl,
+              attributes: { name: 'spec.pdf' },
+            },
+          },
+        ]),
+      }),
+    ]);
   });
 });
 

@@ -405,6 +405,7 @@ export interface AzureDevOpsWorkItem {
   relatedWorkItemIds?: number[];
   linkedPrs?: Array<{ prId: number; projectId: string; repoId: string }>;
   relatedTestCaseIds?: number[];
+  attachments?: Array<{ name: string; url: string }>;
   /**
    * Set when Azure rejected one or more configured extra refNames and the
    * service retried without them (design failure mode F3). Carried per item
@@ -1088,6 +1089,7 @@ export interface Api {
     uploadWorkItemAttachment: (params: {
       providerId: string;
       projectName: string;
+      workItemId?: number;
       filename: string;
       mimeType: string;
       base64: string;
