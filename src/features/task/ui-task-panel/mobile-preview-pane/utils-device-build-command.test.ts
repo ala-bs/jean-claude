@@ -38,6 +38,7 @@ const iphone: MobilePreviewDevice = {
 const pixel: MobilePreviewDevice = {
   id: '39021FDJH00123',
   name: 'Pixel 7',
+  model: 'Pixel 7',
   platform: 'android',
   state: 'booted',
   kind: 'physical',
@@ -87,18 +88,18 @@ describe('applyDeviceToBuildCommand', () => {
         device: pixel,
       });
       expect(result.command).toBe(
-        "npx expo run:android --variant debug --device 'Pixel 7'",
+        'npx expo run:android --variant debug --device Pixel_7',
       );
       expect(result.applied).toBe(true);
     });
 
-    it('uses the Android device name for Expo physical-device selection', () => {
+    it('uses the raw Android model name for Expo physical-device selection', () => {
       expect(
         applyDeviceToBuildCommand({
           command: 'npx expo run:android',
           device: pixel,
         }).command,
-      ).toBe("npx expo run:android --device 'Pixel 7'");
+      ).toBe('npx expo run:android --device Pixel_7');
     });
 
     it('appends --udid for react-native run-ios', () => {
@@ -273,20 +274,20 @@ describe('applyDeviceToBuildCommand', () => {
       [
         'npm run android',
         ['expo'],
-        "npm run android -- --device 'Pixel 7'",
+        'npm run android -- --device Pixel_7',
       ],
       [
         'npm run android',
         ['react-native'],
         `npm run android -- --deviceId ${pixel.id}`,
       ],
-      ['pnpm run android', ['expo'], "pnpm run android --device 'Pixel 7'"],
+      ['pnpm run android', ['expo'], 'pnpm run android --device Pixel_7'],
       [
         'pnpm android',
         ['react-native'],
         `pnpm android --deviceId ${pixel.id}`,
       ],
-      ['yarn android', ['expo'], "yarn android --device 'Pixel 7'"],
+      ['yarn android', ['expo'], 'yarn android --device Pixel_7'],
       [
         'bun run android',
         ['react-native'],
@@ -591,9 +592,9 @@ describe('applyDeviceToBuildCommand', () => {
       expect(
         applyDeviceToBuildCommand({
           command: 'npx expo run:android',
-          device: { ...pixel, name: 'weird id; rm -rf /' },
+          device: { ...pixel, model: 'weird;id' },
         }).command,
-      ).toBe(`npx expo run:android --device 'weird id; rm -rf /'`);
+      ).toBe("npx expo run:android --device 'weird;id'");
     });
 
     it('quotes an id containing a single quote', () => {

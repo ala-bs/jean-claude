@@ -121,10 +121,11 @@ export type ApplyDeviceToBuildCommandResult = {
 };
 
 /**
- * The identifier the platform CLI expects for this device. Expo's Android
- * `--device` resolver matches physical devices by their human-readable name
- * in the device list, while React Native's `--deviceId` passes the value
- * directly to adb and therefore needs the serial.
+ * The identifier the platform CLI expects for this device. Expo Android uses
+ * the ADB model name for physical devices (the raw value uses underscores),
+ * while React Native's `--deviceId` passes the value directly to adb and
+ * needs the serial. Android emulators use their AVD name for Expo and their
+ * adb serial for transport-level selectors.
  */
 function getDeviceSelectorValue({
   device,
@@ -138,7 +139,9 @@ function getDeviceSelectorValue({
     device.platform === 'android' &&
     isPhysicalMobilePreviewDevice(device)
   ) {
-    return device.name.trim() || device.id;
+    // `name` is intentionally humanized for the rail (`Redmi Note 7`), but
+    // Expo matches the raw adb model name (`Redmi_Note_7`).
+    return (device.model ?? device.name).replaceAll(' ', '_');
   }
   return device.connectionId ?? device.id ?? '';
 }
