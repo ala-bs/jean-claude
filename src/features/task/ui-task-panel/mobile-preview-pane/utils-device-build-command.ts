@@ -121,11 +121,25 @@ export type ApplyDeviceToBuildCommandResult = {
 };
 
 /**
- * The identifier the platform CLI expects for this device: the adb serial for
- * a booted Android emulator (whose rail id is the AVD name), the udid/serial
- * everywhere else.
+ * The identifier the platform CLI expects for this device. Expo's Android
+ * `--device` resolver matches physical devices by their human-readable name
+ * in the device list, while React Native's `--deviceId` passes the value
+ * directly to adb and therefore needs the serial.
  */
-function getDeviceSelectorValue(device: MobilePreviewDevice) {
+function getDeviceSelectorValue({
+  device,
+  flag,
+}: {
+  device: MobilePreviewDevice;
+  flag?: string;
+}) {
+  if (
+    flag === '--device' &&
+    device.platform === 'android' &&
+    isPhysicalMobilePreviewDevice(device)
+  ) {
+    return device.name.trim() || device.id;
+  }
   return device.connectionId ?? device.id ?? '';
 }
 
@@ -245,12 +259,11 @@ export function applyDeviceToBuildCommand({
   if (!device) {
     return { command, applied: false, reason: 'missing-device-id' };
   }
-  const deviceId = getDeviceSelectorValue(device);
-  if (!deviceId) {
-    return { command, applied: false, reason: 'missing-device-id' };
-  }
-
   if (command.includes(DEVICE_PLACEHOLDER)) {
+    const deviceId = getDeviceSelectorValue({ device });
+    if (!deviceId) {
+      return { command, applied: false, reason: 'missing-device-id' };
+    }
     return {
       command: command.replaceAll(
         DEVICE_PLACEHOLDER,
@@ -272,6 +285,10 @@ export function applyDeviceToBuildCommand({
     if (isMissingTransportId({ device, flag: entry.flag })) {
       return { command, applied: false, reason: 'device-not-running' };
     }
+    const deviceId = getDeviceSelectorValue({ device, flag: entry.flag });
+    if (!deviceId) {
+      return { command, applied: false, reason: 'missing-device-id' };
+    }
     return {
       command: appendSelector({
         command,
@@ -291,6 +308,10 @@ export function applyDeviceToBuildCommand({
   if (!flag) return notApplied('unknown-command');
   if (isMissingTransportId({ device, flag })) {
     return { command, applied: false, reason: 'device-not-running' };
+  }
+  const deviceId = getDeviceSelectorValue({ device, flag });
+  if (!deviceId) {
+    return { command, applied: false, reason: 'missing-device-id' };
   }
 
   return {

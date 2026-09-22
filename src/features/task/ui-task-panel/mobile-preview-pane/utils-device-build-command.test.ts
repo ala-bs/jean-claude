@@ -87,9 +87,18 @@ describe('applyDeviceToBuildCommand', () => {
         device: pixel,
       });
       expect(result.command).toBe(
-        `npx expo run:android --variant debug --device ${pixel.id}`,
+        "npx expo run:android --variant debug --device 'Pixel 7'",
       );
       expect(result.applied).toBe(true);
+    });
+
+    it('uses the Android device name for Expo physical-device selection', () => {
+      expect(
+        applyDeviceToBuildCommand({
+          command: 'npx expo run:android',
+          device: pixel,
+        }).command,
+      ).toBe("npx expo run:android --device 'Pixel 7'");
     });
 
     it('appends --udid for react-native run-ios', () => {
@@ -261,19 +270,23 @@ describe('applyDeviceToBuildCommand', () => {
     );
 
     it.each([
-      ['npm run android', ['expo'], `npm run android -- --device ${pixel.id}`],
+      [
+        'npm run android',
+        ['expo'],
+        "npm run android -- --device 'Pixel 7'",
+      ],
       [
         'npm run android',
         ['react-native'],
         `npm run android -- --deviceId ${pixel.id}`,
       ],
-      ['pnpm run android', ['expo'], `pnpm run android --device ${pixel.id}`],
+      ['pnpm run android', ['expo'], "pnpm run android --device 'Pixel 7'"],
       [
         'pnpm android',
         ['react-native'],
         `pnpm android --deviceId ${pixel.id}`,
       ],
-      ['yarn android', ['expo'], `yarn android --device ${pixel.id}`],
+      ['yarn android', ['expo'], "yarn android --device 'Pixel 7'"],
       [
         'bun run android',
         ['react-native'],
@@ -578,7 +591,7 @@ describe('applyDeviceToBuildCommand', () => {
       expect(
         applyDeviceToBuildCommand({
           command: 'npx expo run:android',
-          device: { ...pixel, id: 'weird id; rm -rf /' },
+          device: { ...pixel, name: 'weird id; rm -rf /' },
         }).command,
       ).toBe(`npx expo run:android --device 'weird id; rm -rf /'`);
     });
