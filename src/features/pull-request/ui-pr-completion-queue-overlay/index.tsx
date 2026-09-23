@@ -129,7 +129,7 @@ function QueueRow({
       </button>
       <button
         onClick={handleRemove}
-        className="text-ink-3 rounded p-1 hover:text-red-400"
+        className="text-ink-3 hover:text-status-fail rounded p-1"
         title="Remove from queue"
       >
         <X className="h-3.5 w-3.5" />

@@ -113,7 +113,7 @@ function RefBadge({
         // would be invisible on the trunk and meaningless on the last lane —
         // exactly the two lanes most commits sit in.
         isFocused && 'font-semibold',
-        !isFocused && gitRef.kind === 'tag' && 'bg-amber-400/10 text-amber-300',
+        !isFocused && gitRef.kind === 'tag' && 'bg-status-run/10 text-status-run',
         !isFocused &&
           gitRef.kind === 'remote' &&
           'bg-status-review-soft text-status-review',

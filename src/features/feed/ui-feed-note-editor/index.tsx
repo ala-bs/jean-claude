@@ -39,7 +39,7 @@ const feedNoteSchema = BlockNoteSchema.create({
     [JSON_BLOCK_TYPE]: jsonBlockSpec(),
   },
 });
-const HIGHLIGHT_COLOR = 'oklch(0.72 0.2 295 / 0.16)';
+const HIGHLIGHT_COLOR = 'color-mix(in srgb, var(--color-acc) 16%, transparent)';
 const MAX_STORED_SCROLL_POSITIONS = 100;
 
 class LruCache<Key, Value> {

@@ -186,7 +186,7 @@ export function Combobox({
         {selectedOption?.indicator === 'active' && (
           <span
             aria-hidden
-            className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)]"
+            className="bg-status-done h-1.5 w-1.5 shrink-0 rounded-full shadow-[0_0_6px_color-mix(in_srgb,var(--color-status-done)_90%,transparent)]"
           />
         )}
         <span
@@ -323,7 +323,7 @@ export function Combobox({
                           {option.indicator === 'active' && (
                             <span
                               aria-hidden
-                              className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)]"
+                              className="bg-status-done h-1.5 w-1.5 shrink-0 rounded-full shadow-[0_0_6px_color-mix(in_srgb,var(--color-status-done)_90%,transparent)]"
                             />
                           )}
                           <span className="truncate">{option.label}</span>

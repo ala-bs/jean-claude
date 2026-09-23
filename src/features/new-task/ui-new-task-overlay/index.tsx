@@ -505,11 +505,11 @@ function NewTaskSearchInput({
   return (
     <div
       className="flex shrink-0 items-center gap-2.5 px-[18px] py-3.5"
-      style={{ borderBottom: '1px solid oklch(1 0 0 / 0.04)' }}
+      style={{ borderBottom: '1px solid var(--color-glass-border)' }}
     >
       <Search
         className="h-3.5 w-3.5 shrink-0"
-        style={{ color: 'oklch(0.55 0.01 280)' }}
+        style={{ color: 'var(--color-ink-3)' }}
       />
       <textarea
         ref={inputRef}
@@ -519,7 +519,7 @@ function NewTaskSearchInput({
         placeholder={placeholder}
         className="text-ink-1 placeholder-ink-3 field-sizing-content max-h-[40svh] min-h-[1lh] flex-1 resize-none bg-transparent text-sm outline-none"
         style={{
-          caretColor: 'oklch(0.78 0.18 295)',
+          caretColor: 'var(--color-acc)',
           letterSpacing: '-0.005em',
         }}
       />
@@ -2619,7 +2619,7 @@ function SearchModeContent({
   // Subscribed here rather than passed down from the overlay, so filter
   // keystrokes re-render only this subtree. Deliberately NOT deferred:
   // `exactMatchWorkItemId` (and therefore the highlight that Enter acts on) is
-  // derived from this value, so deferring it lets a fast "type #12345 then
+  // derived from this value, so deferring it lets a fast "type 12345 then
   // select" land on the previously highlighted item.
   const filter = useNewTaskDraftStore(
     (state) => state.drafts[draftKey]?.workItemsFilter ?? '',

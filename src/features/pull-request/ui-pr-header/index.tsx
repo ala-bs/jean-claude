@@ -391,7 +391,7 @@ export function PrHeader({
             className="border-glass-border bg-bg-1 hover:bg-bg-2 flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs transition-colors"
           >
             {didCopy ? (
-              <Check className="h-3.5 w-3.5 text-green-500" />
+              <Check className="text-status-done h-3.5 w-3.5" />
             ) : (
               <Copy className="h-3.5 w-3.5" />
             )}

@@ -80,8 +80,8 @@ function StatusDot({
       aria-hidden
       className={clsx(
         'size-2 shrink-0 rounded-full',
-        tone === 'running' && 'bg-green-500',
-        tone === 'errored' && 'bg-red-500',
+        tone === 'running' && 'bg-status-done',
+        tone === 'errored' && 'bg-status-fail',
         tone === 'stopped' && 'bg-ink-3/50',
         pulse && 'animate-pulse',
       )}
@@ -380,7 +380,7 @@ export function MobileDevPane({
           <Star
             className={clsx(
               'size-3.5',
-              starred && 'fill-current text-amber-400',
+              starred && 'text-status-run fill-current',
             )}
           />
         </button>
@@ -980,7 +980,7 @@ export function MobileDevPane({
           </div>
 
           {deviceListError ? (
-            <p className="text-xs break-words text-red-500">
+            <p className="text-status-fail text-xs break-words">
               {deviceListError}
             </p>
           ) : devices.length === 0 ? (
@@ -1017,7 +1017,7 @@ export function MobileDevPane({
                     <Star
                       className={clsx(
                         isActiveDeviceFavorite &&
-                          'fill-current text-amber-400',
+                          'text-status-run fill-current',
                       )}
                     />
                   }
@@ -1085,7 +1085,7 @@ export function MobileDevPane({
                           className={clsx(
                             'size-1.5 shrink-0 rounded-full',
                             device.state === 'booted'
-                              ? 'bg-green-500'
+                              ? 'bg-status-done'
                               : 'bg-ink-3/40',
                           )}
                         />
@@ -1111,7 +1111,7 @@ export function MobileDevPane({
           )}
 
           {bootError && (
-            <p className="text-xs break-words text-red-500">{bootError}</p>
+            <p className="text-status-fail text-xs break-words">{bootError}</p>
           )}
 
           {/* Build & run onto the selected device. The command comes from
@@ -1134,7 +1134,7 @@ export function MobileDevPane({
               <span
                 className={clsx(
                   'text-[11px]',
-                  buildOutcome === 'failed' ? 'text-red-500' : 'text-ink-3',
+                  buildOutcome === 'failed' ? 'text-status-fail' : 'text-ink-3',
                 )}
               >
                 {buildOutcome === 'building'

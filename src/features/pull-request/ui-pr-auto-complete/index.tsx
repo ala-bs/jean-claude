@@ -340,7 +340,7 @@ export function PrAutoComplete({
     const queuedClassName =
       variant === 'compact'
         ? 'text-status-pr bg-status-pr/10 ring-status-pr/20 ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1'
-        : 'flex items-center gap-1 rounded-lg bg-blue-600/20 px-3 py-1.5 text-xs font-medium text-blue-300';
+        : 'bg-status-azure/20 text-status-azure flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium';
 
     return (
       <div className={queuedClassName}>

@@ -138,7 +138,7 @@ export function WorkingTreeChips({
   if (dirtyBuckets.length === 0) {
     return (
       <span className="text-ink-3 inline-flex items-center gap-1.5 text-xs whitespace-nowrap">
-        <Check className="h-3 w-3 shrink-0 text-emerald-400" />
+        <Check className="text-status-done h-3 w-3 shrink-0" />
         working tree clean
       </span>
     );

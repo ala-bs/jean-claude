@@ -33,9 +33,9 @@ function TaskRow({ task }: { task: Task }) {
         className={clsx(
           'mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full',
           task.status === 'running'
-            ? 'bg-emerald-400'
+            ? 'bg-status-done'
             : task.status === 'interrupted'
-              ? 'bg-amber-400'
+              ? 'bg-status-run'
               : 'bg-ink-3',
         )}
       />

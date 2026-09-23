@@ -136,7 +136,7 @@ export function DeeplinkButton({
       </form>
 
       {error && (
-        <p className="mt-1.5 text-xs break-words text-red-500">{error}</p>
+        <p className="text-status-fail mt-1.5 text-xs break-words">{error}</p>
       )}
 
       {recentUrls.length > 0 && (

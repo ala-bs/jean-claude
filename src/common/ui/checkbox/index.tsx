@@ -33,7 +33,7 @@ export function CheckboxIndicator({
         checkboxSizeClasses[size],
         'peer-focus-visible:ring-acc flex shrink-0 items-center justify-center rounded-sm border transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-offset-0',
         checked
-          ? 'border-acc bg-acc text-white'
+          ? 'border-acc bg-acc text-on-acc'
           : 'border-white/20 bg-white/[0.05] text-transparent',
         disabled ? 'cursor-not-allowed' : 'cursor-pointer',
         className,

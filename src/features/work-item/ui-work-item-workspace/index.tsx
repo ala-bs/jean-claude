@@ -97,7 +97,7 @@ export type WorkItemWorkspaceSelection = {
 };
 
 /**
- * A bare numeric search (`123` or `#123`) is treated as a work item id lookup:
+ * A bare numeric search (`123` or `id 123`) is treated as a work item id lookup:
  * the id is forwarded to the server verbatim (it ORs id against title) and the
  * matching card is auto-highlighted so "type an id, press enter" keeps working.
  */
@@ -545,7 +545,7 @@ export function WorkItemWorkspace({
         ? 'success'
         : iterationsQuery.status,
   });
-  // `#123` is a UI convenience; the server matches a bare id against System.Id.
+  // A leading hash is a UI convenience; the server matches a bare id against System.Id.
   const exactSearchWorkItemId = getExactWorkItemIdSearch(debouncedSearchText);
   // Matched against the *undebounced* text too, so "type an id, hit enter"
   // resolves on the keystroke when the item is already loaded instead of
