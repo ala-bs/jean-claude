@@ -368,18 +368,16 @@ describe('per-surface default detail layouts', () => {
     ]);
   });
 
-  it('feed-modal matches the feed details metadata region (no priority)', () => {
+  it('feed-modal matches the feed details metadata region including priority', () => {
     expect(visibleRefNames(DEFAULT_DETAIL_LAYOUT_FEED_MODAL)).toEqual([
       FIELD_STATE,
       FIELD_BOARD_COLUMN,
       FIELD_ASSIGNED_TO,
       FIELD_STORY_POINTS,
       FIELD_ITERATION_PATH,
+      FIELD_PRIORITY,
       FIELD_TAGS,
     ]);
-    expect(visibleRefNames(DEFAULT_DETAIL_LAYOUT_FEED_MODAL)).not.toContain(
-      FIELD_PRIORITY,
-    );
   });
 
   it('are all valid layouts and the starter config uses the editorial one', () => {

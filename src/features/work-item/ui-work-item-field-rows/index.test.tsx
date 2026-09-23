@@ -520,6 +520,7 @@ describe('WorkItemFieldRows surface defaults', () => {
         FIELD_ASSIGNED_TO,
         FIELD_STORY_POINTS,
         FIELD_ITERATION_PATH,
+        FIELD_PRIORITY,
         FIELD_TAGS,
       ],
     ],

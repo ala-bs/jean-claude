@@ -120,7 +120,7 @@ export const DEFAULT_DETAIL_LAYOUT_PREVIEW_READONLY: WorkItemDetailLayout = {
 
 /**
  * Transcribed from `feed/ui-work-item-details/index.tsx` metadata row: state
- * badge, board column, owner, story points, iteration, tags. No priority.
+ * badge, board column, owner, story points, iteration, priority, tags.
  */
 export const DEFAULT_DETAIL_LAYOUT_FEED_MODAL: WorkItemDetailLayout = {
   rows: [
@@ -129,6 +129,7 @@ export const DEFAULT_DETAIL_LAYOUT_FEED_MODAL: WorkItemDetailLayout = {
     { refName: FIELD_ASSIGNED_TO, visible: true },
     { refName: FIELD_STORY_POINTS, visible: true },
     { refName: FIELD_ITERATION_PATH, visible: true },
+    { refName: FIELD_PRIORITY, visible: true },
     { refName: FIELD_TAGS, visible: true },
   ],
   tabs: DEFAULT_TABS,
