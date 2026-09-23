@@ -79,6 +79,7 @@ import type {
   MobilePreviewAndroidInstallSystemImageParams,
   MobilePreviewAttachSessionParams,
   MobilePreviewBootDeviceParams,
+  MobilePreviewCaptureScreenshotParams,
   MobilePreviewDetachSessionParams,
   MobilePreviewExpoLaunchParams,
   MobilePreviewForwardPortParams,
@@ -6167,6 +6168,11 @@ export function registerIpcHandlers() {
     'mobilePreview:bootDevice',
     (_, params: MobilePreviewBootDeviceParams) =>
       mobilePreviewService.bootDevice(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:captureScreenshot',
+    (_, params: MobilePreviewCaptureScreenshotParams) =>
+      mobilePreviewService.captureScreenshot(params),
   );
   ipcMain.handle(
     'mobilePreview:openDevMenu',

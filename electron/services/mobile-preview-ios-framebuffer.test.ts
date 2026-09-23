@@ -15,6 +15,7 @@ vi.mock('../lib/debug', () => ({
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createMjpegFrameParser,
+  captureSimulatorScreenshotPng,
   killOrphanedCoreSimulatorHelpers,
   resetOrphanedHelperSweepForTests,
   MAX_MJPEG_PENDING_BYTES,
@@ -135,6 +136,25 @@ describe('mobile preview iOS framebuffer', () => {
     expect(onSession).toHaveBeenCalledWith({ inputStatus: 'ready' });
 
     await result.stop();
+  });
+
+  it('captures a PNG screenshot through simctl', async () => {
+    mockSimctlCommands('Booted');
+
+    const screenshot = await captureSimulatorScreenshotPng('device-1');
+
+    expect(screenshot).toEqual(pngWithSize(2, 2));
+    expect(runCommandMock).toHaveBeenCalledWith(
+      'xcrun',
+      expect.arrayContaining([
+        'simctl',
+        'io',
+        'device-1',
+        'screenshot',
+        '--type=png',
+      ]),
+      { timeoutMs: 5_000 },
+    );
   });
 
   it('marks iOS input as errored when HID helper prewarm fails', async () => {

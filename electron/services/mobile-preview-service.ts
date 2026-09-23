@@ -19,6 +19,8 @@ import {
   type MobilePreviewAttachSessionParams,
   type MobilePreviewBootDeviceParams,
   type MobilePreviewBootDeviceResult,
+  type MobilePreviewCaptureScreenshotParams,
+  type MobilePreviewCaptureScreenshotResult,
   type MobilePreviewDetachSessionParams,
   type MobilePreviewDevice,
   type MobilePreviewDeviceAssignment,
@@ -63,6 +65,7 @@ type MobilePreviewAdapter = {
   dispose?: () => Promise<void>;
   listDevices: () => Promise<MobilePreviewDevice[]>;
   bootDevice?: (deviceId: string) => Promise<{ deviceId: string }>;
+  captureScreenshot?: (deviceId: string) => Promise<Buffer>;
   startStream: (params: {
     taskId: string;
     deviceId: string;
@@ -207,7 +210,8 @@ type MobilePreviewServiceOptions = {
   adapters: Record<MobilePlatform, MobilePreviewAdapter>;
   emitter: MobilePreviewEmitter;
   lifecycle?: MobilePreviewLifecycle;
-  logger?: Pick<typeof console, 'error'>;
+  logger?: Pick<typeof console, 'error'> &
+    Partial<Pick<typeof console, 'info'>>;
   validateTaskCanStart: (taskId: string) => Promise<void>;
   deviceUsageStore?: MobilePreviewDeviceUsageStore;
 };
@@ -565,6 +569,33 @@ export function createMobilePreviewService({
         );
       }
       return bootDevice(params.deviceId);
+    },
+
+    async captureScreenshot(
+      params: MobilePreviewCaptureScreenshotParams,
+    ): Promise<MobilePreviewCaptureScreenshotResult> {
+      assertSupportedPlatform(params.platform);
+      const captureScreenshot = adapters[params.platform].captureScreenshot;
+      if (!captureScreenshot) {
+        throw new Error(
+          `Capturing screenshots is not supported for platform ${params.platform}`,
+        );
+      }
+      logger.info?.(
+        `Mobile screenshot capture started platform=${params.platform} deviceId=${params.deviceId}`,
+      );
+      try {
+        const content = await captureScreenshot(params.deviceId);
+        logger.info?.(
+          `Mobile screenshot capture succeeded platform=${params.platform} deviceId=${params.deviceId} bytes=${content.byteLength}`,
+        );
+        return { content, mimeType: 'image/png', extension: 'png' };
+      } catch (error) {
+        logger.error(
+          `Mobile screenshot capture failed platform=${params.platform} deviceId=${params.deviceId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        throw error;
+      }
     },
 
     listSessions(

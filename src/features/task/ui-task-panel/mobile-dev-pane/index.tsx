@@ -1,4 +1,5 @@
 import {
+  Camera,
   Hammer,
   MoreHorizontal,
   Play,
@@ -128,6 +129,7 @@ export function MobileDevPane({
 
   const [bootingDeviceKey, setBootingDeviceKey] = useState<string | null>(null);
   const [isReloading, setIsReloading] = useState(false);
+  const [isCapturingScreenshot, setIsCapturingScreenshot] = useState(false);
   const [restartingDeviceKey, setRestartingDeviceKey] = useState<string | null>(
     null,
   );
@@ -258,6 +260,14 @@ export function MobileDevPane({
   );
   const isActiveDeviceBooted = activeDevice?.state === 'booted';
   const isDeviceUnavailable = Boolean(activeDevice?.unavailableReason);
+  const isScreenshotSupported =
+    activeDevice?.platform === 'android' ||
+    (activeDevice?.kind !== 'physical' && activeDevice?.platform === 'ios');
+  const canCaptureScreenshot =
+    Boolean(activeDevice) &&
+    isScreenshotSupported &&
+    !isDeviceUnavailable &&
+    (isActiveDeviceBooted || activeDevice?.connection === 'connected');
   // `isBooting` guards re-entrancy; the per-device flags drive the UI, so
   // switching device mid-boot does not show a spinner on the new selection.
   const isBooting = bootingDeviceKey !== null;
@@ -768,6 +778,40 @@ export function MobileDevPane({
     [activeDevice, isReloading, restartingDeviceKey],
   );
 
+  const handleCaptureScreenshot = useCallback(async () => {
+    if (!activeDevice || !canCaptureScreenshot || isCapturingScreenshot) {
+      return;
+    }
+    const deviceName = activeDevice.name;
+    setActionNotice(null);
+    setIsCapturingScreenshot(true);
+    try {
+      const result = await api.mobilePreview.captureScreenshot({
+        platform: activeDevice.platform,
+        deviceId: activeDevice.id,
+      });
+      const timestamp = new Date().toISOString().replaceAll(':', '-');
+      await api.dialog.saveFile({
+        defaultPath: `mobile-screenshot-${timestamp}.${result.extension}`,
+        filters: [{ name: 'PNG image', extensions: ['png'] }],
+        content: result.content,
+      });
+      setActionNotice(`Screenshot captured from ${deviceName}.`);
+    } catch (error) {
+      addToast({
+        message: `Screenshot failed: ${summarizeDeviceActionError(error)}`,
+        type: 'error',
+      });
+    } finally {
+      setIsCapturingScreenshot(false);
+    }
+  }, [
+    activeDevice,
+    addToast,
+    canCaptureScreenshot,
+    isCapturingScreenshot,
+  ]);
+
   const handleRestartApp = useCallback(async () => {
     // Mirrors `handleBootDevice`'s re-entrancy guard: the button disables
     // itself, but switching device mid-restart re-enables it and would start a
@@ -1262,6 +1306,27 @@ export function MobileDevPane({
               }
             >
               Restart
+            </Button>
+            <Button
+              onClick={() => void handleCaptureScreenshot()}
+              size="sm"
+              variant="secondary"
+              className="flex-1"
+              loading={isCapturingScreenshot}
+              disabled={!canCaptureScreenshot || isCapturingScreenshot}
+              icon={<Camera />}
+              title={
+                !activeDevice
+                  ? 'Select a device to capture a screenshot'
+                  : !isScreenshotSupported
+                    ? 'Screenshots are currently supported for iOS simulators and Android devices'
+                    : !isActiveDeviceBooted &&
+                        activeDevice.connection !== 'connected'
+                      ? 'Boot or connect the device to capture a screenshot'
+                      : 'Capture a PNG screenshot of the device screen'
+              }
+            >
+              Screenshot
             </Button>
             <DeeplinkButton
               // Same hazard as Reload: a restart in flight means the app is

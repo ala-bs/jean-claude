@@ -148,6 +148,8 @@ import type {
   MobilePreviewAttachSessionParams,
   MobilePreviewBootDeviceParams,
   MobilePreviewBootDeviceResult,
+  MobilePreviewCaptureScreenshotParams,
+  MobilePreviewCaptureScreenshotResult,
   MobilePreviewDetachSessionParams,
   MobilePreviewDevice,
   MobilePreviewDeviceAssignment,
@@ -1665,6 +1667,9 @@ export interface Api {
     bootDevice: (
       params: MobilePreviewBootDeviceParams,
     ) => Promise<MobilePreviewBootDeviceResult>;
+    captureScreenshot: (
+      params: MobilePreviewCaptureScreenshotParams,
+    ) => Promise<MobilePreviewCaptureScreenshotResult>;
     forwardPort: (params: MobilePreviewForwardPortParams) => Promise<void>;
     ensureMetroReverse: (params: {
       deviceId: string;
@@ -2956,6 +2961,9 @@ export const api: Api = hasWindowApi
         listDevices: async () => [],
         listSessions: async () => [],
         listDeviceAssignments: async () => [],
+        captureScreenshot: async () => {
+          throw new Error('API not available');
+        },
         getAndroidToolStatus: async () => ({
           hostArch: 'unknown',
           sdkRoot: null,

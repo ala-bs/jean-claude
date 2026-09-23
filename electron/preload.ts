@@ -35,6 +35,7 @@ import type {
   MobilePreviewAndroidInstallSystemImageParams,
   MobilePreviewAttachSessionParams,
   MobilePreviewBootDeviceParams,
+  MobilePreviewCaptureScreenshotParams,
   MobilePreviewDetachSessionParams,
   MobilePreviewExpoLaunchParams,
   MobilePreviewForwardPortParams,
@@ -1234,6 +1235,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('mobilePreview:listMetroPeers', params),
     bootDevice: (params: MobilePreviewBootDeviceParams) =>
       ipcRenderer.invoke('mobilePreview:bootDevice', params),
+    captureScreenshot: (params: MobilePreviewCaptureScreenshotParams) =>
+      ipcRenderer.invoke('mobilePreview:captureScreenshot', params),
     forwardPort: (params: MobilePreviewForwardPortParams) =>
       ipcRenderer.invoke('mobilePreview:forwardPort', params),
     ensureMetroReverse: (params: { deviceId: string; metroPort: number }) =>

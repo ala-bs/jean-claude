@@ -278,6 +278,17 @@ export type MobilePreviewBootDeviceResult = {
   deviceId: string;
 };
 
+export type MobilePreviewCaptureScreenshotParams = {
+  platform: MobilePlatform;
+  deviceId: string;
+};
+
+export type MobilePreviewCaptureScreenshotResult = {
+  content: Uint8Array;
+  mimeType: 'image/png';
+  extension: 'png';
+};
+
 export type MobilePreviewExpoLaunchParams = {
   requestId: string;
   taskId: string;
@@ -486,4 +497,3 @@ export type MobilePreviewIosAppRestartResult = {
   bundleId: string;
   restartedAt: string;
 };
-
