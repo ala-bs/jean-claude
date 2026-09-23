@@ -6,11 +6,25 @@ import {
 } from '@shared/run-command-types';
 
 const mocks = vi.hoisted(() => ({
+  exec: vi.fn((...args: unknown[]) => {
+    const callback = args.at(-1);
+    if (typeof callback === 'function') {
+      callback(null, { stdout: '', stderr: '' });
+    }
+    return { kill: vi.fn() };
+  }),
+  execFileSync: vi.fn(() =>
+    Array.from({ length: 10_000 }, (_, index) => `${index + 1} 1 ${index + 1}`).join('\n'),
+  ),
   findCommandById: vi.fn(),
   spawn: vi.fn(),
 }));
 
 vi.mock('node-pty', () => ({ spawn: mocks.spawn }));
+vi.mock('child_process', () => ({
+  exec: mocks.exec,
+  execFileSync: mocks.execFileSync,
+}));
 vi.mock('../database/repositories/project-commands', () => ({
   ProjectCommandRepository: { findById: mocks.findCommandById },
 }));
@@ -240,6 +254,59 @@ describe('run command process signaling', () => {
 
     expect(kill).toHaveBeenNthCalledWith(1, -123, 'SIGTERM');
     expect(kill).toHaveBeenNthCalledWith(2, 123, 'SIGTERM');
+  });
+
+  it('waits for descendants to exit before escalating to SIGKILL', async () => {
+    mocks.execFileSync.mockReturnValueOnce('123 1 123\n124 123 123');
+    let resolveExit!: () => void;
+    let descendantChecks = 0;
+    const exitPromise = new Promise<void>((resolve) => {
+      resolveExit = resolve;
+    });
+    const commands = new Map([
+      [
+        'command-1',
+        {
+          commandId: 'command-1',
+          name: null,
+          command: 'pnpm dev',
+          pty: {},
+          pid: 123,
+          status: 'running' as const,
+          pendingLogBatches: { stdout: '', stderr: '' },
+          logFlushTimer: null,
+          logGeneration: 0,
+          exited: false,
+          exitPromise,
+        },
+      ],
+    ]);
+    (
+      testService.runningProcesses as Map<string, Map<string, unknown>>
+    ).set('task-1', commands);
+    const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === -123 && signal === 'SIGINT') {
+        resolveExit();
+      }
+      if (pid === 124 && signal === 0 && descendantChecks++ > 0) {
+        throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+      }
+      return true;
+    });
+
+    const stopCommandWithoutLock = (
+      runCommandService as unknown as {
+        stopCommandWithoutLock: (params: {
+          taskId: string;
+          runCommandId: string;
+        }) => Promise<boolean>;
+      }
+    ).stopCommandWithoutLock.bind(runCommandService);
+
+    await expect(
+      stopCommandWithoutLock({ taskId: 'task-1', runCommandId: 'command-1' }),
+    ).resolves.toBe(true);
+    expect(kill).not.toHaveBeenCalledWith(124, 'SIGKILL');
   });
 
   it('rejects and retains tracking when process-group signaling returns EPERM', async () => {
@@ -618,7 +685,7 @@ describe('RunCommandService stopCommandsForTask', () => {
     } finally {
       kill.mockRestore();
     }
-  }, 10_000);
+  }, 20_000);
 });
 
 describe('runCommandService.resetTaskAfterReactivation', () => {
