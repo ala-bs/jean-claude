@@ -6,6 +6,7 @@ import {
   Folder,
   GitBranch,
   Loader2,
+  RefreshCw,
   X,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -313,7 +314,12 @@ export function CloneRepoPane({
   onClose: () => void;
   onCloneSuccess: (result: CloneResult) => void;
 }) {
-  const { data: providers, isLoading: isLoadingProviders } = useProviders();
+  const {
+    data: providers,
+    isLoading: isLoadingProviders,
+    isFetching: isFetchingProviders,
+    refetch: refetchProviders,
+  } = useProviders();
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     null,
   );
@@ -347,13 +353,24 @@ export function CloneRepoPane({
           </div>
           <h3 className="text-ink-1 font-medium">Clone Repository</h3>
         </div>
-        <IconButton
-          variant="ghost"
-          size="sm"
-          onClick={onClose}
-          icon={<X />}
-          tooltip="Close pane"
-        />
+        <div className="flex items-center gap-1">
+          <IconButton
+            variant="ghost"
+            size="sm"
+            onClick={() => void refetchProviders()}
+            icon={<RefreshCw className={isFetchingProviders ? 'animate-spin' : undefined} />}
+            tooltip="Refresh organizations"
+            aria-label="Refresh organizations"
+            disabled={isFetchingProviders}
+          />
+          <IconButton
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            icon={<X />}
+            tooltip="Close pane"
+          />
+        </div>
       </div>
 
       {/* Content */}
