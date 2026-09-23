@@ -24,6 +24,12 @@ type StepExecutionStatus = TaskStatus | TaskStepStatus;
 const MAX_RUN_COMMAND_LOG_LINES = 5000;
 const RUN_COMMAND_LOG_CHUNK_LINE_LIMIT = 200;
 
+export type MobileBuildStatus = {
+  commandId: string;
+  status: 'running' | 'succeeded' | 'errored';
+  updatedAt: number;
+};
+
 function clearsPendingRequests(status: StepExecutionStatus): boolean {
   return (
     status === 'completed' || status === 'errored' || status === 'interrupted'
@@ -274,6 +280,8 @@ interface TaskMessagesStore {
   runCommandLogGenerations: Record<string, Record<string, number>>;
   /** Keyed by taskId — running command status with command details */
   runCommandRunning: Record<string, RunStatus>;
+  /** Latest mobile preview build result per task, retained after process exit. */
+  mobileBuildStatuses: Record<string, MobileBuildStatus>;
   questionDrafts: Record<string, QuestionDraft>;
   questionResponsesInFlight: Record<string, boolean>;
   /** True after initial run-command status discovery settles. */
@@ -339,6 +347,11 @@ interface TaskMessagesStore {
   ) => void;
   clearAllRunCommandLogs: (taskId: string) => void;
   setRunCommandRunning: (taskId: string, status: RunStatus | false) => void;
+  setMobileBuildStatus: (
+    taskId: string,
+    commandId: string,
+    status: MobileBuildStatus['status'],
+  ) => void;
   setRunCommandStatusesHydrated: (hydrated: boolean) => void;
   /** `stepId` is the step owning the request; omit only when unknown. */
   setPendingRequestForTask: (args: {
@@ -544,6 +557,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
   runCommandLogs: {},
   runCommandLogGenerations: {},
   runCommandRunning: {},
+  mobileBuildStatuses: {},
   questionDrafts: {},
   questionResponsesInFlight: {},
   areRunCommandStatusesHydrated: false,
@@ -1093,6 +1107,14 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
         },
       };
     });
+  },
+  setMobileBuildStatus: (taskId, commandId, status) => {
+    set((state) => ({
+      mobileBuildStatuses: {
+        ...state.mobileBuildStatuses,
+        [taskId]: { commandId, status, updatedAt: Date.now() },
+      },
+    }));
   },
   setRunCommandStatusesHydrated: (hydrated) =>
     set((state) =>

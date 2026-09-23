@@ -217,6 +217,43 @@ describe('TaskMessageManager', () => {
     await act(async () => root.unmount());
   });
 
+  it('hydrates an already-running mobile build into the feed status store', async () => {
+    const buildStatus: RunStatus = {
+      isRunning: true,
+      commands: [
+        {
+          id: 'mobile-build:.:ios:device-1',
+          name: 'iOS build',
+          command: 'npx expo run:ios',
+          status: 'running',
+        },
+      ],
+    };
+    vi.mocked(api.runCommands.getTaskIdsWithRunningCommands).mockResolvedValue([
+      'task-1',
+    ]);
+    vi.mocked(api.runCommands.getStatus).mockResolvedValue(buildStatus);
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <TaskMessageManager />
+        </QueryClientProvider>,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(useTaskMessagesStore.getState().mobileBuildStatuses['task-1']).toMatchObject({
+      commandId: 'mobile-build:.:ios:device-1',
+      status: 'running',
+    });
+    await act(async () => root.unmount());
+  });
+
   it('does not re-add stale running status after a newer stop event', async () => {
     const runningStatus = (port: number): RunStatus => ({
       isRunning: true,

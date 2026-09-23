@@ -2,9 +2,11 @@ import type { QueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { api } from '@/lib/api';
 import { invalidateTaskStatusResources } from '@/cache/status-invalidations';
+import { api } from '@/lib/api';
+import { parseMobileBuildCommandId } from '@shared/mobile-build-command';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
+import type { RunStatus } from '@shared/run-command-types';
 import type { TaskStatus } from '@shared/types';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 
@@ -79,6 +81,9 @@ export function TaskMessageManager() {
   );
   const setRunCommandRunning = useTaskMessagesStore(
     (s) => s.setRunCommandRunning,
+  );
+  const setMobileBuildStatus = useTaskMessagesStore(
+    (s) => s.setMobileBuildStatus,
   );
   const setRunCommandStatusesHydrated = useTaskMessagesStore(
     (s) => s.setRunCommandStatusesHydrated,
@@ -312,12 +317,25 @@ export function TaskMessageManager() {
     let cancelled = false;
     const eventVersionByTaskId = new Map<string, number>();
     setRunCommandStatusesHydrated(false);
+    const applyRunCommandStatus = (taskId: string, status: RunStatus) => {
+      setRunCommandRunning(taskId, status.isRunning ? status : false);
+      for (const command of status.commands) {
+        if (!parseMobileBuildCommandId(command.id)) continue;
+        const buildStatus =
+          command.status === 'running'
+            ? 'running'
+            : command.status === 'errored'
+              ? 'errored'
+              : 'succeeded';
+        setMobileBuildStatus(taskId, command.id, buildStatus);
+      }
+    };
     const unsub = api.runCommands.onStatusChange((taskId, status) => {
       eventVersionByTaskId.set(
         taskId,
         (eventVersionByTaskId.get(taskId) ?? 0) + 1,
       );
-      setRunCommandRunning(taskId, status.isRunning ? status : false);
+      applyRunCommandStatus(taskId, status);
     });
 
     // Fetch after subscribing so we never miss events that fire between
@@ -336,7 +354,7 @@ export function TaskMessageManager() {
               ) {
                 return;
               }
-              setRunCommandRunning(taskId, status.isRunning ? status : false);
+              applyRunCommandStatus(taskId, status);
             } catch {
               // One failed task snapshot must not block remaining hydration.
             }
@@ -354,7 +372,11 @@ export function TaskMessageManager() {
       cancelled = true;
       unsub();
     };
-  }, [setRunCommandRunning, setRunCommandStatusesHydrated]);
+  }, [
+    setMobileBuildStatus,
+    setRunCommandRunning,
+    setRunCommandStatusesHydrated,
+  ]);
 
   return null;
 }
