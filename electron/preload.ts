@@ -34,6 +34,7 @@ import type {
   MobilePreviewAndroidCreateDeviceParams,
   MobilePreviewAndroidInstallSystemImageParams,
   MobilePreviewAttachSessionParams,
+  MobilePreviewBootDeviceParams,
   MobilePreviewDetachSessionParams,
   MobilePreviewExpoLaunchParams,
   MobilePreviewForwardPortParams,
@@ -44,6 +45,7 @@ import type {
   MobilePreviewIosAppStatusRequestParams,
   MobilePreviewIosCreateDeviceParams,
   MobilePreviewIosRenameDeviceParams,
+  MobilePreviewListMetroPeersParams,
   MobilePreviewListSessionsParams,
   MobilePreviewNativeLogEvent,
   MobilePreviewNativeLogSessionEvent,
@@ -54,6 +56,7 @@ import type {
   MobilePreviewSessionEvent,
   MobilePreviewSetTextSizeParams,
   MobilePreviewStartParams,
+  MobilePreviewWaitForMetroClientParams,
   MobileRotationDirection,
   ReactNativeDevToolsEmbeddedBoundsParams,
   ReactNativeDevToolsEmbeddedCloseParams,
@@ -68,9 +71,17 @@ import type {
   WorkActivityWeekParams,
 } from '@shared/work-activity-types';
 import {
+  RUN_COMMAND_GROUP_ABORT_CHANNEL,
+  type RunCommandGroupAbortEvent,
   START_PR_COMMAND_CHANNEL,
   type StartPrCommandParams,
 } from '@shared/run-command-types';
+import {
+  TERMINAL_DATA_CHANNEL,
+  TERMINAL_EXIT_CHANNEL,
+  type TerminalDataEvent,
+  type TerminalExitEvent,
+} from '@shared/terminal-types';
 import type {
   TimesheetAction,
   TimesheetAxisLookupRequest,
@@ -85,6 +96,7 @@ import { AGENT_CHANNELS } from '@shared/agent-types';
 import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 import type { DebugLogEntry } from '@shared/debug-log-types';
+import type { ProjectGitLogFilter } from '@shared/types';
 import type { StartAdHocRunCommandParams } from '@shared/run-command-types';
 
 const devBadgeLabel = process.env.JC_DEV_BADGE_LABEL?.trim() || undefined;
@@ -179,6 +191,50 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('projects:getCurrentBranch', projectId),
     isGitRepository: (projectId: string) =>
       ipcRenderer.invoke('projects:isGitRepository', projectId),
+    git: {
+      getStatus: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:getStatus', projectId),
+      getGraph: (
+        projectId: string,
+        limit?: number,
+        skip?: number,
+        filter?: ProjectGitLogFilter,
+      ) =>
+        ipcRenderer.invoke(
+          'projects:git:getGraph',
+          projectId,
+          limit,
+          skip,
+          filter,
+        ),
+      getCommitCount: (projectId: string, filter?: ProjectGitLogFilter) =>
+        ipcRenderer.invoke('projects:git:getCommitCount', projectId, filter),
+      getCommitDetail: (projectId: string, commitHash: string) =>
+        ipcRenderer.invoke('projects:git:getCommitDetail', projectId, commitHash),
+      getCommitFileContent: (
+        projectId: string,
+        commitHash: string,
+        filePath: string,
+      ) =>
+        ipcRenderer.invoke(
+          'projects:git:getCommitFileContent',
+          projectId,
+          commitHash,
+          filePath,
+        ),
+      getWorkingTreeFiles: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:getWorkingTreeFiles', projectId),
+      fetch: (projectId: string, interactive?: boolean) =>
+        ipcRenderer.invoke('projects:git:fetch', projectId, interactive),
+      push: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:push', projectId),
+      pull: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:pull', projectId),
+      checkoutBranch: (projectId: string, branchName: string) =>
+        ipcRenderer.invoke('projects:git:checkoutBranch', projectId, branchName),
+      init: (projectId: string) =>
+        ipcRenderer.invoke('projects:git:init', projectId),
+    },
     getCommitIgnore: (projectId: string) =>
       ipcRenderer.invoke('projects:getCommitIgnore', projectId),
     updateCommitIgnore: (projectId: string, content: string) =>
@@ -646,6 +702,14 @@ contextBridge.exposeInMainWorld('api', {
       repoId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('azureDevOps:getPullRequestCommits', params),
+    getPullRequestDivergence: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      sourceRefName?: string;
+      targetRefName?: string;
+    }) => ipcRenderer.invoke('azureDevOps:getPullRequestDivergence', params),
     getPullRequestChanges: (params: {
       providerId: string;
       projectId: string;
@@ -813,6 +877,13 @@ contextBridge.exposeInMainWorld('api', {
       repoId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('azureDevOps:markPullRequestDraft', params),
+  },
+  git: {
+    cloneFromUrl: (params: {
+      url: string;
+      protocol: 'ssh' | 'https';
+      targetPath: string;
+    }) => ipcRenderer.invoke('git:cloneFromUrl', params),
   },
   dialog: {
     openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
@@ -1134,6 +1205,12 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('mobilePreview:openDevMenu', params),
     reloadExpo: (params: MobilePreviewReloadExpoParams) =>
       ipcRenderer.invoke('mobilePreview:reloadExpo', params),
+    waitForMetroClient: (params: MobilePreviewWaitForMetroClientParams) =>
+      ipcRenderer.invoke('mobilePreview:waitForMetroClient', params),
+    listMetroPeers: (params: MobilePreviewListMetroPeersParams) =>
+      ipcRenderer.invoke('mobilePreview:listMetroPeers', params),
+    bootDevice: (params: MobilePreviewBootDeviceParams) =>
+      ipcRenderer.invoke('mobilePreview:bootDevice', params),
     forwardPort: (params: MobilePreviewForwardPortParams) =>
       ipcRenderer.invoke('mobilePreview:forwardPort', params),
     ensureMetroReverse: (params: { deviceId: string; metroPort: number }) =>
@@ -1343,6 +1420,9 @@ contextBridge.exposeInMainWorld('api', {
   projectCommandGroups: {
     findByProjectId: (projectId: string) =>
       ipcRenderer.invoke('project:commandGroups:findByProjectId', projectId),
+    findAll: () => ipcRenderer.invoke('project:commandGroups:findAll'),
+    findFavorites: () =>
+      ipcRenderer.invoke('project:commandGroups:findFavorites'),
     create: (data: unknown) =>
       ipcRenderer.invoke('project:commandGroups:create', data),
     update: (id: string, data: unknown) =>
@@ -1372,13 +1452,17 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('project:commands:run:startAdHocCommand', params),
     startFavorite: (params: { projectId: string; runCommandId: string }) =>
       ipcRenderer.invoke('project:commands:run:startFavorite', params),
+    startFavoriteGroup: (params: { projectId: string; groupId: string }) =>
+      ipcRenderer.invoke('project:commands:run:startFavoriteGroup', params),
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];
+      groupId?: string;
     }) =>
       ipcRenderer.invoke('project:commands:run:startGroup', {
         taskId: params.taskId,
         runCommandIds: params.runCommandIds,
+        groupId: params.groupId,
       }),
     stopCommand: (params: { taskId: string; runCommandId: string }) =>
       ipcRenderer.invoke('project:commands:run:stopCommand', params),
@@ -1431,6 +1515,13 @@ contextBridge.exposeInMainWorld('api', {
           handler,
         );
     },
+    onGroupAborted: (callback: (event: RunCommandGroupAbortEvent) => void) => {
+      const handler = (_: unknown, event: RunCommandGroupAbortEvent) =>
+        callback(event);
+      ipcRenderer.on(RUN_COMMAND_GROUP_ABORT_CHANNEL, handler);
+      return () =>
+        ipcRenderer.removeListener(RUN_COMMAND_GROUP_ABORT_CHANNEL, handler);
+    },
     onLog: (
       callback: (
         taskId: string,
@@ -1468,6 +1559,30 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('project:commands:run:logsReset', handler);
       return () =>
         ipcRenderer.removeListener('project:commands:run:logsReset', handler);
+    },
+  },
+  terminal: {
+    ensure: (params: {
+      sessionId: string;
+      cwd: string;
+      cols: number;
+      rows: number;
+    }) => ipcRenderer.invoke('project:terminal:ensure', params),
+    write: (params: { sessionId: string; data: string }) =>
+      ipcRenderer.invoke('project:terminal:write', params),
+    resize: (params: { sessionId: string; cols: number; rows: number }) =>
+      ipcRenderer.invoke('project:terminal:resize', params),
+    close: (sessionId: string) =>
+      ipcRenderer.invoke('project:terminal:close', sessionId),
+    onData: (callback: (event: TerminalDataEvent) => void) => {
+      const handler = (_: unknown, event: TerminalDataEvent) => callback(event);
+      ipcRenderer.on(TERMINAL_DATA_CHANNEL, handler);
+      return () => ipcRenderer.removeListener(TERMINAL_DATA_CHANNEL, handler);
+    },
+    onExit: (callback: (event: TerminalExitEvent) => void) => {
+      const handler = (_: unknown, event: TerminalExitEvent) => callback(event);
+      ipcRenderer.on(TERMINAL_EXIT_CHANNEL, handler);
+      return () => ipcRenderer.removeListener(TERMINAL_EXIT_CHANNEL, handler);
     },
   },
   globalPrompt: {

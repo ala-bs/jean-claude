@@ -47,7 +47,8 @@ describe('generateProjectSummary', () => {
     expect(generateTextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: '/workspace/jean-claude',
-        allowedTools: ['Read'],
+        allowedTools: ['Read', 'Glob', 'Grep'],
+        prompt: expect.stringContaining('Do not launch subagents'),
       }),
     );
   });

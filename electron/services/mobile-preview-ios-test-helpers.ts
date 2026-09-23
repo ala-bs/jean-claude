@@ -19,6 +19,7 @@ import { dirname } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { minimizeMobilePreviewWindows } from './mobile-preview-window-utils';
 import { PassThrough } from 'node:stream';
+import { pendingIosSimulatorBootsByDeviceId } from './mobile-preview-ios-shared-state';
 import { tmpdir } from 'node:os';
 
 export { rawIosIdbAdapter };
@@ -169,6 +170,9 @@ export function mockFramebufferWithReadyHid(
 export function installIosPreviewTestHooks() {
   beforeEach(async () => {
     await resetCoreSimulatorFramebufferPoolForTests();
+    // Module-level map: a test that aborts or rejects mid-boot would otherwise
+    // leave an entry a later test silently joins.
+    pendingIosSimulatorBootsByDeviceId.clear();
     vi.resetAllMocks();
     await mkdir(tmpdir(), { recursive: true });
     process.env.JC_MOBILE_PREVIEW_IOS_CORE_SIMULATOR = '0';

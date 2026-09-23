@@ -39,7 +39,13 @@ export function CheckboxIndicator({
         className,
       )}
     >
-      {checked && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
+      {/* Always render the tick; the unchecked state hides it with
+          `text-transparent` above (lucide strokes with `currentColor`).
+          Rendering it conditionally left the indicator childless when
+          unchecked, which changed the baseline of this `inline-flex` box and
+          resized the whole checkbox row by 1px on every toggle — nudging every
+          setting below it. Keeping the DOM stable keeps the baseline stable. */}
+      <Check className="h-2.5 w-2.5" strokeWidth={3} />
     </span>
   );
 }

@@ -18,7 +18,6 @@ import { deleteAttachmentFiles } from '@/lib/prompt-attachment-cleanup';
 
 export type InputMode = 'search' | 'prompt';
 export type SearchStep = 'select' | 'compose';
-export type WorkItemsViewMode = 'list' | 'board';
 
 export interface NewTaskDraft {
   inputMode: InputMode;
@@ -33,7 +32,6 @@ export interface NewTaskDraft {
   updateWorkItemStatus: boolean;
   workItemsFilter: string;
   searchStep: SearchStep; // NEW: which step in search mode
-  workItemsViewMode: WorkItemsViewMode;
   /** Selected work item/comment composite IDs to include in prompt. */
   selectedCommentIds: string[];
   // Prompt mode state
@@ -138,7 +136,13 @@ const useStore = create<NewTaskDraftState>()(
 // Direct store access for non-React contexts
 export const useNewTaskDraftStore = useStore;
 
-type NewTaskDraftMetadata = Partial<Omit<NewTaskDraft, 'prompt'>>;
+// `prompt` and `workItemsFilter` are deliberately excluded: they change on
+// every keystroke and the overlay must not re-render its whole tree for them.
+// Both are read through narrow selectors in the small input components that
+// own them (`NewTaskPromptInput`, `NewTaskSearchInput`).
+type NewTaskDraftMetadata = Partial<
+  Omit<NewTaskDraft, 'prompt' | 'workItemsFilter'>
+>;
 
 function selectDraftMetadata(
   draft: Partial<NewTaskDraft> | undefined,
@@ -156,9 +160,7 @@ function selectDraftMetadata(
     agentBackend: draft.agentBackend,
     workItemIds: draft.workItemIds,
     updateWorkItemStatus: draft.updateWorkItemStatus,
-    workItemsFilter: draft.workItemsFilter,
     searchStep: draft.searchStep,
-    workItemsViewMode: draft.workItemsViewMode,
     selectedCommentIds: draft.selectedCommentIds,
     images: draft.images,
     files: draft.files,

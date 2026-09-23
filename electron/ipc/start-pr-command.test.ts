@@ -156,6 +156,65 @@ describe('resolveRunCommandStart', () => {
     });
   });
 
+  it('runs project-root ids in the repository checkout without a task row', async () => {
+    const deps = {
+      findTaskById: vi.fn().mockResolvedValue(undefined),
+      findProjectById: vi.fn().mockResolvedValue(project),
+      findCommandById: vi
+        .fn()
+        .mockResolvedValue({ id: 'web', projectId: 'project-1' }),
+    };
+
+    await expect(
+      resolveRunCommandStart(
+        { taskId: 'project-root:project-1', runCommandId: 'web' },
+        deps as never,
+      ),
+    ).resolves.toMatchObject({
+      taskId: 'project-root:project-1',
+      projectId: 'project-1',
+      workingDir: '/repo',
+    });
+    // The run id already names the project, so no task lookup is attempted.
+    expect(deps.findTaskById).not.toHaveBeenCalled();
+  });
+
+  it('treats a project-root id with no project as a task id, not a root run', async () => {
+    const deps = {
+      findTaskById: vi.fn().mockResolvedValue(undefined),
+      findProjectById: vi.fn().mockResolvedValue(project),
+      findCommandById: vi.fn(),
+    };
+
+    // Guards the disagreement the parser now resolves: run-command-service
+    // tests the parse with `!== null`, so an empty suffix must not reach here
+    // as a runnable project-root run.
+    await expect(
+      resolveRunCommandStart(
+        { taskId: 'project-root:', runCommandId: 'web' },
+        deps as never,
+      ),
+    ).rejects.toThrow('Task project-root: not found');
+    expect(deps.findProjectById).not.toHaveBeenCalled();
+  });
+
+  it('rejects a project-root command belonging to another project', async () => {
+    const deps = {
+      findTaskById: vi.fn(),
+      findProjectById: vi.fn().mockResolvedValue(project),
+      findCommandById: vi
+        .fn()
+        .mockResolvedValue({ id: 'web', projectId: 'project-2' }),
+    };
+
+    await expect(
+      resolveRunCommandStart(
+        { taskId: 'project-root:project-1', runCommandId: 'web' },
+        deps as never,
+      ),
+    ).rejects.toThrow('web');
+  });
+
   it('rejects foreign and missing group commands without partial launch', async () => {
     const deps = {
       findTaskById: vi.fn().mockResolvedValue(task),

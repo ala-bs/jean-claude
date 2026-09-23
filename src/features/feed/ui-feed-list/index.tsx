@@ -1108,6 +1108,7 @@ export function FeedList() {
     pinnedItems,
     prWorkspaceItems,
     completedPrItems,
+    autoCompletingPrItems,
     actionNeededItems,
     prReviewItems,
     activeTaskItems,
@@ -1158,6 +1159,7 @@ export function FeedList() {
   const hasUnpinnedItems =
     prWorkspaceItems.length > 0 ||
     completedPrItems.length > 0 ||
+    autoCompletingPrItems.length > 0 ||
     actionNeededItems.length > 0 ||
     prReviewItems.length > 0 ||
     activeTaskItems.length > 0 ||
@@ -1498,6 +1500,7 @@ export function FeedList() {
     pinnedItems.length +
     prWorkspaceItems.length +
     completedPrItems.length +
+    autoCompletingPrItems.length +
     prReviewItems.length +
     actionNeededItems.length +
     highPriorityItems.length +
@@ -1753,6 +1756,26 @@ export function FeedList() {
             Merged
           </div>
           {completedPrItems.map((item) => (
+            <MemoFeedCard
+              key={item.id}
+              item={item}
+              selection={selection}
+              isSelected={isFeedItemSelected(item, selection)}
+              isDraggable
+              onDragStartItem={setDraggedId}
+              onDragEnd={handleDragEnd}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* PRs queued/armed for auto-complete - pinned next to merged ones */}
+      {autoCompletingPrItems.length > 0 && (
+        <div className="flex flex-col">
+          <div className="text-ink-3 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wider uppercase">
+            Auto-completing
+          </div>
+          {autoCompletingPrItems.map((item) => (
             <MemoFeedCard
               key={item.id}
               item={item}

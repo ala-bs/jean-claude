@@ -18,6 +18,7 @@ import { RemoveScroll } from 'react-remove-scroll';
 
 import {
   beginCalendarLoad,
+  formatCalendarLoadError,
   markCalendarLoadSucceeded,
   shouldNotifyCalendarLoadError,
 } from '@/lib/calendar-load-error';
@@ -155,10 +156,7 @@ export function CalendarOverlay({ onClose }: { onClose: () => void }) {
       } catch (error) {
         if (!cancelled && shouldNotifyCalendarLoadError(error, loadId)) {
           addToast({
-            message:
-              error instanceof Error
-                ? error.message
-                : 'Could not load meetings',
+            message: formatCalendarLoadError(error),
             type: 'error',
           });
         }

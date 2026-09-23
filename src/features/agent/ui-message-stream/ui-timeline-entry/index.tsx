@@ -33,6 +33,7 @@ import {
 import { CommentableTextEntry } from '../ui-commentable-text-entry';
 import { getLanguageFromPath } from '../../ui-diff-view/language-utils';
 import { MarkdownContent } from '../../ui-markdown-content';
+import { MergeResolutionEntry } from '../ui-merge-resolution-entry';
 import { TodoListEntry } from '../ui-todo-list-entry';
 
 
@@ -837,6 +838,14 @@ function ToolEntry({
           </div>
         }
         defaultExpanded
+      />
+    );
+  }
+
+  if (toolUse.name === 'merge-resolution') {
+    return (
+      <MergeResolutionEntry
+        toolUse={toolUse as ToolUseByName<'merge-resolution'>}
       />
     );
   }

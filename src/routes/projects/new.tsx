@@ -1,4 +1,4 @@
-import { ArrowLeft, Folder, FolderOpen, Search } from 'lucide-react';
+import { ArrowLeft, Folder, FolderOpen, Link2, Search } from 'lucide-react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import type { FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -14,6 +14,10 @@ import {
   CloneRepoPane,
   type CloneResult,
 } from '@/features/project/ui-clone-repo-pane';
+import {
+  CloneUrlPane,
+  type CloneUrlResult,
+} from '@/features/project/ui-clone-url-pane';
 import { useCreateProject, useUploadProjectLogo } from '@/hooks/use-projects';
 import { Button } from '@/common/ui/button';
 import { getRandomColor } from '@/lib/colors';
@@ -61,7 +65,8 @@ function AddProjectPage() {
 
   const [pageState, setPageState] = useState<PageState>('source-selection');
   const [formData, setFormData] = useState<ProjectFormData | null>(null);
-  const [showClonePane, setShowClonePane] = useState(false);
+  // Only one clone pane can be open at a time.
+  const [activePane, setActivePane] = useState<'azure' | 'url' | null>(null);
   const [isFromClone, setIsFromClone] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -108,12 +113,32 @@ function AddProjectPage() {
     setPageState('form');
   }
 
-  function handleShowClonePane() {
-    setShowClonePane(true);
+  async function handleCloneUrlSuccess(result: CloneUrlResult) {
+    setActivePane(null);
+    const name = await inferProjectName(result.path);
+    const selectedLogoPath = await getDefaultLogoPath(result.path);
+    setFormData({
+      name,
+      path: result.path,
+      color: getRandomColor(),
+      selectedLogoPath,
+      // A plain URL clone carries no provider linkage — the user can attach a
+      // repo/work-item provider from the form if they want one.
+      repoProviderId: null,
+      repoProjectId: null,
+      repoProjectName: null,
+      repoId: null,
+      repoName: result.repoName,
+      workItemProviderId: null,
+      workItemProjectId: null,
+      workItemProjectName: null,
+    });
+    setIsFromClone(true);
+    setPageState('form');
   }
 
   async function handleCloneSuccess(result: CloneResult) {
-    setShowClonePane(false);
+    setActivePane(null);
     const selectedLogoPath = await getDefaultLogoPath(result.path);
     setFormData({
       name: result.repoName,
@@ -244,7 +269,15 @@ function AddProjectPage() {
             <Button
               variant="secondary"
               size="md"
-              onClick={handleShowClonePane}
+              onClick={() => setActivePane('url')}
+              icon={<Link2 />}
+            >
+              Clone from URL
+            </Button>
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={() => setActivePane('azure')}
               icon={
                 <svg viewBox="0 0 24 24" fill="currentColor">
                   <path d="M0 8.877L2.247 5.91l8.405-3.416V.022l7.37 5.393L2.966 8.338v8.225L0 15.707zm24-4.45v14.651l-5.753 4.9-9.303-3.057v3.056l-5.978-7.416 15.057 1.798V5.415z" />
@@ -331,10 +364,16 @@ function AddProjectPage() {
         )}
       </div>
 
-      {/* Clone pane */}
-      {showClonePane && (
+      {/* Clone panes */}
+      {activePane === 'url' && (
+        <CloneUrlPane
+          onClose={() => setActivePane(null)}
+          onCloneSuccess={handleCloneUrlSuccess}
+        />
+      )}
+      {activePane === 'azure' && (
         <CloneRepoPane
-          onClose={() => setShowClonePane(false)}
+          onClose={() => setActivePane(null)}
           onCloneSuccess={handleCloneSuccess}
         />
       )}

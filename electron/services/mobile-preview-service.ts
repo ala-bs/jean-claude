@@ -1,6 +1,12 @@
 import { app, BrowserWindow, type WebContents } from 'electron';
 
 import {
+  listMetroPeerIds,
+  sendMetroDevMenuCommand,
+  sendMetroReloadCommand,
+  waitForMetroClient,
+} from './mobile-preview-dev-menu';
+import {
   MOBILE_PREVIEW_H264_REPLAY_CHUNK_LIMIT,
   MOBILE_PREVIEW_REPLAY_BYTE_LIMIT,
   type MobileColorScheme,
@@ -11,6 +17,8 @@ import {
   type MobilePreviewAndroidSystemImage,
   type MobilePreviewAndroidToolStatus,
   type MobilePreviewAttachSessionParams,
+  type MobilePreviewBootDeviceParams,
+  type MobilePreviewBootDeviceResult,
   type MobilePreviewDetachSessionParams,
   type MobilePreviewDevice,
   type MobilePreviewDeviceAssignment,
@@ -22,13 +30,16 @@ import {
   type MobilePreviewIosRenameDeviceParams,
   type MobilePreviewIosRuntime,
   type MobilePreviewIosToolStatus,
+  type MobilePreviewListMetroPeersParams,
   type MobilePreviewListSessionsParams,
   type MobilePreviewOpenDeeplinkParams,
   type MobilePreviewOpenDevMenuParams,
   type MobilePreviewReloadExpoParams,
+  type MobilePreviewReloadExpoResult,
   type MobilePreviewSession,
   type MobilePreviewSetTextSizeParams,
   type MobilePreviewStartParams,
+  type MobilePreviewWaitForMetroClientParams,
   type MobileRotationDirection,
 } from '../../shared/mobile-simulator-types';
 
@@ -44,16 +55,14 @@ import {
   type MobilePreviewLifecycle,
   registerBeforeQuitCleanup,
 } from './mobile-preview-lifecycle';
-import {
-  sendMetroDevMenuCommand,
-  sendMetroReloadCommand,
-} from './mobile-preview-dev-menu';
 import { androidAdapter } from './mobile-preview-android-adapter';
+import { confirmQuit } from '../lib/quit-confirmation';
 import { iosIdbAdapter } from './mobile-preview-ios-idb-adapter';
 
 type MobilePreviewAdapter = {
   dispose?: () => Promise<void>;
   listDevices: () => Promise<MobilePreviewDevice[]>;
+  bootDevice?: (deviceId: string) => Promise<{ deviceId: string }>;
   startStream: (params: {
     taskId: string;
     deviceId: string;
@@ -538,6 +547,24 @@ export function createMobilePreviewService({
     ): Promise<MobilePreviewDevice[]> {
       assertSupportedPlatform(platform);
       return adapters[platform].listDevices();
+    },
+
+    /**
+     * Boots a simulator/emulator without starting a preview stream. Used by the
+     * lightweight mobile dev pane, which lets the user work against the real
+     * simulator window instead of a streamed framebuffer.
+     */
+    async bootDevice(
+      params: MobilePreviewBootDeviceParams,
+    ): Promise<MobilePreviewBootDeviceResult> {
+      assertSupportedPlatform(params.platform);
+      const bootDevice = adapters[params.platform].bootDevice;
+      if (!bootDevice) {
+        throw new Error(
+          `Booting devices is not supported for platform ${params.platform}`,
+        );
+      }
+      return bootDevice(params.deviceId);
     },
 
     listSessions(
@@ -1030,8 +1057,28 @@ export function createMobilePreviewService({
       }
     },
 
-    async reloadExpo(params: MobilePreviewReloadExpoParams): Promise<void> {
-      await sendMetroReloadCommand(params.metroPort);
+    async reloadExpo(
+      params: MobilePreviewReloadExpoParams,
+    ): Promise<MobilePreviewReloadExpoResult> {
+      return sendMetroReloadCommand(params.metroPort);
+    },
+
+    waitForMetroClient(
+      params: MobilePreviewWaitForMetroClientParams,
+    ): Promise<boolean> {
+      // Only the fields the renderer is allowed to set; `pollIntervalMs` is
+      // deliberately not forwarded from an IPC payload.
+      return waitForMetroClient({
+        metroPort: params.metroPort,
+        timeoutMs: params.timeoutMs,
+        ignorePeerIds: params.ignorePeerIds ?? [],
+      });
+    },
+
+    listMetroPeers(
+      params: MobilePreviewListMetroPeersParams,
+    ): Promise<string[]> {
+      return listMetroPeerIds(params.metroPort);
     },
 
     async forwardPort(params: MobilePreviewForwardPortParams): Promise<void> {
@@ -1171,6 +1218,7 @@ export const mobilePreviewService = createMobilePreviewService({
   },
   lifecycle: {
     onBeforeQuit: (callback) => app.on('before-quit', callback),
+    confirmQuit,
   },
   validateTaskCanStart: validatePersistedMobilePreviewTaskCanStart,
   deviceUsageStore: {

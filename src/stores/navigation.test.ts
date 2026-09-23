@@ -142,6 +142,15 @@ describe('navigation store', () => {
     );
   });
 
+  it('persists the last focused step so reopening a task restores it', async () => {
+    const { useNavigationStore } = await import('./navigation');
+
+    useNavigationStore.getState().setActiveStepId('task-1', 'step-2');
+
+    const persisted = JSON.parse(localStorage.getItem('navigation') ?? '{}');
+    expect(persisted.state.taskState['task-1'].activeStepId).toBe('step-2');
+  });
+
   it('defaults gesture feedback on and persists toggle changes', async () => {
     const { useNavigationStore } = await import('./navigation');
 
@@ -152,6 +161,30 @@ describe('navigation store', () => {
     expect(localStorage.getItem('navigation')).toContain(
       '"mobilePreviewShowGestures":false',
     );
+  });
+
+  it('restores the last focused step across a restart', async () => {
+    const { useNavigationStore } = await import('./navigation');
+    useNavigationStore.getState().setActiveStepId('task-remembered', 'step-7');
+
+    // Simulate an app restart: same localStorage, freshly imported store, so
+    // this covers the real round trip (partialize -> merge), not a hand-written
+    // fixture that would still pass if activeStepId were dropped from
+    // partialize. Also seed an entry seen by users upgrading from a build that
+    // never persisted the field.
+    const persisted = JSON.parse(localStorage.getItem('navigation') ?? '{}');
+    persisted.state.taskState['task-legacy'] = { rightPane: null };
+    localStorage.setItem('navigation', JSON.stringify(persisted));
+
+    vi.resetModules();
+    const { useNavigationStore: restored } = await import('./navigation');
+
+    expect(restored.getState().taskState['task-remembered']).toMatchObject({
+      activeStepId: 'step-7',
+    });
+    expect(restored.getState().taskState['task-legacy']).toMatchObject({
+      activeStepId: null,
+    });
   });
 
   it('migrates legacy mobile task views back to message content', async () => {

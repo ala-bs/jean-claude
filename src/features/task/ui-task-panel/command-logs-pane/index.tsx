@@ -38,6 +38,10 @@ import { useRunCommands } from '@/hooks/use-run-commands';
 
 import {
   buildCommandLogTabs,
+  buildCommandPortsById,
+  commandPortsMatchQuery,
+  describeCommandPorts,
+  formatCommandPorts,
   getCommandLogsEmptyText,
 } from './command-log-tabs';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from '../constants';
@@ -229,7 +233,10 @@ export function CommandLogsPane({
   onClose: () => void;
 }) {
   const commandAvailability = useProjectCommandAvailability(projectId);
-  const { commands } = commandAvailability;
+  // `commands` gates restarting (hidden commands are not runnable), while
+  // `allCommands` names the tabs so hiding a command does not turn its existing
+  // log tab into a "Removed command" entry.
+  const { commands, allCommands } = commandAvailability;
   const {
     status,
     isCommandStarting,
@@ -263,17 +270,32 @@ export function CommandLogsPane({
     [status],
   );
 
+  // Keyed by command id so the focus strip can tell "never started" (no entry)
+  // apart from "stopped" and "errored".
+  const commandStatusById = useMemo(
+    () =>
+      new Map(
+        (status?.commands ?? []).map((entry) => [entry.id, entry.status]),
+      ),
+    [status],
+  );
+
+  const portsByCommandId = useMemo(
+    () => buildCommandPortsById(status?.commands),
+    [status],
+  );
+
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
 
   const tabs = useMemo(
     () =>
       buildCommandLogTabs({
-        commands,
+        commands: allCommands,
         projectId,
         runCommandLogs,
         runningCommandIds,
       }),
-    [commands, projectId, runCommandLogs, runningCommandIds],
+    [allCommands, projectId, runCommandLogs, runningCommandIds],
   );
 
   const filteredTabs = useMemo(() => {
@@ -288,9 +310,18 @@ export function CommandLogsPane({
         return true;
       }
 
+      if (
+        commandPortsMatchQuery({
+          ports: portsByCommandId.get(tab.id),
+          query: normalizedSearchQuery,
+        })
+      ) {
+        return true;
+      }
+
       return logIncludesQuery(runCommandLogs[tab.id], normalizedSearchQuery);
     });
-  }, [normalizedSearchQuery, runCommandLogs, tabs]);
+  }, [normalizedSearchQuery, portsByCommandId, runCommandLogs, tabs]);
 
   const selectableTabs = normalizedSearchQuery ? filteredTabs : tabs;
   const activeCommandId =
@@ -308,6 +339,20 @@ export function CommandLogsPane({
   const isActiveConfigured = commands.some(
     (command) => command.id === activeCommandId,
   );
+  const activePortsLabel = describeCommandPorts(
+    activeCommandId ? portsByCommandId.get(activeCommandId) : undefined,
+  );
+  const activeCommandName = useMemo(() => {
+    const tab = tabs.find((entry) => entry.id === activeCommandId);
+    return tab ? getRunCommandDisplayName(tab) : '';
+  }, [activeCommandId, tabs]);
+  const activeStatusLabel = isActiveStarting
+    ? 'Starting'
+    : isActiveRunning
+      ? 'Running'
+      : activeCommandId
+        ? (commandStatusById.get(activeCommandId) ?? 'not started')
+        : 'not started';
 
   const restartCommand = useCallback(
     async (commandId: string) => {
@@ -457,6 +502,10 @@ export function CommandLogsPane({
       tabIndex={-1}
       onMouseDown={focusPaneInput}
       style={{ width }}
+      // Marks the pane so hosts that bind the same keys at panel scope (the
+      // project panel binds ⌘F to commit search) can decline while focus is in
+      // here and let the pane's own handler run.
+      data-command-logs-pane
       className="panel-edge-shadow bg-bg-0 relative flex h-full flex-col"
     >
       <div
@@ -524,67 +573,97 @@ export function CommandLogsPane({
               const isRunning = runningCommandIds.has(tab.id);
               const isActive = activeCommandId === tab.id;
               const displayName = getRunCommandDisplayName(tab);
+              const portsDescription = describeCommandPorts(
+                portsByCommandId.get(tab.id),
+              );
+              const portsLabel = formatCommandPorts(
+                portsByCommandId.get(tab.id),
+              );
 
               return (
                 <Button
                   key={tab.id}
                   type="button"
+                  variant="tab"
+                  size="xs"
+                  active={isActive}
+                  aria-pressed={isActive}
                   onClick={() => onSelectCommand(tab.id)}
                   className={clsx(
-                    'max-w-64 rounded border px-2.5 py-1 text-xs font-medium transition-colors',
-                    isActive
-                      ? 'bg-acc text-ink-0 border-transparent'
-                      : 'text-ink-1 bg-bg-1 hover:bg-glass-medium',
-                    isRunning && !isActive
-                      ? 'border-status-done/40'
-                      : 'border-transparent',
+                    'max-w-56 shrink-0',
+                    isActive && 'ring-acc ring-1 ring-inset',
                   )}
-                  title={`${displayName}${isRunning ? ' (running)' : ''}`}
-                  aria-label={`${displayName}${isRunning ? ', running' : ''}`}
+                  title={`${displayName}${portsDescription ? ` — ${portsDescription}` : ''}${isRunning ? ' (running)' : ''}`}
+                  aria-label={`${displayName}${portsDescription ? `, ${portsDescription}` : ''}${isRunning ? ', running' : ''}`}
                 >
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    {isRunning && (
-                      <Loader2
-                        className={clsx(
-                          'h-3 w-3 shrink-0 animate-spin',
-                          isActive ? 'text-ink-0' : 'text-status-done',
-                        )}
-                        aria-hidden
-                      />
+                  <span
+                    className={clsx(
+                      'h-1.5 w-1.5 shrink-0 rounded-full',
+                      isRunning ? 'bg-status-done animate-pulse' : 'bg-ink-3/40',
                     )}
-                    <span className="truncate">{displayName}</span>
-                    {isRunning && (
-                      <span
-                        className={clsx(
-                          'shrink-0 text-[10px] font-semibold uppercase',
-                          isActive ? 'text-ink-0/80' : 'text-status-done',
-                        )}
-                      >
-                        Running
-                      </span>
-                    )}
-                  </span>
+                    aria-hidden
+                  />
+                  <span className="truncate">{displayName}</span>
+                  {portsLabel ? (
+                    <span className="text-ink-3 shrink-0 font-mono text-[10px]">
+                      :{portsLabel}
+                    </span>
+                  ) : null}
                 </Button>
               );
             })}
           </div>
           <Separator />
 
-          {activeCommandId && (
-            <InteractiveLog
-              log={activeLogView}
-              taskId={taskId}
-              runCommandId={activeCommandId}
-              isRunning={isActiveRunning}
-              workingDir={workingDir}
-              ignoreBrowserShortcuts
-              emptyText={
-                normalizedSearchQuery
-                  ? `No log lines match "${searchQuery.trim()}".`
-                  : 'Waiting for output...'
-              }
+          {/* Focus strip: the single unambiguous answer to "which command am I
+              looking at?" — the header controls all act on this command. */}
+          <div className="bg-glass-light flex shrink-0 items-center gap-2 px-4 py-1.5">
+            <span
+              className="bg-acc h-3.5 w-0.5 shrink-0 rounded-full"
+              aria-hidden
             />
-          )}
+            <span className="text-ink-0 truncate font-mono text-xs">
+              {activeCommandName}
+            </span>
+            {activePortsLabel ? (
+              <span
+                className="text-ink-2 border-line-soft shrink-0 rounded border px-1 py-px font-mono text-[10px]"
+                title={`Configured ${activePortsLabel} for this command`}
+              >
+                {activePortsLabel}
+              </span>
+            ) : null}
+            <span
+              className={clsx(
+                'ml-auto flex shrink-0 items-center gap-1 text-[10px] font-semibold tracking-wide uppercase',
+                isActiveRunning
+                  ? 'text-status-done'
+                  : activeStatusLabel === 'errored'
+                    ? 'text-status-fail'
+                    : 'text-ink-3',
+              )}
+            >
+              {isActiveStarting && (
+                <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+              )}
+              {activeStatusLabel}
+            </span>
+          </div>
+          <Separator />
+
+          <InteractiveLog
+            log={activeLogView}
+            taskId={taskId}
+            runCommandId={activeCommandId}
+            isRunning={isActiveRunning}
+            workingDir={workingDir}
+            ignoreBrowserShortcuts
+            emptyText={
+              normalizedSearchQuery
+                ? `No log lines match "${searchQuery.trim()}".`
+                : 'Waiting for output...'
+            }
+          />
         </>
       ) : (
         <div className="text-ink-3 flex flex-1 items-center justify-center px-4 text-sm">

@@ -146,6 +146,17 @@ button {
   cursor: pointer;
 }
 
+/* Find-in-view (CSS Custom Highlight API) — see src/common/ui/find-in-view */
+::highlight(jc-find-match) {
+  background-color: oklch(0.85 0.16 95 / 0.45);
+  color: inherit;
+}
+
+::highlight(jc-find-match-current) {
+  background-color: oklch(0.82 0.19 60 / 0.9);
+  color: oklch(0.15 0 0);
+}
+
 .diff-line-range-selected > td {
   background-color: color-mix(
     in srgb,

@@ -7,10 +7,13 @@ import FocusLock from 'react-focus-lock';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Select } from '@/common/ui/select';
-import { AzureBoardProjectContent } from '@/features/work-item/ui-azure-board-overlay/project-content';
-import type { ConfiguredAzureBoardProject } from '@/features/work-item/ui-azure-board-overlay/project-content';
+import { WorkItemWorkspace } from '@/features/work-item/ui-work-item-workspace';
+import type { ConfiguredAzureBoardProject } from '@/features/work-item/ui-work-item-workspace';
 import { useActiveProjects } from '@/hooks/use-projects';
 import { useAzureBoardStore } from '@/stores/azure-board';
+import { useNewTaskDraftStore } from '@/stores/new-task-draft';
+import { useOverlaysStore } from '@/stores/overlays';
+import type { AzureDevOpsWorkItem } from '@/lib/api';
 
 export function AzureBoardOverlay({ onClose }: { onClose: () => void }) {
   const layer = useKeyboardLayer('overlay', {
@@ -49,6 +52,22 @@ export function AzureBoardOverlay({ onClose }: { onClose: () => void }) {
   const setSelectedProjectId = useAzureBoardStore((state) => state.setSelectedProjectId);
   const project =
     projects.find((candidate) => candidate.id === selectedProjectId) ?? projects[0];
+  // Seeds the new task draft with this work item and hands over to the new task
+  // overlay, straight at the compose step.
+  const createTask = useCallback(
+    (workItem: AzureDevOpsWorkItem) => {
+      if (!project) return;
+      const draft = useNewTaskDraftStore.getState();
+      draft.setSelectedProjectId(project.id);
+      draft.setDraft(project.id, {
+        inputMode: 'search',
+        searchStep: 'compose',
+        workItemIds: [String(workItem.id)],
+      });
+      useOverlaysStore.getState().open('new-task');
+    },
+    [project],
+  );
 
   return createPortal(
     <div
@@ -64,10 +83,12 @@ export function AzureBoardOverlay({ onClose }: { onClose: () => void }) {
           onClick={(event) => event.stopPropagation()}
         >
           {project ? (
-            <AzureBoardProjectContent
+            <WorkItemWorkspace
               key={project.id}
               project={project}
+              surface="board"
               onClose={onClose}
+              onCreateTask={createTask}
               escapeInterceptorRef={escapeInterceptorRef}
               headerLeading={
                 <>

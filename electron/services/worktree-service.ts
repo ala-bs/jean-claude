@@ -1842,7 +1842,7 @@ function isMergeConflictError(errorMessage: string): boolean {
   );
 }
 
-function getExecErrorMessage(error: unknown): string {
+export function getExecErrorMessage(error: unknown): string {
   if (!(error instanceof Error)) {
     return String(error);
   }
@@ -2610,7 +2610,7 @@ export async function pullBranch(params: {
  * local-tracking branch named `feature/a`. Returns null when the branch has no
  * upstream, or when it tracks a local branch (`branch.x.remote='.'`).
  */
-async function getUpstreamRef(params: {
+export async function getUpstreamRef(params: {
   worktreePath: string;
   branchName: string;
 }): Promise<{ remote: string; branch: string } | null> {

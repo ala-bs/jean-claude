@@ -46,6 +46,12 @@ import {
   useComposerFileCommentsStore,
 } from '@/stores/composer-file-comments';
 import {
+  type ConfiguredWorkItemProject,
+  CURRENT_ITERATION_DEFAULT_FILTERS,
+  WORK_ITEM_SELECTION_EXCLUDE_TYPES,
+  WorkItemWorkspace,
+} from '@/features/work-item/ui-work-item-workspace';
+import {
   deleteAttachmentFiles,
   findMissingAttachmentPaths,
 } from '@/lib/prompt-attachment-cleanup';
@@ -55,6 +61,10 @@ import {
   type PreparedProjectFeatures,
   prepareProjectFeatureReferences,
 } from '@/lib/prompt-feature-context';
+import {
+  getDefaultInteractionMode,
+  renormalizeDraftInteractionMode,
+} from '@/lib/default-interaction-mode';
 import {
   getModelsForBackend,
   getModelThinkingCapabilities,
@@ -67,7 +77,6 @@ import {
   type InputMode,
   useNewTaskDraftMetadata,
   useNewTaskDraftStore,
-  type WorkItemsViewMode,
 } from '@/stores/new-task-draft';
 import {
   KeyboardLayerProvider,
@@ -97,7 +106,6 @@ import {
   useActiveProjects,
   useProjectBranches,
   useProjectFeatureMap,
-  useProjectIsGitRepository,
   useReorderProjects,
 } from '@/hooks/use-projects';
 import {
@@ -119,7 +127,6 @@ import {
   useWorkItemComments,
   useWorkItems,
 } from '@/hooks/use-work-items';
-import { useUISetting, useUIStore } from '@/stores/ui';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
@@ -139,10 +146,9 @@ import { useBackendModels } from '@/hooks/use-backend-models';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
+import { useProjectCanCreateWorktree } from '@/hooks/use-project-git';
 import { useProjectSkills } from '@/hooks/use-skills';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
-import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
-import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 
 
 
@@ -168,6 +174,8 @@ function projectHasWorkItems(project: Project | null): boolean {
 }
 
 const EMPTY_PROMPT_FILES: PromptFilePart[] = [];
+/** Stable fallback so a fresh `[]` doesn't defeat the workspace's memoization. */
+const EMPTY_WORK_ITEM_IDS: string[] = [];
 
 const FinalPromptPreviewButton = memo(function FinalPromptPreviewButton({
   getPrompt,
@@ -459,6 +467,66 @@ function NewTaskPromptInput({
   );
 }
 
+/**
+ * Owns the work-item search text. Kept separate from the overlay (like
+ * `NewTaskPromptInput`) so typing re-renders only this input instead of the
+ * whole overlay tree, the project grid and the work item list/board.
+ */
+function NewTaskSearchInput({
+  draftKey,
+  inputRef,
+  placeholder,
+  onKeyDown,
+  hasCreateTaskError,
+  resetCreateTaskError,
+}: {
+  draftKey: string;
+  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  placeholder: string;
+  onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
+  hasCreateTaskError: boolean;
+  resetCreateTaskError: () => void;
+}) {
+  const value = useNewTaskDraftStore(
+    (state) => state.drafts[draftKey]?.workItemsFilter ?? '',
+  );
+  const setDraft = useNewTaskDraftStore((state) => state.setDraft);
+
+  const handleChange = useCallback(
+    (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+      if (hasCreateTaskError) {
+        resetCreateTaskError();
+      }
+      setDraft(draftKey, { workItemsFilter: event.target.value });
+    },
+    [draftKey, hasCreateTaskError, resetCreateTaskError, setDraft],
+  );
+
+  return (
+    <div
+      className="flex shrink-0 items-center gap-2.5 px-[18px] py-3.5"
+      style={{ borderBottom: '1px solid oklch(1 0 0 / 0.04)' }}
+    >
+      <Search
+        className="h-3.5 w-3.5 shrink-0"
+        style={{ color: 'oklch(0.55 0.01 280)' }}
+      />
+      <textarea
+        ref={inputRef}
+        value={value}
+        onChange={handleChange}
+        onKeyDown={onKeyDown}
+        placeholder={placeholder}
+        className="text-ink-1 placeholder-ink-3 field-sizing-content max-h-[40svh] min-h-[1lh] flex-1 resize-none bg-transparent text-sm outline-none"
+        style={{
+          caretColor: 'oklch(0.78 0.18 295)',
+          letterSpacing: '-0.005em',
+        }}
+      />
+    </div>
+  );
+}
+
 function getProjectGridColumns(): number {
   if (typeof window === 'undefined') return 8;
   if (window.innerWidth >= 1024) return 10;
@@ -518,14 +586,9 @@ export function NewTaskOverlay({
   const [highlightedWorkItemId, setHighlightedWorkItemId] = useState<
     string | null
   >(null);
+  // Set by WorkItemWorkspace so Escape pops its details pane stack first.
+  const workItemEscapeInterceptorRef = useRef<(() => boolean) | null>(null);
 
-  // Persisted panel width for work items picker
-  const workItemsPanelWidth = useUISetting('workItemsPanelWidth');
-  const setUISetting = useUIStore((s) => s.setSetting);
-  const handlePanelWidthChange = useCallback(
-    (width: number) => setUISetting('workItemsPanelWidth', width),
-    [setUISetting],
-  );
 
   const { triggerAnimation } = useShrinkToTarget({
     panelRef,
@@ -561,10 +624,6 @@ export function NewTaskOverlay({
         : null,
     [selectedProjectId, projects],
   );
-  const {
-    iterationFilter: workItemsIterationFilter,
-    setIterationFilter: setWorkItemsIterationFilter,
-  } = useWorkItemPickerIterationFilter(selectedProjectId);
   useEffect(() => {
     if (projectsLoading || selectedProjectId === null || selectedProject) {
       return;
@@ -607,9 +666,12 @@ export function NewTaskOverlay({
     },
   });
 
-  const { data: isGitRepository = false, isFetching: isGitRepositoryFetching } =
-    useProjectIsGitRepository(selectedProjectId);
-  const canCreateWorktree = isGitRepository;
+  // Not just "is a git repo": a repo with no commits has nothing to branch
+  // from, so `git worktree add` would fail after the task was already created.
+  const {
+    data: canCreateWorktree = false,
+    isFetching: isGitRepositoryFetching,
+  } = useProjectCanCreateWorktree(selectedProjectId);
 
   // Fetch branches for the selected project
   const { data: branchInfos = [], isFetching: branchesFetching } =
@@ -855,7 +917,9 @@ export function NewTaskOverlay({
 
   const currentInteractionMode = normalizeInteractionModeForBackend({
     backend: currentBackend,
-    mode: draft?.interactionMode ?? 'ask',
+    mode:
+      draft?.interactionMode ??
+      getDefaultInteractionMode({ project: selectedProject }),
   });
   const backendModelSelection = useMemo(
     () =>
@@ -972,23 +1036,26 @@ export function NewTaskOverlay({
     const nextThinkingEffort =
       rateLimitSuggestion.thinkingEffort ??
       (nextBackend !== currentBackend ? 'default' : currentThinkingEffort);
-    updateDraft({
+    // Functional form: the mode must be re-read from live store state, not the
+    // render-scoped snapshot, or an imperative write between render and this
+    // effect would be clobbered with a stale value.
+    updateDraft((prev) => ({
       agentBackend: nextBackend,
       modelPreference: nextModel,
       thinkingEffort: nextThinkingEffort,
       backendModelPresetId: null,
       shouldAutoSelectBackendModelPreset: false,
-      interactionMode: normalizeInteractionModeForBackend({
+      interactionMode: renormalizeDraftInteractionMode({
+        draftMode: prev?.interactionMode,
         backend: nextBackend,
-        mode: currentInteractionMode,
       }),
-    });
+    }));
   }, [
     currentBackend,
-    currentInteractionMode,
     currentModelPreference,
     currentThinkingEffort,
     draft?.agentBackend,
+    draft?.interactionMode,
     draft?.modelPreference,
     isNoteMode,
     rateLimitSuggestion,
@@ -1610,6 +1677,11 @@ export function NewTaskOverlay({
       return false;
     }
 
+    // The work item details pane steps back one level before the overlay closes.
+    if (workItemEscapeInterceptorRef.current?.()) {
+      return true;
+    }
+
     if (inputMode === 'search' && searchStep === 'compose') {
       // In compose step, go back to select
       backToSelect();
@@ -1617,6 +1689,7 @@ export function NewTaskOverlay({
       // Otherwise close overlay
       onClose();
     }
+    return true;
   }, [isPromptAutocompleteOpen, inputMode, searchStep, backToSelect, onClose]);
 
   // Show search input only in select step
@@ -1631,22 +1704,6 @@ export function NewTaskOverlay({
     }
     searchInputRef.current?.focus();
   }, [showPromptInput]);
-
-  // Handle input change
-  const handleInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      // Clear error when user starts typing
-      if (createTaskMutation.isError) {
-        createTaskMutation.reset();
-      }
-      if (inputMode === 'search') {
-        updateDraft({ workItemsFilter: e.target.value });
-      } else {
-        updateDraft({ prompt: e.target.value });
-      }
-    },
-    [inputMode, updateDraft, createTaskMutation],
-  );
 
   const handleImageAttach = useCallback(
     (image: PromptImagePart) => {
@@ -1725,8 +1782,6 @@ export function NewTaskOverlay({
       cancelled = true;
     };
   }, [draftKey, updateDraft]);
-
-  const searchInputValue = draft?.workItemsFilter ?? '';
 
   // Register keyboard shortcuts
   useCommands(
@@ -1869,27 +1924,14 @@ export function NewTaskOverlay({
           >
             {/* Search/Prompt input - only show in select or prompt mode */}
             {showSearchInput && (
-              <div
-                className="flex shrink-0 items-center gap-2.5 px-[18px] py-3.5"
-                style={{ borderBottom: '1px solid var(--color-glass-border)' }}
-              >
-                <Search
-                  className="h-3.5 w-3.5 shrink-0"
-                  style={{ color: 'var(--color-ink-3)' }}
-                />
-                <textarea
-                  ref={searchInputRef}
-                  value={searchInputValue}
-                  onChange={handleInputChange}
-                  onKeyDown={handleKeyDown}
-                  placeholder={getPlaceholder({ mode: inputMode, isNoteMode })}
-                  className="text-ink-1 placeholder-ink-3 field-sizing-content max-h-[40svh] min-h-[1lh] flex-1 resize-none bg-transparent text-sm outline-none"
-                  style={{
-                    caretColor: 'var(--color-acc)',
-                    letterSpacing: '-0.005em',
-                  }}
-                />
-              </div>
+              <NewTaskSearchInput
+                draftKey={draftKey}
+                inputRef={searchInputRef}
+                placeholder={getPlaceholder({ mode: inputMode, isNoteMode })}
+                onKeyDown={handleKeyDown}
+                hasCreateTaskError={createTaskMutation.isError}
+                resetCreateTaskError={createTaskMutation.reset}
+              />
             )}
             {showPromptInput && (
               <NewTaskPromptInput
@@ -1953,19 +1995,12 @@ export function NewTaskOverlay({
               <div className="flex h-full w-full grow flex-col overflow-hidden p-2">
                 <SearchModeContent
                   project={selectedProject}
-                  filter={draft?.workItemsFilter ?? ''}
-                  selectedWorkItemIds={draft?.workItemIds ?? []}
-                  viewMode={draft?.workItemsViewMode ?? 'board'}
-                  onViewModeChange={(mode: WorkItemsViewMode) =>
-                    updateDraft({ workItemsViewMode: mode })
-                  }
-                  iterationFilter={workItemsIterationFilter}
-                  onIterationFilterChange={setWorkItemsIterationFilter}
+                  draftKey={draftKey}
+                  selectedWorkItemIds={draft?.workItemIds ?? EMPTY_WORK_ITEM_IDS}
                   onWorkItemToggle={handleWorkItemToggle}
                   onClearSelectedWorkItems={handleClearSelectedWorkItems}
                   onHighlightChange={setHighlightedWorkItemId}
-                  panelWidth={workItemsPanelWidth}
-                  onPanelWidthChange={handlePanelWidthChange}
+                  escapeInterceptorRef={workItemEscapeInterceptorRef}
                   onAdvanceToCompose={advanceToCompose}
                   canAdvance={canAdvanceToCompose}
                 />
@@ -2035,24 +2070,22 @@ export function NewTaskOverlay({
                     layer={layer}
                     onChange={(selection) => {
                       userTouchedSelectionRef.current = true;
-                      const normalizedMode = normalizeInteractionModeForBackend(
-                        {
-                          backend: selection.backend,
-                          mode: currentInteractionMode,
-                        },
-                      );
+
                       const nextThinkingCapabilities =
                         getModelThinkingCapabilities(
                           selection.model,
                           dynamicModels,
                         );
 
-                      updateDraft({
+                      updateDraft((prev) => ({
                         agentBackend: selection.backend,
                         backendModelPresetId: selection.presetId,
                         shouldAutoSelectBackendModelPreset:
                           selection.presetId !== null,
-                        interactionMode: normalizedMode,
+                        interactionMode: renormalizeDraftInteractionMode({
+                          draftMode: prev?.interactionMode,
+                          backend: selection.backend,
+                        }),
                         modelPreference: selection.model,
                         thinkingEffort: normalizeThinkingEffortForModel({
                           backend: selection.backend,
@@ -2067,7 +2100,7 @@ export function NewTaskOverlay({
                             'default',
                           capabilities: nextThinkingCapabilities,
                         }),
-                      });
+                      }));
                     }}
                   />
                 )}
@@ -2095,18 +2128,18 @@ export function NewTaskOverlay({
                     suggestedPresetId={rateLimitSuggestedPresetId}
                     onApplySuggestion={(selection) => {
                       userTouchedSelectionRef.current = true;
-                      updateDraft({
+                      updateDraft((prev) => ({
                         agentBackend: selection.backend,
                         backendModelPresetId: null,
                         shouldAutoSelectBackendModelPreset: false,
-                        interactionMode: normalizeInteractionModeForBackend({
+                        interactionMode: renormalizeDraftInteractionMode({
+                          draftMode: prev?.interactionMode,
                           backend: selection.backend,
-                          mode: currentInteractionMode,
                         }),
                         modelPreference: selection.model,
                         thinkingEffort:
                           selection.thinkingEffort as ThinkingEffort,
-                      });
+                      }));
                     }}
                   />
                 )}
@@ -2564,35 +2597,47 @@ function ToolCheckmark({ checked }: { checked: boolean }) {
 // Work item search mode content with real work items
 function SearchModeContent({
   project,
-  filter,
+  draftKey,
   selectedWorkItemIds,
-  viewMode,
-  onViewModeChange,
-  iterationFilter,
-  onIterationFilterChange,
   onWorkItemToggle,
   onClearSelectedWorkItems,
   onHighlightChange,
-  panelWidth,
-  onPanelWidthChange,
+  escapeInterceptorRef,
   onAdvanceToCompose,
   canAdvance,
 }: {
   project: Project | null;
-  filter: string;
+  draftKey: string;
   selectedWorkItemIds: string[];
-  viewMode: WorkItemsViewMode;
-  onViewModeChange: (mode: WorkItemsViewMode) => void;
-  iterationFilter: string;
-  onIterationFilterChange: (iterationFilter: string) => void;
   onWorkItemToggle: (workItem: AzureDevOpsWorkItem) => void;
   onClearSelectedWorkItems: () => void;
   onHighlightChange?: (workItemId: string | null) => void;
-  panelWidth?: number;
-  onPanelWidthChange?: (width: number) => void;
+  escapeInterceptorRef: React.RefObject<(() => boolean) | null>;
   onAdvanceToCompose: () => void;
   canAdvance: boolean;
 }) {
+  // Subscribed here rather than passed down from the overlay, so filter
+  // keystrokes re-render only this subtree. Deliberately NOT deferred:
+  // `exactMatchWorkItemId` (and therefore the highlight that Enter acts on) is
+  // derived from this value, so deferring it lets a fast "type #12345 then
+  // select" land on the previously highlighted item.
+  const filter = useNewTaskDraftStore(
+    (state) => state.drafts[draftKey]?.workItemsFilter ?? '',
+  );
+  const setDraft = useNewTaskDraftStore((state) => state.setDraft);
+  const handleSearchChange = useCallback(
+    (workItemsFilter: string) => setDraft(draftKey, { workItemsFilter }),
+    [draftKey, setDraft],
+  );
+  const selection = useMemo(
+    () => ({
+      selectedWorkItemIds,
+      onToggleSelect: onWorkItemToggle,
+      onClearSelection: onClearSelectedWorkItems,
+    }),
+    [selectedWorkItemIds, onWorkItemToggle, onClearSelectedWorkItems],
+  );
+
   if (!project) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -2617,23 +2662,18 @@ function SearchModeContent({
   }
 
   return (
-    <WorkItemPicker
-      appProjectId={project.id}
-      providerId={project.workItemProviderId!}
-      projectId={project.workItemProjectId!}
-      projectName={project.workItemProjectName!}
-      selectedWorkItemIds={selectedWorkItemIds}
-      onToggleSelect={onWorkItemToggle}
-      onClearSelection={onClearSelectedWorkItems}
+    <WorkItemWorkspace
+      key={project.id}
+      project={project as ConfiguredWorkItemProject}
+      surface="new-task"
+      selection={selection}
       onHighlightChange={onHighlightChange}
-      filter={filter}
-      viewMode={viewMode}
-      onViewModeChange={onViewModeChange}
-      iterationFilter={iterationFilter}
-      onIterationFilterChange={onIterationFilterChange}
-      panelWidth={panelWidth}
-      onPanelWidthChange={onPanelWidthChange}
-      headerRight={
+      escapeInterceptorRef={escapeInterceptorRef}
+      search={filter}
+      onSearchChange={handleSearchChange}
+      defaultFilters={CURRENT_ITERATION_DEFAULT_FILTERS}
+      excludeWorkItemTypes={WORK_ITEM_SELECTION_EXCLUDE_TYPES}
+      headerActions={
         canAdvance ? (
           <Button variant="primary" size="sm" onClick={onAdvanceToCompose}>
             Next

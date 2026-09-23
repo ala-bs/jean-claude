@@ -169,7 +169,17 @@ async function generateWithClaudeCode({
             disallowedTools: CLAUDE_CODE_TOOLS,
             canUseTool: denyToolUse,
           }
-        : {}),
+        : allowedTools
+          ? {
+              // `allowedTools` only auto-approves tools; it does not remove them
+              // from the model's toolset (sdk.d.ts: "To restrict which tools are
+              // available, use the `tools` option instead"). Without this the
+              // model can still call Agent, spawn a subagent and end its turn
+              // narrating "awaiting results" instead of producing output.
+              tools: buildClaudeCodeToolset(allowedTools, skillName),
+              disallowedTools: ALWAYS_DENIED_GENERATION_TOOLS,
+            }
+          : {}),
       model: model !== 'default' ? model : undefined,
       abortController,
       ...(thinkingEffort === 'low' ||
@@ -233,8 +243,30 @@ async function generateWithClaudeCode({
           allowEmptyUsage: true,
         });
       }
-      if (outputSchema && msg.structured_output !== undefined) {
-        return msg.structured_output;
+      if (outputSchema) {
+        if (msg.structured_output !== undefined) {
+          return msg.structured_output;
+        }
+        // Structured output was requested but the SDK did not return one (the
+        // model sometimes just narrates "I already called the StructuredOutput
+        // tool"). Never fall back to the raw assistant text here: callers
+        // expect schema-shaped data and would otherwise persist that narration
+        // as the real content. Try a JSON parse, then give up so the caller can
+        // retry / surface an error. The parse must yield a plain object: the
+        // narration often carries a ```json fence echoing the schema or a bare
+        // scalar, which would otherwise sail through as "structured" output.
+        const parsed =
+          typeof msg.result === 'string' ? parseJsonResponse(msg.result) : null;
+        if (parsed !== null && !Array.isArray(parsed) && typeof parsed === 'object') {
+          return parsed;
+        }
+        dbg.agent(
+          'Claude Code structured output missing (model=%s skill=%s preview=%s)',
+          model,
+          skillName ?? '(none)',
+          summarizeForDebug(msg.result ?? ''),
+        );
+        return null;
       }
       return msg.result ?? null;
     }
@@ -989,6 +1021,10 @@ const CLAUDE_CODE_TOOLS = [
   'AskUserQuestion',
 ];
 
+// Deny these even if a caller allow-lists them: a one-off generation cannot wait
+// on a subagent or answer a user question.
+const ALWAYS_DENIED_GENERATION_TOOLS = ['Task', 'Agent', 'AskUserQuestion'];
+
 const OPEN_CODE_DISABLED_TOOLS = Object.fromEntries(
   [
     'read',
@@ -1028,6 +1064,26 @@ function buildClaudeCodeAllowedTools(
 
   if (skillName) tools.push(`Skill(${skillName})`);
   return tools;
+}
+
+/**
+ * The base set of built-in tools the generation may use. Unlike `allowedTools`
+ * (auto-approval only) this removes everything else from the model's toolset.
+ * `Skill` stays in when a skill drives the generation; the matching
+ * `Skill(<name>)` entry in `allowedTools` keeps it from prompting.
+ */
+function buildClaudeCodeToolset(
+  allowedTools: string[],
+  skillName?: string | null,
+): string[] {
+  const tools = new Set(allowedTools.map(stripToolPattern));
+  if (skillName) tools.add('Skill');
+  return [...tools];
+}
+
+function stripToolPattern(tool: string): string {
+  const parenIndex = tool.indexOf('(');
+  return parenIndex === -1 ? tool : tool.slice(0, parenIndex);
 }
 
 function parseJsonResponse(text: string): unknown | null {

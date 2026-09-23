@@ -64,6 +64,7 @@ import { useCompleteTask, useTask } from '@/hooks/use-tasks';
 import { api } from '@/lib/api';
 import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
 import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-dialog';
+import { FeedItemDeviceBadge } from './feed-item-device-badge';
 import { formatRelativeTime } from '@/lib/time';
 import { getRunCommandDisplayName } from '@shared/run-command-types';
 import { PrAutoComplete } from '@/features/pull-request/ui-pr-auto-complete';
@@ -73,6 +74,7 @@ import { useNavigationStore } from '@/stores/navigation';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOpenReviewCommentCount } from '@/stores/review-comments';
 import { useOverlaysStore } from '@/stores/overlays';
+import { usePrCompletionQueueEntry } from '@/stores/pr-completion-queue';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useToastStore } from '@/stores/toasts';
 import { useWorkItemModalStore } from '@/stores/work-item-modal';
@@ -344,6 +346,7 @@ function RailPrAutoCompleteButton({
   canSet: boolean;
 }) {
   const { data: pr, isLoading } = usePullRequest(projectId, prId);
+  const isQueued = !!usePrCompletionQueueEntry(projectId, prId);
 
   if (isLoading) {
     return (
@@ -358,7 +361,10 @@ function RailPrAutoCompleteButton({
     return null;
   }
 
-  if (!pr.autoCompleteSetBy && !canSet) {
+  // A queued PR must stay visible even when it can no longer be armed (e.g. a
+  // conflict cleared `canSet`), or it would sit in the queue with no chip and
+  // no way to remove it from the feed.
+  if (!pr.autoCompleteSetBy && !canSet && !isQueued) {
     return null;
   }
 
@@ -935,6 +941,7 @@ export function FeedItemCard({
                 >
                   {itemTitle}
                 </span>
+                {isTask && <FeedItemDeviceBadge taskId={item.taskId} />}
                 {item.source === 'task' && needsAttention && (
                   <span
                     className={clsx(
@@ -1436,6 +1443,7 @@ function SubtaskRow({
           <span className="text-ink-2 min-w-0 flex-1 truncate text-[11.5px]">
             {child.title}
           </span>
+          <FeedItemDeviceBadge taskId={child.taskId} />
           {childNeedsAttention && (
             <span
               className={clsx(

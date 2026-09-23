@@ -23,6 +23,7 @@ import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-m
 import { Header } from '@/layout/ui-header';
 import { MainSidebar } from '@/layout/ui-main-sidebar';
 import { OverlayHost } from '@/layout/ui-overlay-host';
+import { PrCompletionQueueDriver } from '@/features/pull-request/ui-pr-completion-queue-driver';
 import { pruneOrphanedReviewComments } from '@/stores/review-comments';
 import { pruneOrphanedTaskPrompts } from '@/stores/task-prompts';
 import { pruneOrphanedTaskReviewDrafts } from '@/stores/task-review-comment-drafts';
@@ -384,6 +385,27 @@ function RunningCommandsContainer() {
   return null;
 }
 
+function PrCompletionQueueContainer() {
+  const layer = useKeyboardLayer('global-nav');
+  const toggle = useOverlaysStore((s) => s.toggle);
+
+  useCommands(
+    'pr-completion-queue-trigger',
+    [
+      {
+        label: 'Open PR Completion Queue',
+        section: 'Navigation',
+        handler: () => {
+          toggle('pr-completion-queue');
+        },
+      },
+    ],
+    { layer },
+  );
+
+  return null;
+}
+
 function PipelinesOverlayContainer() {
   const layer = useKeyboardLayer('global-nav');
   const toggle = useOverlaysStore((s) => s.toggle);
@@ -437,12 +459,14 @@ function useCleanupNonActiveTasks() {
       // Prune diff review state (reviewed files, tabs, groups)
       pruneOrphanedDiffReviewState(existingIds);
 
-      // Prune navigation task state
+      // Prune navigation task state. Keyed on existence, not activity: nav
+      // state holds the last focused step, and reopening a *completed* task to
+      // re-read a step is exactly when restoring that focus matters.
       // Note: clearTaskNavHistoryState also calls clearReviewCommentsForTask
       // internally, but pruneOrphanedReviewComments above already handled that.
       const navState = useNavigationStore.getState();
       for (const taskId of Object.keys(navState.taskState)) {
-        if (!activeIds.has(taskId)) {
+        if (!existingIds.has(taskId)) {
           navState.clearTaskNavHistoryState(taskId);
         }
       }
@@ -518,6 +542,7 @@ function RootLayout() {
       <RateLimitSwapBridge />
       <AgentMemoryCaptureWarningBridge />
       <TaskMessageManager />
+      <PrCompletionQueueDriver />
       <AppearanceBridge />
       <GlobalPromptFromBackModal />
       <WorkItemModal />
@@ -542,6 +567,7 @@ function RootLayout() {
           <WorkActivityContainer />
           <RunningCommandsContainer />
           <PipelinesOverlayContainer />
+          <PrCompletionQueueContainer />
           <OverlayHost />
         </>
       )}

@@ -11,6 +11,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import {
+  memo,
   type ReactNode,
   startTransition,
   useCallback,
@@ -43,6 +44,8 @@ import {
 } from '@/hooks/use-work-items';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import { canShowWorkItemSummary } from '@/lib/work-item-summary';
+import { FindInViewBar, useFindInView } from '@/common/ui/find-in-view';
+import { useWorkItemModalStore } from '@/stores/work-item-modal';
 import { Kbd } from '@/common/ui/kbd';
 import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
@@ -67,7 +70,13 @@ import { WorkItemTagEditor } from '../ui-work-item-tag-editor';
 import { WorkItemTypeIcon } from '../ui-work-item-shared';
 type DetailsTab = 'content' | 'comments' | 'history' | 'test-cases';
 
-export function WorkItemPreview({
+/**
+ * Memoized: this renders the highlighted work item's description through a full
+ * markdown/HTML pipeline. It sits beside the work-item search box, so without
+ * this it re-parsed the description on every filter keystroke even though none
+ * of its props changed.
+ */
+export const WorkItemPreview = memo(function WorkItemPreview({
   workItem,
   projectId,
   providerId,
@@ -125,6 +134,19 @@ export function WorkItemPreview({
   const [containerWidth, setContainerWidth] = useState(() => window.innerWidth);
   const commentsPaneRef = useRef<HTMLDivElement>(null);
   const workItemIdRef = useRef(workItemId);
+  const contentPaneRef = useRef<HTMLDivElement>(null);
+  // The full details modal renders its own find bar on top of this pane; only
+  // one ⌘F owner may be active at a time (bindings are LIFO, not scoped).
+  const isWorkItemModalOpen = useWorkItemModalStore(
+    (state) => state.target !== null,
+  );
+  const findInputRef = useRef<{ focus: () => void }>(null);
+  const find = useFindInView({
+    containerRef: contentPaneRef,
+    inputRef: findInputRef,
+    contentKey: String(workItemId),
+    enabled: !isWorkItemModalOpen,
+  });
   const isEditorial = variant === 'editorial';
   const { containerRef, isDragging, handleMouseDown } = useHorizontalResize({
     initialWidth: commentsPaneWidth,
@@ -557,7 +579,29 @@ export function WorkItemPreview({
              : 'grid-cols-1'
          } ${isDragging ? 'select-none' : ''}`}
         >
-        <div className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto xl:pr-4">
+        {/* The search bar sits outside `contentPaneRef` on purpose: that element
+            is watched by a MutationObserver, and a bar inside it would observe
+            its own "N of M" counter updates. */}
+        <div className="relative flex min-h-0 min-w-0 flex-col">
+          {find.isOpen && (
+            <div className="absolute top-1 right-5 z-20">
+              <FindInViewBar
+                ref={findInputRef}
+                query={find.query}
+                onQueryChange={find.setQuery}
+                currentMatch={find.currentMatch}
+                totalMatches={find.matchCount}
+                onNext={find.goToNextMatch}
+                onPrevious={find.goToPreviousMatch}
+                onClose={find.close}
+                placeholder="Find in description..."
+              />
+            </div>
+          )}
+          <div
+            ref={contentPaneRef}
+            className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto xl:pr-4"
+          >
           {activeTab === 'content' && (
             <div>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
@@ -761,6 +805,7 @@ export function WorkItemPreview({
               )}
             </div>
           )}
+          </div>
         </div>
 
         {showCommentsAside && (
@@ -859,7 +904,7 @@ export function WorkItemPreview({
       </div>
     </div>
   );
-}
+});
 
 function RelatedWorkItems({
   workItem,

@@ -121,7 +121,7 @@ export function useMessageContextMenu(
       document.body,
     );
 
-  return { openMenu, portal };
+  return { openMenu, closeMenu: close, portal };
 }
 
 // Pre-built item factories
@@ -191,15 +191,19 @@ function formatToolInput(toolUse: NormalizedToolUse): string {
       return (toolUse as ToolUseByName<'bash'>).input.command;
     case 'read':
       return (toolUse as ToolUseByName<'read'>).input.filePath;
+    // `files` is authoritative whenever present, including for a single file:
+    // aggregate entries (turn summaries, merge resolutions) carry their content
+    // only in `files` and leave the scalar fields empty, so falling back to
+    // those would copy a path followed by two blank markers.
     case 'write': {
       const input = toolUse as ToolUseByName<'write'>;
-      return input.input.files && input.input.files.length > 1
+      return input.input.files?.length
         ? input.input.files.map((file) => file.filePath).join('\n')
         : `${input.input.filePath}\n${input.input.value}`;
     }
     case 'edit': {
       const input = toolUse as ToolUseByName<'edit'>;
-      return input.input.files && input.input.files.length > 1
+      return input.input.files?.length
         ? input.input.files.map((file) => file.filePath).join('\n')
         : `${input.input.filePath}\n-${input.input.oldString}\n+${input.input.newString}`;
     }

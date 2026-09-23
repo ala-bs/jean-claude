@@ -1,5 +1,15 @@
 export type MobilePlatform = 'ios' | 'android';
 
+/**
+ * Human-readable platform names. Lives next to `MobilePlatform` so the mapping
+ * is exhaustive by construction: adding a platform to the union is a type error
+ * here rather than a silently missing label at some call site.
+ */
+export const PLATFORM_LABELS: Record<MobilePlatform, string> = {
+  ios: 'iOS',
+  android: 'Android',
+};
+
 export type MobilePreviewQuality = 'low' | 'balanced' | 'high' | 'very-high';
 export type MobilePreviewTextSize = 'small' | 'normal' | 'large' | 'x-large';
 
@@ -227,6 +237,45 @@ export type MobilePreviewOpenDevMenuParams = {
 
 export type MobilePreviewReloadExpoParams = {
   metroPort: number;
+};
+
+export type MobilePreviewReloadExpoResult = {
+  /**
+   * Apps attached to Metro's message socket when the reload went out. `0`
+   * means the broadcast reached nobody (the visible symptom is "Reload does
+   * nothing"), `-1` means the count could not be determined.
+   */
+  connectedClients: number;
+};
+
+export type MobilePreviewWaitForMetroClientParams = {
+  metroPort: number;
+  timeoutMs: number;
+  /**
+   * Peers already attached before the operation the caller is waiting on.
+   * Without it, another device's app already on this Metro satisfies the wait
+   * instantly and the wait becomes a no-op.
+   */
+  ignorePeerIds?: readonly string[];
+};
+
+export type MobilePreviewListMetroPeersParams = {
+  metroPort: number;
+};
+
+/**
+ * Boot-only request used by the lightweight mobile dev pane. Unlike `start` it
+ * opens no stream and installs nothing: it just brings the simulator/emulator
+ * up and leaves its window on screen for the user to look at directly.
+ */
+export type MobilePreviewBootDeviceParams = {
+  platform: MobilePlatform;
+  deviceId: string;
+};
+
+export type MobilePreviewBootDeviceResult = {
+  /** Resolved device id (an adb serial for Android AVDs booted on demand). */
+  deviceId: string;
 };
 
 export type MobilePreviewExpoLaunchParams = {

@@ -14,6 +14,7 @@ import { createPortal } from 'react-dom';
 
 import type { BranchInfo, Task } from '@shared/types';
 import { type ComponentSize, sizeClasses } from '@/common/ui/styles';
+import { getTaskPromptPreview } from '@/lib/task-prompt-preview';
 import { useDropdownPosition } from '@/common/hooks/use-dropdown-position';
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { useRegisterOverlay } from '@/common/context/overlay';
@@ -85,7 +86,7 @@ export function BranchOrTaskSelect({
   const filteredTasks = useMemo(
     () =>
       (activeTasks ?? []).filter((t) => {
-        const name = t.name ?? t.prompt;
+        const name = t.name ?? getTaskPromptPreview(t.prompt);
         return name.toLowerCase().includes(lowerSearch);
       }),
     [activeTasks, lowerSearch],
@@ -246,7 +247,7 @@ export function BranchOrTaskSelect({
     if (selectedTaskId) {
       const task = (activeTasks ?? []).find((t) => t.id === selectedTaskId);
       if (task) {
-        const name = task.name ?? task.prompt;
+        const name = task.name ?? getTaskPromptPreview(task.prompt);
         return name.length > 30 ? name.slice(0, 30) + '...' : name;
       }
     }
@@ -260,7 +261,7 @@ export function BranchOrTaskSelect({
   const renderTaskItem = (task: Task, navIndex: number) => {
     const isSelected = task.id === selectedTaskId;
     const isFocused = navIndex === focusedIndex;
-    const name = task.name ?? task.prompt;
+    const name = task.name ?? getTaskPromptPreview(task.prompt);
     const displayName = name.length > 50 ? name.slice(0, 50) + '...' : name;
 
     return (

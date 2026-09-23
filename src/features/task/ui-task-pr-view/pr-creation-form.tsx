@@ -549,16 +549,32 @@ export function PrCreationForm({
     const displayTitle = title.trim() || 'AI-generated PR';
     // Strip unconditionally rather than only for known images: a placeholder
     // left by a pruned or unreadable ref would otherwise be posted verbatim.
-    const descriptionWithoutImagePlaceholders = stripUnresolvedImagePlaceholders(
+    const strippedForCreate = stripUnresolvedImagePlaceholders(
       imagesToUpload.reduce((current, image) => {
         const pattern = placeholderPattern(image.placeholderMarkdown);
         return pattern ? current.replace(pattern, '') : current;
       }, descriptionToCreate),
-    ).text;
+    );
+    const descriptionWithoutImagePlaceholders = strippedForCreate.text;
+    // Placeholders with no uploadable image behind them (file gone, refs
+    // pruned, draft restored without its tmp files) used to be dropped in
+    // total silence -- the PR simply came out without the images and nothing
+    // said why. Say it out loud instead.
+    if (strippedForCreate.removed > 0) {
+      addToast({
+        type: 'error',
+        message: `${strippedForCreate.removed} image(s) are no longer available on disk and were left out of the PR description. Re-paste them and try again.`,
+      });
+    }
     debugLog({
       message: 'submit',
       data: {
         taskId,
+        unresolvedPlaceholdersDropped: strippedForCreate.removed,
+        stagedImageCount: stagedImages.length,
+        missingImageCount: stagedImages.filter((image) => image.missing).length,
+        descriptionHasPlaceholders:
+          descriptionToCreate.includes('jc-image://'),
         stagedImages: imagesToUpload.map((image) => ({
           filename: image.filename,
           mimeType: image.mimeType,

@@ -91,6 +91,7 @@ import {
 } from './mobile-preview-ios-framebuffer';
 import {
   isAppNotRunningError,
+  isUnsupportedTerminateRunningProcessError,
   parseSimctlInstalledApps,
   resolveIosApp,
   resolveTrustedIosAppRoot,
@@ -118,6 +119,10 @@ export {
   SCREENSHOT_POLL_INTERVAL_MS,
 } from './mobile-preview-ios-framebuffer';
 export { MAX_STREAM_STDERR_BYTES } from './mobile-preview-ios-shared-state';
+
+// Covers `simctl boot` + `simctl bootstatus -b` for the uncancellable
+// `bootDevice` IPC, which has no renderer-side abort channel.
+const IOS_BOOT_DEVICE_TIMEOUT_MS = 3 * 60 * 1000;
 
 const IOS_CONTENT_SIZE: Record<MobilePreviewTextSize, string> = {
   small: 'small',
@@ -448,25 +453,51 @@ export const iosIdbAdapter = {
         return { bundleId, restartedAt: new Date().toISOString() };
       }
 
+      // One atomic `launch --terminate-running-process` instead of
+      // `terminate` + `launch`: simctl's terminate returns as soon as SIGKILL
+      // is delivered, not once the process is reaped, so a separate launch
+      // races the dying instance and the freshly spawned app gets torn down
+      // with it — the app appears to open and then immediately dies.
       try {
         await runCommand('xcrun', [
           'simctl',
-          'terminate',
+          'launch',
+          '--terminate-running-process',
           params.deviceId,
           bundleId,
         ], { signal: abortController.signal });
       } catch (error) {
-        if (abortController.signal.aborted || !isAppNotRunningError(error)) {
+        // Older simulator runtimes reject the flag; fall back to the
+        // sequential form for those.
+        if (
+          abortController.signal.aborted ||
+          !isUnsupportedTerminateRunningProcessError(error)
+        ) {
           throw error;
         }
+        try {
+          await runCommand('xcrun', [
+            'simctl',
+            'terminate',
+            params.deviceId,
+            bundleId,
+          ], { signal: abortController.signal });
+        } catch (terminateError) {
+          if (
+            abortController.signal.aborted ||
+            !isAppNotRunningError(terminateError)
+          ) {
+            throw terminateError;
+          }
+        }
+        abortController.signal.throwIfAborted();
+        await runCommand('xcrun', [
+          'simctl',
+          'launch',
+          params.deviceId,
+          bundleId,
+        ], { signal: abortController.signal });
       }
-      abortController.signal.throwIfAborted();
-      await runCommand('xcrun', [
-        'simctl',
-        'launch',
-        params.deviceId,
-        bundleId,
-      ], { signal: abortController.signal });
       return { bundleId, restartedAt: new Date().toISOString() };
     })().finally(() => activeIosAppRestarts.delete(entry));
     entry = { abortController, promise };
@@ -583,6 +614,33 @@ export const iosIdbAdapter = {
       listingSucceeded: physical.ok,
     });
     return [...simulators, ...physical.devices];
+  },
+
+  /**
+   * Boots a simulator without opening a stream, for the lightweight mobile dev
+   * pane. The Simulator window is intentionally left visible.
+   */
+  async bootDevice(deviceId: string): Promise<{ deviceId: string }> {
+    await assertXcrunAvailable();
+    // Matches every other simctl-touching method here: additionally rejects
+    // leading `-` and the `all`/`booted`/`unavailable` simctl selectors.
+    assertSafeSimctlDeviceSelector('iOS simulator deviceId', deviceId);
+    // `listDevices` returns physical devices too, and they cannot be booted.
+    // Without this the user gets a misleading "iOS simulator not found" from
+    // the simctl lookup for a device that is plugged in and working.
+    await assertSimulatorOnlyIosDeviceAsync({
+      deviceId,
+      capability: 'Booting a device',
+    });
+    // There is no cancel channel for this IPC, and `simctl bootstatus -b` can
+    // hang on a wedged simulator. Bound it so the promise always settles and
+    // the pane's spinner cannot stick forever.
+    const device = await ensureIosSimulatorBooted(
+      deviceId,
+      AbortSignal.timeout(IOS_BOOT_DEVICE_TIMEOUT_MS),
+      { minimizeWindow: false },
+    );
+    return { deviceId: device.id };
   },
 
   async startStream(params: {

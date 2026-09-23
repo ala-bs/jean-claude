@@ -5,7 +5,8 @@ const mocks = vi.hoisted(() => {
   const executeTakeFirstOrThrow = vi.fn();
   const execute = vi.fn();
   const orderBy = vi.fn(() => ({ execute, executeTakeFirst, orderBy }));
-  const where = vi.fn(() => ({ where, orderBy }));
+  const limit = vi.fn(() => ({ execute, executeTakeFirst }));
+  const where = vi.fn(() => ({ where, orderBy, limit, executeTakeFirst }));
   const selectAll = vi.fn(() => ({ where }));
   const selectFrom = vi.fn(() => ({ selectAll }));
   const updateExecuteTakeFirst = vi.fn();
@@ -167,6 +168,10 @@ describe('TaskRepository.findActivePrReviewTask', () => {
 describe('TaskRepository PR workspace state persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks() clears calls but NOT implementations, and this mock is
+    // shared by findById, the limit() chain and update()'s dirty-check SELECT.
+    // Default it to "no current row" so update() writes unless a test opts in.
+    executeTakeFirst.mockResolvedValue(undefined);
   });
 
   const returnedRow = {
@@ -249,6 +254,38 @@ describe('TaskRepository PR workspace state persistence', () => {
 
     expect(set).toHaveBeenCalledWith(
       expect.objectContaining({ prWorkspaceState: 'kept' }),
+    );
+  });
+
+  it('skips the write entirely when the update changes no column value', async () => {
+    // Hot paths (syncTaskStatus, respond()) re-assert a status the task already
+    // has on every tool call. That must not touch the row or bump updatedAt.
+    executeTakeFirst.mockResolvedValue({ ...returnedRow, status: 'running' });
+
+    await expect(
+      TaskRepository.update('task-1', { status: 'running' }),
+    ).resolves.toMatchObject({ id: 'task-1', status: 'running' });
+
+    expect(set).not.toHaveBeenCalled();
+    expect(updateTable).not.toHaveBeenCalled();
+  });
+
+  it('still writes when at least one column value actually differs', async () => {
+    executeTakeFirst.mockResolvedValue({ ...returnedRow, status: 'running' });
+    executeTakeFirstOrThrow.mockResolvedValue({
+      ...returnedRow,
+      status: 'completed',
+    });
+
+    await expect(
+      TaskRepository.update('task-1', { status: 'completed' }),
+    ).resolves.toMatchObject({ status: 'completed' });
+
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'completed',
+        updatedAt: expect.any(String),
+      }),
     );
   });
 

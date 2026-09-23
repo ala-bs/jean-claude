@@ -318,6 +318,73 @@ export function PrOverview({
     ],
   );
 
+  // TEMP DEBUG: trace what scrolls the overview column on open.
+  const mainColumnRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = mainColumnRef.current;
+    if (!el) return;
+    const mountedAt = performance.now();
+    console.log('[pr-scroll-debug] mounted, scrollTop=', el.scrollTop);
+
+    const describe = (node: unknown) =>
+      node instanceof HTMLElement
+        ? `${node.tagName}[placeholder=${JSON.stringify(
+            node.getAttribute('placeholder') ?? '',
+          )}] .${node.className.slice(0, 90)}`
+        : String(node);
+
+    // Monkeypatch focus() so we learn WHO focuses, with a stack trace.
+    const originalFocus = HTMLElement.prototype.focus;
+    HTMLElement.prototype.focus = function patchedFocus(
+      this: HTMLElement,
+      ...focusArgs: Parameters<HTMLElement['focus']>
+    ) {
+      if (el.contains(this)) {
+        console.log(
+          '[pr-scroll-debug] focus() called',
+          JSON.stringify({
+            t: Math.round(performance.now() - mountedAt),
+            scrollTopBefore: el.scrollTop,
+            target: describe(this),
+          }),
+          new Error('focus-stack').stack,
+        );
+      }
+      return originalFocus.apply(this, focusArgs);
+    };
+    const onScroll = () => {
+      console.log(
+        '[pr-scroll-debug] scroll',
+        JSON.stringify({
+          t: Math.round(performance.now() - mountedAt),
+          scrollTop: el.scrollTop,
+          scrollHeight: el.scrollHeight,
+          clientHeight: el.clientHeight,
+          activeElement: describe(document.activeElement),
+        }),
+        new Error('scroll-stack').stack,
+      );
+    };
+    el.addEventListener('scroll', onScroll);
+    const onFocusIn = (e: FocusEvent) => {
+      console.log(
+        '[pr-scroll-debug] focusin',
+        JSON.stringify({
+          t: Math.round(performance.now() - mountedAt),
+          scrollTop: el.scrollTop,
+          insideColumn: e.target instanceof Node && el.contains(e.target),
+          target: describe(e.target),
+        }),
+      );
+    };
+    document.addEventListener('focusin', onFocusIn);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      document.removeEventListener('focusin', onFocusIn);
+      HTMLElement.prototype.focus = originalFocus;
+    };
+  }, []);
+
   // Merge optimistic queued state with server data
   const evaluationsWithOptimistic = useMemo(
     () =>
@@ -344,6 +411,7 @@ export function PrOverview({
       >
         {/* Main column */}
         <div
+          ref={mainColumnRef}
           className={clsx(
             'min-h-0 min-w-0 space-y-4 overflow-y-auto',
             filePreview ? 'pr-0' : 'pr-1',

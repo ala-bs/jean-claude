@@ -4,6 +4,7 @@ import { Pencil } from 'lucide-react';
 
 
 
+import { getTaskPromptPreview } from '@/lib/task-prompt-preview';
 import { useToastStore } from '@/stores/toasts';
 import { useUpdateTask } from '@/hooks/use-tasks';
 
@@ -15,7 +16,7 @@ export function getTaskTitle({
   name: string | null | undefined;
   prompt: string;
 }) {
-  return name ?? prompt.split('\n')[0];
+  return name ?? getTaskPromptPreview(prompt);
 }
 
 const taskTitleTextClassName =

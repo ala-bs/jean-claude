@@ -1044,6 +1044,20 @@ describe('physical iOS device app status and restart', () => {
     ).toBe(false);
   });
 
+  it('refuses to boot a physical device', async () => {
+    // `listDevices` returns physical devices alongside simulators. Without the
+    // simulator-only guard the simctl lookup reports the misleading
+    // "iOS simulator not found" for a device that is plugged in and working.
+    registerPhysicalDevice();
+
+    await expect(iosIdbAdapter.bootDevice(PHYSICAL_DEVICE_ID)).rejects.toThrow(
+      /not supported on physical iOS devices/,
+    );
+    expect(
+      runCommandMock.mock.calls.some(([, args]) => args[0] === 'simctl'),
+    ).toBe(false);
+  });
+
   it('restarts a physical app through devicectl instead of simctl', async () => {
     registerPhysicalDevice();
     mockDevicectl({ result: { process: { processIdentifier: 10684 } } });

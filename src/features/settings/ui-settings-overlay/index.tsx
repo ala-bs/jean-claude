@@ -1273,7 +1273,13 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
           aria-label="Settings"
         >
           <div
-            className="border-glass-border flex h-[85svh] w-[92svw] max-w-[1280px] flex-col overflow-hidden rounded-2xl border"
+            /* `overflow-clip` (not `overflow-hidden`) is deliberate: an
+               `overflow: hidden` box is still a scroll container, so focusing
+               an input deep in the settings tree let the browser scroll the
+               whole modal chrome — pushing the header off-screen and the
+               footer into the middle of the panel. `overflow: clip` never
+               scrolls. `relative` also anchors the search palette here. */
+            className="border-glass-border relative flex h-[85svh] w-[92svw] max-w-[1280px] flex-col overflow-clip rounded-2xl border"
             style={{
               background: `
                 radial-gradient(ellipse at 15% 5%, var(--theme-overlay-glow-1), transparent 55%),
@@ -1321,7 +1327,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
             </div>
 
             {/* Main body: sidebar + content */}
-            <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+            <div className="flex min-h-0 min-w-0 flex-1 overflow-clip">
               {/* Left sidebar menu */}
               <div className="border-glass-border bg-panel-scrim flex w-[234px] shrink-0 flex-col border-r">
                 <SettingsScopeHeader

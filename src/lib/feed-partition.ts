@@ -97,6 +97,53 @@ function hasCompletedPullRequest(item: FeedItem): boolean {
   );
 }
 
+/**
+ * Every key a feed item could be enqueued under. The repo-qualified key comes
+ * first because two projects can point at the same repo — matching on
+ * `${projectId}:${prId}` alone both misses a PR enqueued from the other
+ * project's surface and can false-positive on an unrelated PR that happens to
+ * share an id.
+ */
+function getFeedAutoCompleteKeys(item: FeedItem): string[] {
+  const keys: string[] = [];
+  const identityKey = getFeedPullRequestIdentityKey(item);
+  if (identityKey) keys.push(identityKey);
+  if (item.pullRequestId != null) {
+    keys.push(`${item.projectId}:${item.pullRequestId}`);
+  }
+  if (item.workItemPrId != null) {
+    if (item.pullRequestProviderId && item.pullRequestRepoId) {
+      keys.push(
+        `${item.pullRequestProviderId}:${item.pullRequestRepoId}:${item.workItemPrId}`,
+      );
+    }
+    keys.push(`${item.projectId}:${item.workItemPrId}`);
+  }
+  return keys;
+}
+
+function isAutoCompletingPullRequest(
+  item: FeedItem,
+  autoCompletePrKeys: Set<string>,
+): boolean {
+  if (autoCompletePrKeys.size === 0) return false;
+  // Mirrors `hasCompletedPullRequest`: a pr-review workspace task keeps its own
+  // zone, so an item can't be promoted here and then fail to reach "Merged".
+  if (item.taskType === 'pr-review') return false;
+  if (getFeedAutoCompleteKeys(item).some((key) => autoCompletePrKeys.has(key))) {
+    return true;
+  }
+  return (
+    item.children?.some(
+      (child) =>
+        child.taskType !== 'pr-review' &&
+        getFeedAutoCompleteKeys(child).some((key) =>
+          autoCompletePrKeys.has(key),
+        ),
+    ) ?? false
+  );
+}
+
 const PR_REVIEW_ATTENTIONS: Set<FeedItemAttention> = new Set([
   'review-requested',
   'pr-comments',
@@ -111,6 +158,7 @@ export function partitionFeedItems({
   lowPriorityIds,
   taskOwnedPrIds = new Set(),
   taskOwnedPrKeys = new Set(),
+  autoCompletePrKeys = new Set(),
   prProjectOrder = [],
   getProjectPriority = (item) => item.projectPriority,
 }: {
@@ -122,6 +170,8 @@ export function partitionFeedItems({
   lowPriorityIds: Set<string>;
   taskOwnedPrIds?: Set<number>;
   taskOwnedPrKeys?: Set<string>;
+  /** `${projectId}:${prId}` for PRs queued/armed for auto-complete. */
+  autoCompletePrKeys?: Set<string>;
   prProjectOrder?: string[];
   getProjectPriority?: (item: FeedItem) => FeedItem['projectPriority'];
 }) {
@@ -152,6 +202,7 @@ export function partitionFeedItems({
   let dCount = 0;
   const prWorkspace: FeedItem[] = [];
   const completedPr: FeedItem[] = [];
+  const autoCompletingPr: FeedItem[] = [];
   const actionNeeded: FeedItem[] = [];
   const prReviews: FeedItem[] = [];
   const activeTasks: FeedItem[] = [];
@@ -181,6 +232,10 @@ export function partitionFeedItems({
       actionNeeded.push(item);
     } else if (hasCompletedPullRequest(item)) {
       completedPr.push(item);
+    } else if (isAutoCompletingPullRequest(item, autoCompletePrKeys)) {
+      // Queued/armed for auto-complete: about to become a merge, so it gets the
+      // same top-of-feed treatment as an already-merged PR.
+      autoCompletingPr.push(item);
     } else if (
       item.source === 'task' &&
       STACKED_TASK_ATTENTIONS.has(item.attention)
@@ -208,6 +263,7 @@ export function partitionFeedItems({
 
   prWorkspace.sort(bySourceThenTimestamp);
   completedPr.sort(bySourceThenTimestamp);
+  autoCompletingPr.sort(bySourceThenTimestamp);
   actionNeeded.sort(bySourceThenTimestamp);
   prReviews.sort(
     byManualLowPriorityThenProjectPriority({
@@ -227,6 +283,7 @@ export function partitionFeedItems({
     pinnedItems: pinnedResult,
     prWorkspaceItems: prWorkspace,
     completedPrItems: completedPr,
+    autoCompletingPrItems: autoCompletingPr,
     actionNeededItems: actionNeeded,
     prReviewItems: prReviews,
     activeTaskItems: activeTasks,

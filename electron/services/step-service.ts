@@ -812,8 +812,27 @@ export const StepService = {
     // An agent run finishing (status === 'completed') is NOT a terminal task
     // state: the worktree stays alive and previews/run commands must keep
     // working. Only user-archived tasks (userCompleted) are terminal.
-    const task = await TaskRepository.update(taskId, { status: newStatus });
-    emitTaskUpsert(task);
+    // Called from ~14 sites during a live agent session (every step completion,
+    // error, interrupt and background-subagent reactivation). Skip the row
+    // rewrite, the updatedAt bump and the task.upsert broadcast when the status
+    // is already correct, so an auto-accepted tool call doesn't churn the feed.
+    //
+    // resetAfterReactivation stays OUTSIDE the guard on purpose: it clears the
+    // mobile-preview terminalTaskIds tombstone, and previously ran on every
+    // call. Keeping it unconditional makes this a pure write/broadcast
+    // optimisation with no change to runtime semantics.
+    const existing = await TaskRepository.findById(taskId);
+    const statusChanged = !existing || existing.status !== newStatus;
+
+    const task = statusChanged
+      ? await TaskRepository.update(taskId, { status: newStatus })
+      : existing;
+    if (statusChanged) {
+      emitTaskUpsert(task);
+    } else {
+      debug('syncTaskStatus taskId=%s unchanged, skipping write', taskId);
+    }
+
     if (!task.userCompleted) {
       await taskRuntimeCleanupService.resetAfterReactivation(taskId);
     }

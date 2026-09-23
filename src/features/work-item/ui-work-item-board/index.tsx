@@ -110,6 +110,22 @@ export const WorkItemBoard = memo(function WorkItemBoard({
       ),
     [cachedSummaries],
   );
+  // `getWorkItemSummaryExcerpt` runs a full remark parse. Computing it in the
+  // card render loop re-parsed every visible summary on every render (i.e. on
+  // every search keystroke); key it off the summaries instead.
+  const summaryExcerptByWorkItemId = useMemo(
+    () =>
+      new Map(
+        cachedSummaries.map(
+          (summary) =>
+            [
+              summary.workItemId,
+              getWorkItemSummaryExcerpt(summary.content),
+            ] as const,
+        ),
+      ),
+    [cachedSummaries],
+  );
 
   // Group work items by Azure board column when available, then fall back to state.
   const columns = useMemo(
@@ -347,9 +363,8 @@ export const WorkItemBoard = memo(function WorkItemBoard({
               const isRelatedBug = relatedBugWorkItemIds.includes(workItem.id);
               const bugProgress = childBugProgressByWorkItemId?.[workItem.id];
               const cachedSummary = summariesByWorkItemId.get(workItem.id);
-              const summaryExcerpt = cachedSummary
-                ? getWorkItemSummaryExcerpt(cachedSummary.content)
-                : null;
+              const summaryExcerpt =
+                summaryExcerptByWorkItemId.get(workItem.id) ?? null;
               const summaryIsStale =
                 !!cachedSummary &&
                 cachedSummary.sourceChangedDate !==

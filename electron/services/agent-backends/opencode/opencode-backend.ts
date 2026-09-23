@@ -53,6 +53,7 @@ import {
 import { calculateTheoreticalOpenCodeCost } from '../../backend-models-service';
 import { dbg } from '../../../lib/debug';
 import { getChildProcessEnv } from '../../../lib/child-process-env';
+import { interleavePromptParts } from '../../prompt-utils';
 import type { ResolvedPermissionRule } from '../../../../shared/permission-types';
 import { toDirectoryPermissionPattern } from '../../directory-access';
 
@@ -926,7 +927,8 @@ export class OpenCodeBackend implements AgentBackend {
       .promptAsync({
         sessionID: sessionId,
         directory: state.cwd,
-        parts: parts
+        // Ordered parts, so images pasted mid-prompt keep their slot.
+        parts: interleavePromptParts(parts)
           .filter((part) => part.type === 'text' || part.type === 'image')
           .map((part) => {
             if (part.type === 'text') {

@@ -61,6 +61,12 @@ export type PromptImagePart = {
   storageData?: string;
   /** MIME type of the storage version */
   storageMimeType?: string;
+  /**
+   * Ties this image to a `jc-image://<token>` placeholder in the prompt text,
+   * recording where in the prompt it was pasted. See
+   * `shared/prompt-image-placeholders.ts`.
+   */
+  placeholderToken?: string;
 };
 
 export type PromptFilePart = {

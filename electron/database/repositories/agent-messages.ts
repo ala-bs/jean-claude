@@ -64,20 +64,64 @@ export const AgentMessageRepository = {
   },
 
   /**
-   * Find all normalized entries for a step.
-   * Each row is one entry — no deduplication needed.
+   * Find normalized entries for a step, oldest first, and report whether the
+   * limit clipped anything.
+   *
+   * `limit` keeps the newest N entries (still returned in ascending order).
+   * Entry payloads average ~6 KB and a long step can hold thousands, so any
+   * caller that only needs the tail should pass one rather than pulling the
+   * whole conversation across IPC.
+   *
+   * `truncated` is derived from the raw row count, not the returned entries:
+   * rows with empty `data` are dropped afterwards, so an entry count below the
+   * limit does not mean nothing was clipped.
+   *
+   * Caveat for callers: clipping drops the *oldest* entries, which can leave a
+   * `tool-result` whose originating `tool-use` is gone. Only pass a limit where
+   * that is acceptable, or where the limit is a ceiling that should never be
+   * reached in practice.
    */
-  findByStepId: async (stepId: string): Promise<NormalizedEntry[]> => {
+  findByStepIdWithTruncation: async (
+    stepId: string,
+    { limit }: { limit?: number } = {},
+  ): Promise<{ entries: NormalizedEntry[]; truncated: boolean }> => {
+    // `limit: 0` would silently return nothing; treat any non-positive limit as
+    // "unlimited" rather than as a request for an empty conversation.
+    const bounded = limit !== undefined && limit > 0 ? limit : undefined;
+
     const rows = await db
       .selectFrom('agent_messages')
       .select(['agent_messages.data'])
       .where('agent_messages.stepId', '=', stepId)
-      .orderBy('agent_messages.messageIndex', 'asc')
+      // Descending when bounded so the LIMIT keeps the newest entries; the
+      // result is reversed below to restore chronological order. Index keys
+      // carry the rowid as an implicit tiebreak, so reversing a DESC scan is
+      // an exact inverse of the ASC scan even when messageIndex ties.
+      .orderBy(
+        'agent_messages.messageIndex',
+        bounded === undefined ? 'asc' : 'desc',
+      )
+      .$if(bounded !== undefined, (qb) => qb.limit(bounded as number))
       .execute();
 
-    return rows
-      .filter((row) => row.data)
-      .map((row) => JSON.parse(row.data) as NormalizedEntry);
+    const ordered = bounded === undefined ? rows : rows.reverse();
+
+    return {
+      entries: ordered
+        .filter((row) => row.data)
+        .map((row) => JSON.parse(row.data) as NormalizedEntry),
+      truncated: bounded !== undefined && rows.length === bounded,
+    };
+  },
+
+  /**
+   * Find all normalized entries for a step, oldest first.
+   * Each row is one entry — no deduplication needed.
+   */
+  findByStepId: async (stepId: string): Promise<NormalizedEntry[]> => {
+    const { entries } =
+      await AgentMessageRepository.findByStepIdWithTruncation(stepId);
+    return entries;
   },
 
   findLatestResultByStepId: async (stepId: string): Promise<string | null> => {

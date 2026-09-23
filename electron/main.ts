@@ -22,6 +22,7 @@ import {
   closeIdleOpenCodeSharedServerNow,
   killAllOpenCodeServersSync,
 } from './services/agent-backends/opencode/opencode-backend';
+import { confirmQuit, quitWithoutConfirmation } from './lib/quit-confirmation';
 import {
   decodeProxyUrl,
   fetchAuthenticatedImageStream,
@@ -53,6 +54,7 @@ import { registerIpcHandlers } from './ipc/handlers';
 import { runCommandService } from './services/run-command-service';
 import { syncBuiltinSkillSymlinks } from './services/skill-management-service';
 import { systemCalendarService } from './services/system-calendar-service';
+import { terminalService } from './services/terminal-service';
 import { upsertBuiltinSkills } from './services/builtin-skills-service';
 
 // Register custom protocol scheme before app is ready
@@ -112,7 +114,7 @@ if (process.env.JC_SKIP_INSTANCE_LOCK) {
     dbg.main(
       'Another instance is already running. Quitting to avoid interrupting active tasks.',
     );
-    app.quit();
+    quitWithoutConfirmation();
   }
 }
 
@@ -503,7 +505,7 @@ app.whenReady().then(async () => {
     migrationWindowRef.current.on('closed', () => {
       migrationWindowRef.current = null;
       if (shouldQuitOnMigrationWindowClose) {
-        app.quit();
+        quitWithoutConfirmation();
       }
     });
   }, 500);
@@ -520,7 +522,7 @@ app.whenReady().then(async () => {
       migrationWindowRef.current = createMigrationWindow();
       migrationWindowRef.current.on('closed', () => {
         migrationWindowRef.current = null;
-        app.quit();
+        quitWithoutConfirmation();
       });
     }
     loadMigrationWindowContent({
@@ -598,6 +600,14 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 app.on('before-quit', (event) => {
   if (isQuittingAfterCleanup) return;
 
+  // Shared gate: the mobile-preview cleanup registry has its own `before-quit`
+  // listener and consults the same decision, so one prompt covers both.
+  if (!confirmQuit()) {
+    dbg.main('Quit cancelled by user');
+    event.preventDefault();
+    return;
+  }
+
   event.preventDefault();
   isQuittingAfterCleanup = true;
   recordQuitStarted();
@@ -635,6 +645,10 @@ app.on('before-quit', (event) => {
           dbg.main('Idle shared OpenCode server stopped');
           await runCommandService.stopAllCommands();
           dbg.main('All commands stopped');
+          // Terminal shells are deliberately long lived, so nothing else ever
+          // reaps them — without this they outlive the window as orphan ptys.
+          terminalService.closeAll();
+          dbg.main('All terminal sessions closed');
           // Stops mobile preview sessions and their helper processes. Awaited
           // here so this handler stays the single owner of app.quit(): the
           // registry must not quit while agents/DB writes are still in flight.
@@ -693,6 +707,7 @@ app.on('window-all-closed', () => {
   showDockIcon();
   if (process.platform !== 'darwin') {
     dbg.main('Non-macOS platform, quitting app');
-    app.quit();
+    // The user already chose to close the window; do not ask twice.
+    quitWithoutConfirmation();
   }
 });

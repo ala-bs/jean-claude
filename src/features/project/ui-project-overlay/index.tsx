@@ -1,8 +1,8 @@
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
-import { Link } from '@tanstack/react-router';
 import { Plus } from 'lucide-react';
 
 
@@ -32,23 +32,23 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
 
   const { data: projects = [] } = useActiveProjects();
   const { moveToProject } = useCurrentVisibleProject();
-  const hiddenProjectIds = useFeedStore((state) => state.hiddenProjectIds);
-  const showOnlyProject = useFeedStore((state) => state.showOnlyProject);
+  const navigate = useNavigate();
   const clearHiddenProjects = useFeedStore((state) => state.clearHiddenProjects);
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
 
   const sortedProjects = useMemo(
     () => [...projects].sort((a, b) => a.sortOrder - b.sortOrder),
     [projects],
   );
 
-  // The feed list is the main view, so "current project" is the feed's project
-  // filter rather than a project-scoped route.
+  // Selecting a project navigates to its details view, so "current project" is
+  // the project-details route rather than the feed filter.
   const projectId = useMemo(() => {
-    const visible = sortedProjects.filter(
-      (project) => !hiddenProjectIds.includes(project.id),
-    );
-    return visible.length === 1 ? visible[0].id : ('all' as const);
-  }, [hiddenProjectIds, sortedProjects]);
+    const match = pathname.match(/^\/all\/projects\/([^/]+)/);
+    return match ? decodeURIComponent(match[1]) : ('all' as const);
+  }, [pathname]);
 
   const options = useMemo(
     () => ['all' as const, ...sortedProjects.map((project) => project.id)],
@@ -121,23 +121,34 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
 
       if (option === 'all') {
         clearHiddenProjects();
+        if (projectId === 'all') {
+          // Already off a project-details route, so let the nav store keep the
+          // current task selection (it routes back to /all/$taskId).
+          moveToProject('all');
+        } else {
+          // `moveToProject` derives "current project" from a leading
+          // `/projects/` segment, so on `/all/projects/<id>` it already thinks
+          // we are on 'all' and would no-op, stranding the project panel.
+          navigate({ to: '/all' });
+        }
       } else {
-        showOnlyProject(
-          option,
-          sortedProjects.map((project) => project.id),
-        );
+        // Picking a project opens its details view; the feed filter is left
+        // untouched so the list keeps showing everything.
+        navigate({
+          to: '/all/projects/$projectId',
+          params: { projectId: option },
+        });
       }
 
-      moveToProject(option);
       onClose();
     },
     [
       clearHiddenProjects,
       moveToProject,
+      navigate,
       onClose,
       options,
-      showOnlyProject,
-      sortedProjects,
+      projectId,
     ],
   );
 
@@ -212,7 +223,7 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
                 Switch Project
               </h2>
               <p className="text-ink-2 text-xs">
-                Choose a project to filter the feed list.
+                Open a project to see its git status, branches and history.
               </p>
             </div>
             <Link

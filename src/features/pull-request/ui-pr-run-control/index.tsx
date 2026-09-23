@@ -67,7 +67,12 @@ export function PrRunControl({
 }) {
   const commandsQuery = useProjectCommands(projectId);
   const groupsQuery = useProjectCommandGroups(projectId);
-  const commands = commandsQuery.data ?? EMPTY_COMMANDS;
+  const allCommands = commandsQuery.data ?? EMPTY_COMMANDS;
+  // Hidden commands stay configured but are never offered as runnable.
+  const commands = useMemo(
+    () => allCommands.filter((command) => !command.isHidden),
+    [allCommands],
+  );
   const groups = groupsQuery.data ?? EMPTY_GROUPS;
   const [runtimeTask, setRuntimeTask] = useState<Task | null>(
     associatedTask ?? null,
@@ -112,8 +117,16 @@ export function PrRunControl({
     (state) => state.setRunCommandRunning,
   );
 
+  // Mirrors resolveProjectCommandAvailability: groups left with no resolvable
+  // member (deleted or hidden commands) are dropped instead of rendered as a
+  // permanently disabled row.
   const menuItems = useMemo(
-    () => buildRunCommandItems({ commands, groups }),
+    () =>
+      buildRunCommandItems({ commands, groups }).filter(
+        (item) =>
+          item.type === 'command' ||
+          resolveRunCommandIds({ item, commands }).length > 0,
+      ),
     [commands, groups],
   );
   const hasExecutableItem = useMemo(

@@ -23,7 +23,12 @@ export function resolveProjectCommandAvailability({
   commandsQuery: CommandQuery<ProjectCommand>;
   groupsQuery: CommandQuery<ProjectCommandGroup>;
 }) {
-  const commands = commandsQuery.data ?? [];
+  // Hidden commands stay configured but are never offered as runnable, so they
+  // are filtered out before items and group members are resolved. Consumers
+  // that only need to name a command (log tabs) should use `allCommands`, so
+  // hiding a command does not relabel its existing logs as removed.
+  const allCommands = commandsQuery.data ?? [];
+  const commands = allCommands.filter((command) => !command.isHidden);
   const groups = groupsQuery.data ?? [];
   const items = buildRunCommandItems({ commands, groups }).filter(
     (item) =>
@@ -39,6 +44,7 @@ export function resolveProjectCommandAvailability({
 
   return {
     commands,
+    allCommands,
     groups,
     items,
     state,

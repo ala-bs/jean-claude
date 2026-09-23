@@ -293,6 +293,11 @@ describe('StepService.resolveAndValidate', () => {
 describe('StepService.syncTaskStatus', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks() clears calls but NOT implementations, which leak between
+    // tests (and from earlier describes). Default to "task not found" so
+    // syncTaskStatus takes the write path unless a test opts into the
+    // status-unchanged branch.
+    findTaskByIdMock.mockResolvedValue(undefined);
     runProvisionalTransitionMock.mockImplementation(
       async (taskId, transition, isTerminal) => {
         await stopTaskRuntimeMock(taskId);
@@ -360,6 +365,67 @@ describe('StepService.syncTaskStatus', () => {
     expect(updateTaskMock.mock.invocationCallOrder[0]).toBeLessThan(
       resetTaskRuntimeMock.mock.invocationCallOrder[0],
     );
+  });
+
+  it('skips the write when the task already has the computed status', async () => {
+    // Hot path: every auto-accepted tool call re-syncs a status that has not
+    // changed. That must not rewrite the row or broadcast a task.upsert.
+    findStepsByTaskIdMock.mockResolvedValue([
+      { id: 'step-1', taskId: 'task-1', status: 'completed' },
+    ]);
+    findTaskByIdMock.mockResolvedValue({
+      id: 'task-1',
+      status: 'completed',
+      userCompleted: false,
+    });
+    resetTaskRuntimeMock.mockResolvedValue(undefined);
+
+    await StepService.syncTaskStatus('task-1');
+
+    expect(updateTaskMock).not.toHaveBeenCalled();
+    // ...but the runtime reset must STILL run: it clears the mobile-preview
+    // tombstone and previously fired on every syncTaskStatus call.
+    expect(resetTaskRuntimeMock).toHaveBeenCalledWith('task-1');
+  });
+
+  it('still writes when the computed status differs from the current one', async () => {
+    findStepsByTaskIdMock.mockResolvedValue([
+      { id: 'step-1', taskId: 'task-1', status: 'completed' },
+    ]);
+    findTaskByIdMock.mockResolvedValue({
+      id: 'task-1',
+      status: 'running',
+      userCompleted: false,
+    });
+    updateTaskMock.mockResolvedValue({
+      id: 'task-1',
+      status: 'completed',
+      userCompleted: false,
+    });
+    resetTaskRuntimeMock.mockResolvedValue(undefined);
+
+    await StepService.syncTaskStatus('task-1');
+
+    expect(updateTaskMock).toHaveBeenCalledWith('task-1', {
+      status: 'completed',
+    });
+    expect(resetTaskRuntimeMock).toHaveBeenCalledWith('task-1');
+  });
+
+  it('skips the write but still resets runtime for an unchanged user-completed task', async () => {
+    findStepsByTaskIdMock.mockResolvedValue([
+      { id: 'step-1', taskId: 'task-1', status: 'completed' },
+    ]);
+    findTaskByIdMock.mockResolvedValue({
+      id: 'task-1',
+      status: 'completed',
+      userCompleted: true,
+    });
+
+    await StepService.syncTaskStatus('task-1');
+
+    expect(updateTaskMock).not.toHaveBeenCalled();
+    expect(resetTaskRuntimeMock).not.toHaveBeenCalled();
   });
 
   it('propagates completion write failures without touching runtime', async () => {

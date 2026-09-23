@@ -18,7 +18,7 @@ export function Toaster() {
           key={toast.id}
           role={toast.type === 'error' ? 'alert' : 'status'}
           className={clsx(
-            'flex items-start gap-2 rounded-lg border px-4 py-3 shadow-lg backdrop-blur-sm',
+            'flex max-w-sm items-start gap-2 rounded-lg border px-4 py-3 shadow-lg backdrop-blur-sm',
             toast.type === 'error' &&
               'border-status-fail/40 bg-status-fail-soft text-ink-0',
             toast.type === 'success' &&
@@ -30,7 +30,7 @@ export function Toaster() {
           ) : (
             <CheckCircle2 className="text-status-done mt-0.5 h-4 w-4 shrink-0" />
           )}
-          <p className="text-sm">{toast.message}</p>
+          <p className="text-sm break-words">{toast.message}</p>
           <button
             onClick={() => removeToast(toast.id)}
             className="ml-2 shrink-0 rounded p-0.5 hover:bg-glass-medium"

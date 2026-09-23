@@ -55,6 +55,44 @@ describe('mobile preview lifecycle', () => {
     expect(secondPreventDefault).not.toHaveBeenCalled();
   });
 
+  it('leaves sessions running when the user cancels the quit', async () => {
+    let beforeQuit: ((event?: { preventDefault: () => void }) => void) | null =
+      null;
+    const cleanup = vi.fn(async () => {});
+    const preventDefault = vi.fn();
+    const confirmQuit = vi.fn((): boolean => false);
+
+    registerBeforeQuitCleanup({
+      cleanup,
+      lifecycle: {
+        onBeforeQuit: (callback) => {
+          beforeQuit = callback;
+        },
+        confirmQuit,
+      },
+      logger: { error: vi.fn() },
+    });
+
+    (beforeQuit as unknown as (event: { preventDefault: () => void }) => void)({
+      preventDefault,
+    });
+    await sleep(0);
+
+    expect(confirmQuit).toHaveBeenCalledTimes(1);
+    expect(cleanup).not.toHaveBeenCalled();
+    // Still vetoes, so the app stays alive...
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+
+    // ...and a later confirmed quit still cleans up.
+    confirmQuit.mockReturnValue(true);
+    (beforeQuit as unknown as (event: { preventDefault: () => void }) => void)({
+      preventDefault,
+    });
+    await sleep(0);
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it('runs every registered cleanup and dedupes concurrent runs', async () => {
     const first = vi.fn(async () => {});
     const second = vi.fn(async () => {});

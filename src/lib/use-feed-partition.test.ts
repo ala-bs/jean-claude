@@ -250,4 +250,142 @@ describe('partitionFeedItems - completed PR zone', () => {
     expect(result.dismissedCount).toBe(1);
     expect(result.pinnedItems.map((i) => i.id)).toEqual([pinnedTask.id]);
   });
+
+  it('promotes PRs queued or armed for auto-complete out of the normal zones', () => {
+    const queuedPr = prItem({ id: 'pr:project-1:7', pullRequestId: 7 });
+    const queuedTask = taskItem({ id: 'task-1', workItemPrId: 8 });
+    const otherPr = prItem({ id: 'pr:project-1:9', pullRequestId: 9 });
+
+    const result = partitionFeedItems({
+      visibleFeedItems: [queuedPr, queuedTask, otherPr],
+      hiddenProjectIdSet: new Set(),
+      pinned: [],
+      pinnedIds: new Set(),
+      dismissedIds: new Set(),
+      lowPriorityIds: new Set(),
+      autoCompletePrKeys: new Set(['project-1:7', 'project-1:8']),
+    });
+
+    expect(result.autoCompletingPrItems.map((item) => item.id)).toEqual([
+      'task-1',
+      'pr:project-1:7',
+    ]);
+    expect(result.prReviewItems.map((item) => item.id)).toEqual([otherPr.id]);
+    expect(result.highPriorityItems).toEqual([]);
+  });
+
+  it('keeps a blocked auto-completing task in the action-needed zone', () => {
+    const blocked = taskItem({
+      id: 'task-blocked',
+      attention: 'needs-permission',
+      workItemPrId: 7,
+    });
+
+    const result = partitionFeedItems({
+      visibleFeedItems: [blocked],
+      hiddenProjectIdSet: new Set(),
+      pinned: [],
+      pinnedIds: new Set(),
+      dismissedIds: new Set(),
+      lowPriorityIds: new Set(),
+      autoCompletePrKeys: new Set(['project-1:7']),
+    });
+
+    expect(result.actionNeededItems.map((item) => item.id)).toEqual([
+      'task-blocked',
+    ]);
+    expect(result.autoCompletingPrItems).toEqual([]);
+  });
+
+  it('matches a queue entry enqueued from another project sharing the repo', () => {
+    const task = taskItem({
+      id: 'task-shared',
+      projectId: 'project-2',
+      pullRequestId: 7,
+      pullRequestProviderId: 'azure',
+      pullRequestRepoId: 'repo-a',
+    });
+
+    const result = partitionFeedItems({
+      visibleFeedItems: [task],
+      hiddenProjectIdSet: new Set(),
+      pinned: [],
+      pinnedIds: new Set(),
+      dismissedIds: new Set(),
+      lowPriorityIds: new Set(),
+      // Enqueued from project-1's PR surface, same underlying repo.
+      autoCompletePrKeys: new Set(['azure:repo-a:7']),
+    });
+
+    expect(result.autoCompletingPrItems.map((item) => item.id)).toEqual([
+      'task-shared',
+    ]);
+  });
+
+  it('promotes a parent task when a child owns the auto-completing PR', () => {
+    const parent = taskItem({
+      id: 'task-parent',
+      children: [taskItem({ id: 'task-child', pullRequestId: 7 })],
+    });
+
+    const result = partitionFeedItems({
+      visibleFeedItems: [parent],
+      hiddenProjectIdSet: new Set(),
+      pinned: [],
+      pinnedIds: new Set(),
+      dismissedIds: new Set(),
+      lowPriorityIds: new Set(),
+      autoCompletePrKeys: new Set(['project-1:7']),
+    });
+
+    expect(result.autoCompletingPrItems.map((item) => item.id)).toEqual([
+      'task-parent',
+    ]);
+  });
+
+  it('keeps an already-merged auto-complete entry in the merged zone', () => {
+    const merged = taskItem({
+      id: 'task-merged',
+      pullRequestId: 7,
+      workItemPrStatus: 'completed',
+    });
+
+    const result = partitionFeedItems({
+      visibleFeedItems: [merged],
+      hiddenProjectIdSet: new Set(),
+      pinned: [],
+      pinnedIds: new Set(),
+      dismissedIds: new Set(),
+      lowPriorityIds: new Set(),
+      autoCompletePrKeys: new Set(['project-1:7']),
+    });
+
+    expect(result.completedPrItems.map((item) => item.id)).toEqual([
+      'task-merged',
+    ]);
+    expect(result.autoCompletingPrItems).toEqual([]);
+  });
+
+  it('leaves a pr-review workspace task in its own zone', () => {
+    const workspace = taskItem({
+      id: 'task-review',
+      taskType: 'pr-review',
+      pullRequestId: 7,
+    });
+
+    const result = partitionFeedItems({
+      visibleFeedItems: [workspace],
+      hiddenProjectIdSet: new Set(),
+      pinned: [],
+      pinnedIds: new Set(),
+      dismissedIds: new Set(),
+      lowPriorityIds: new Set(),
+      autoCompletePrKeys: new Set(['project-1:7']),
+    });
+
+    expect(result.prWorkspaceItems.map((item) => item.id)).toEqual([
+      'task-review',
+    ]);
+    expect(result.autoCompletingPrItems).toEqual([]);
+  });
 });

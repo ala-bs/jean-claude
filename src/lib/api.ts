@@ -45,10 +45,16 @@ import type {
   NewTaskStep,
   NewToken,
   Project,
+  ProjectCommitDetail,
+  ProjectCommitFileContent,
   ProjectEnvVar,
   ProjectFeatureMap,
+  ProjectGitGraphRow,
+  ProjectGitLogFilter,
+  ProjectGitStatus,
   ProjectLogoHistoryItem,
   ProjectTodo,
+  ProjectWorkingTreeFile,
   Provider,
   PrWorkspaceResolutionResult,
   Task,
@@ -76,6 +82,7 @@ import type {
   YamlPipelineParameter,
 } from '@shared/pipeline-types';
 import type {
+  AzureDevOpsBranchDivergence,
   AzureDevOpsComment,
   AzureDevOpsCommentThread,
   AzureDevOpsCommit,
@@ -134,6 +141,8 @@ import type {
   MobilePreviewAndroidSystemImage,
   MobilePreviewAndroidToolStatus,
   MobilePreviewAttachSessionParams,
+  MobilePreviewBootDeviceParams,
+  MobilePreviewBootDeviceResult,
   MobilePreviewDetachSessionParams,
   MobilePreviewDevice,
   MobilePreviewDeviceAssignment,
@@ -152,6 +161,7 @@ import type {
   MobilePreviewIosRenameDeviceParams,
   MobilePreviewIosRuntime,
   MobilePreviewIosToolStatus,
+  MobilePreviewListMetroPeersParams,
   MobilePreviewListSessionsParams,
   MobilePreviewNativeLogEvent,
   MobilePreviewNativeLogSession,
@@ -160,10 +170,12 @@ import type {
   MobilePreviewOpenDeeplinkParams,
   MobilePreviewOpenDevMenuParams,
   MobilePreviewReloadExpoParams,
+  MobilePreviewReloadExpoResult,
   MobilePreviewSession,
   MobilePreviewSessionEvent,
   MobilePreviewSetTextSizeParams,
   MobilePreviewStartParams,
+  MobilePreviewWaitForMetroClientParams,
   MobileRotationDirection,
   ReactNativeDevToolsEmbeddedBoundsParams,
   ReactNativeDevToolsEmbeddedCloseParams,
@@ -183,6 +195,7 @@ import type {
   ProjectCommandGroup,
   ProjectSuggestions,
   RunCommandConfigItem,
+  RunCommandGroupAbortEvent,
   RunStatus,
   StartAdHocRunCommandParams,
   StartPrCommandParams,
@@ -199,6 +212,11 @@ import type {
   NormalizedEntry,
   NormalizedPermissionRequest,
 } from '@shared/normalized-message-v2';
+import type {
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalSnapshot,
+} from '@shared/terminal-types';
 import type {
   TimesheetAction,
   TimesheetAdapterCapability,
@@ -229,6 +247,7 @@ import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-ver
 import type { DebugLogEntry } from '@shared/debug-log-types';
 import type { DetectedAzureRemote } from '@shared/azure-remote-utils';
 import type { FoldRange } from '@shared/fold-types';
+import type { GitCloneProtocol } from '@shared/git-url-utils';
 import type { UpcomingMeeting } from '@shared/calendar-types';
 
 
@@ -236,6 +255,7 @@ import type { UpcomingMeeting } from '@shared/calendar-types';
 export type {
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
+  AzureDevOpsBranchDivergence,
   AzureDevOpsCommit,
   AzureDevOpsFileChange,
   AzureDevOpsCommentThread,
@@ -629,6 +649,51 @@ export interface Api {
     getBranchesForPath: (projectPath: string) => Promise<BranchInfo[]>;
     getCurrentBranch: (projectId: string) => Promise<string>;
     isGitRepository: (projectId: string) => Promise<boolean>;
+    /** Git operations scoped to the project's main repository (not a worktree). */
+    git: {
+      getStatus: (projectId: string) => Promise<ProjectGitStatus>;
+      getGraph: (
+        projectId: string,
+        limit?: number,
+        /** Commits to skip before the window, for paging older history. */
+        skip?: number,
+        /** Resolved by git, so search covers the whole repo and not just what is loaded. */
+        filter?: ProjectGitLogFilter,
+      ) => Promise<ProjectGitGraphRow[]>;
+      /**
+       * Reachable commits, for the history pane's load progress — or matching
+       * commits when a filter is passed, so the search count is honest.
+       */
+      getCommitCount: (
+        projectId: string,
+        filter?: ProjectGitLogFilter,
+      ) => Promise<number>;
+      /** A commit's metadata plus the files it touched. Null when unknown. */
+      getCommitDetail: (
+        projectId: string,
+        commitHash: string,
+      ) => Promise<ProjectCommitDetail | null>;
+      /** Both sides of one file in a commit, for the diff viewer. */
+      getCommitFileContent: (
+        projectId: string,
+        commitHash: string,
+        filePath: string,
+      ) => Promise<ProjectCommitFileContent>;
+      /** Changed paths behind the status counts. Fetched lazily, not polled. */
+      getWorkingTreeFiles: (
+        projectId: string,
+      ) => Promise<ProjectWorkingTreeFile[]>;
+      /** `interactive` allows credential prompts; omit it for background refreshes. */
+      fetch: (projectId: string, interactive?: boolean) => Promise<void>;
+      push: (projectId: string) => Promise<void>;
+      pull: (projectId: string) => Promise<void>;
+      checkoutBranch: (projectId: string, branchName: string) => Promise<void>;
+      /**
+       * `git init` when needed, then seed a README and make the first commit.
+       * Safe to call on a repo that already has commits — it is a no-op there.
+       */
+      init: (projectId: string) => Promise<void>;
+    };
     getCommitIgnore: (projectId: string) => Promise<string>;
     updateCommitIgnore: (projectId: string, content: string) => Promise<void>;
     getDetected: () => Promise<DetectedProject[]>;
@@ -1091,6 +1156,14 @@ export interface Api {
       repoId: string;
       pullRequestId: number;
     }) => Promise<AzureDevOpsFileChange[]>;
+    getPullRequestDivergence: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      sourceRefName?: string;
+      targetRefName?: string;
+    }) => Promise<AzureDevOpsBranchDivergence>;
     getCommitChanges: (params: {
       providerId: string;
       projectId: string;
@@ -1255,6 +1328,13 @@ export interface Api {
       repoId: string;
       pullRequestId: number;
     }) => Promise<void>;
+  };
+  git: {
+    cloneFromUrl: (params: {
+      url: string;
+      protocol: GitCloneProtocol;
+      targetPath: string;
+    }) => Promise<{ success: boolean; error?: string; path?: string }>;
   };
   dialog: {
     openDirectory: () => Promise<string | null>;
@@ -1534,7 +1614,20 @@ export interface Api {
     ) => Promise<void>;
     openDeeplink: (params: MobilePreviewOpenDeeplinkParams) => Promise<void>;
     openDevMenu: (params: MobilePreviewOpenDevMenuParams) => Promise<void>;
-    reloadExpo: (params: MobilePreviewReloadExpoParams) => Promise<void>;
+    reloadExpo: (
+      params: MobilePreviewReloadExpoParams,
+    ) => Promise<MobilePreviewReloadExpoResult>;
+    /** Resolves `false` when no new app attached before the timeout. */
+    waitForMetroClient: (
+      params: MobilePreviewWaitForMetroClientParams,
+    ) => Promise<boolean>;
+    /** Metro socket ids of the apps currently attached to the dev server. */
+    listMetroPeers: (
+      params: MobilePreviewListMetroPeersParams,
+    ) => Promise<string[]>;
+    bootDevice: (
+      params: MobilePreviewBootDeviceParams,
+    ) => Promise<MobilePreviewBootDeviceResult>;
     forwardPort: (params: MobilePreviewForwardPortParams) => Promise<void>;
     ensureMetroReverse: (params: {
       deviceId: string;
@@ -1698,6 +1791,8 @@ export interface Api {
   };
   projectCommandGroups: {
     findByProjectId: (projectId: string) => Promise<ProjectCommandGroup[]>;
+    findAll: () => Promise<ProjectCommandGroup[]>;
+    findFavorites: () => Promise<ProjectCommandGroup[]>;
     create: (data: NewProjectCommandGroup) => Promise<ProjectCommandGroup>;
     update: (
       id: string,
@@ -1725,9 +1820,16 @@ export interface Api {
       projectId: string;
       runCommandId: string;
     }) => Promise<RunStatus | PortsInUseErrorData>;
+    /** Runs a favorite group's stages in the project root folder. */
+    startFavoriteGroup: (params: {
+      projectId: string;
+      groupId: string;
+    }) => Promise<RunStatus | PortsInUseErrorData>;
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];
+      /** Runs the group's configured stages instead of one parallel batch. */
+      groupId?: string;
     }) => Promise<RunStatus | PortsInUseErrorData>;
     stopCommand: (params: {
       taskId: string;
@@ -1780,6 +1882,32 @@ export interface Api {
         generation: number,
       ) => void,
     ) => () => void;
+    /** Fires when a staged group run stops early (not on a user-initiated stop). */
+    onGroupAborted: (
+      callback: (event: RunCommandGroupAbortEvent) => void,
+    ) => () => void;
+  };
+  terminal: {
+    /**
+     * Attaches to the session, spawning a shell only if there is not one
+     * already. Returns the scrollback to replay into a fresh xterm.
+     */
+    ensure: (params: {
+      sessionId: string;
+      cwd: string;
+      cols: number;
+      rows: number;
+    }) => Promise<TerminalSnapshot>;
+    write: (params: { sessionId: string; data: string }) => Promise<void>;
+    resize: (params: {
+      sessionId: string;
+      cols: number;
+      rows: number;
+    }) => Promise<void>;
+    /** Kills the shell. Closing the pane alone does NOT call this. */
+    close: (sessionId: string) => Promise<void>;
+    onData: (callback: (event: TerminalDataEvent) => void) => () => void;
+    onExit: (callback: (event: TerminalExitEvent) => void) => () => void;
   };
   globalPrompt: {
     onShow: (callback: (prompt: GlobalPrompt) => void) => () => void;
@@ -2264,6 +2392,37 @@ export const api: Api = hasWindowApi
         getBranchesForPath: async () => [],
         getCurrentBranch: async () => '',
         isGitRepository: async () => false,
+        git: {
+          getStatus: async () => ({
+            isGitRepository: false,
+            hasCommits: false,
+            hasCommitsElsewhere: false,
+            branch: '',
+            isDetached: false,
+            upstream: null,
+            ahead: null,
+            behind: null,
+            remoteUrl: null,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflicted: 0,
+          }),
+          getGraph: async () => [],
+          getCommitCount: async () => 0,
+          getCommitDetail: async () => null,
+          getCommitFileContent: async () => ({
+            oldContent: '',
+            newContent: '',
+            isBinary: false,
+          }),
+          getWorkingTreeFiles: async () => [],
+          fetch: async () => {},
+          push: async () => {},
+          pull: async () => {},
+          checkoutBranch: async () => {},
+          init: async () => {},
+        },
         getCommitIgnore: async () => '',
         updateCommitIgnore: async () => {},
         getDetected: async () => [],
@@ -2537,6 +2696,10 @@ export const api: Api = hasWindowApi
         },
         getPullRequestCommits: async () => [],
         getPullRequestChanges: async () => [],
+        getPullRequestDivergence: async () => ({
+          aheadCount: 0,
+          behindCount: 0,
+        }),
         getCommitChanges: async () => [],
         getFileContentAtCommit: async () => '',
         getPullRequestFileContent: async () => '',
@@ -2581,6 +2744,12 @@ export const api: Api = hasWindowApi
         markPullRequestDraft: async () => {
           throw new Error('API not available');
         },
+      },
+      git: {
+        cloneFromUrl: async () => ({
+          success: false,
+          error: 'API not available',
+        }),
       },
       dialog: {
         openDirectory: async () => null,
@@ -2750,7 +2919,10 @@ export const api: Api = hasWindowApi
         sendInput: async () => {},
         openDeeplink: async () => {},
         openDevMenu: async () => {},
-        reloadExpo: async () => {},
+        reloadExpo: async () => ({ connectedClients: -1 }),
+        waitForMetroClient: async () => false,
+        listMetroPeers: async () => [],
+        bootDevice: async () => ({ deviceId: '' }),
         forwardPort: async () => {},
         ensureMetroReverse: async () => ({
           reversed: false,
@@ -2920,6 +3092,8 @@ export const api: Api = hasWindowApi
       },
       projectCommandGroups: {
         findByProjectId: async () => [],
+        findAll: async () => [],
+        findFavorites: async () => [],
         create: async () => {
           throw new Error('API not available');
         },
@@ -2942,6 +3116,10 @@ export const api: Api = hasWindowApi
           commands: [],
         }),
         startFavorite: async () => ({
+          isRunning: false,
+          commands: [],
+        }),
+        startFavoriteGroup: async () => ({
           isRunning: false,
           commands: [],
         }),
@@ -2971,6 +3149,21 @@ export const api: Api = hasWindowApi
         onStatusChange: () => () => {},
         onLog: () => () => {},
         onLogsReset: () => () => {},
+        onGroupAborted: () => () => {},
+      },
+      terminal: {
+        ensure: async ({ sessionId }) => ({
+          sessionId,
+          backlog: '',
+          offset: 0,
+          isRunning: false,
+          exitCode: null,
+        }),
+        write: async () => {},
+        resize: async () => {},
+        close: async () => {},
+        onData: () => () => {},
+        onExit: () => () => {},
       },
       globalPrompt: {
         onShow: () => () => {},

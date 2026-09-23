@@ -6,37 +6,52 @@ import {
   getAzureBoardFilters,
   migrateAzureBoardState,
   useAzureBoardStore,
+  workItemWorkspaceScopeKey,
 } from './azure-board';
+
+const boardA = workItemWorkspaceScopeKey({
+  surface: 'board',
+  projectId: 'project-a',
+});
+const boardB = workItemWorkspaceScopeKey({
+  surface: 'board',
+  projectId: 'project-b',
+});
+const newTaskA = workItemWorkspaceScopeKey({
+  surface: 'new-task',
+  projectId: 'project-a',
+});
 
 describe('azure board store', () => {
   beforeEach(() => {
     useAzureBoardStore.setState({
       selectedProjectId: null,
-      filtersByProject: {},
-      panelWidth: 65,
-      collapsedColumnIdsByProject: {},
+      filtersByScope: {},
+      panelWidthByScope: {},
+      viewModeByScope: {},
+      collapsedColumnIdsByScope: {},
     });
   });
 
-  it('keeps filters isolated by project and remembers selection', () => {
+  it('keeps filters isolated by scope and remembers selection', () => {
     const state = useAzureBoardStore.getState();
     state.setSelectedProjectId('project-a');
-    state.setFilters('project-a', {
+    state.setFilters(boardA, {
       search: 'login',
       assignees: ['Patrick Lin'],
       tags: ['Frontend'],
     });
-    state.setFilters('project-b', { workItemTypes: ['Bug', 'User Story'] });
+    state.setFilters(boardB, { workItemTypes: ['Bug', 'User Story'] });
 
     expect(useAzureBoardStore.getState().selectedProjectId).toBe('project-a');
-    expect(getAzureBoardFilters('project-a')).toEqual({
+    expect(getAzureBoardFilters(boardA)).toEqual({
       search: 'login',
       workItemTypes: [],
       assignees: ['Patrick Lin'],
       iterations: [],
       tags: ['Frontend'],
     });
-    expect(getAzureBoardFilters('project-b')).toEqual({
+    expect(getAzureBoardFilters(boardB)).toEqual({
       search: '',
       workItemTypes: ['Bug', 'User Story'],
       assignees: [],
@@ -45,48 +60,68 @@ describe('azure board store', () => {
     });
   });
 
-  it('provides stable defaults without storing missing project state', () => {
+  it('keeps the same project isolated across surfaces', () => {
+    const state = useAzureBoardStore.getState();
+    state.setFilters(boardA, { tags: ['Frontend'] });
+    state.setFilters(newTaskA, { tags: ['Backend'] });
+
+    expect(getAzureBoardFilters(boardA).tags).toEqual(['Frontend']);
+    expect(getAzureBoardFilters(newTaskA).tags).toEqual(['Backend']);
+  });
+
+  it('provides stable defaults without storing missing scope state', () => {
     expect(getAzureBoardFilters('missing')).toBe(DEFAULT_AZURE_BOARD_FILTERS);
     expect(getAzureBoardFilters('missing')).toBe(getAzureBoardFilters('missing'));
     expect(EMPTY_AZURE_BOARD_COLUMN_IDS).toHaveLength(0);
-    expect(useAzureBoardStore.getState().filtersByProject).toEqual({});
-    expect(useAzureBoardStore.getState().collapsedColumnIdsByProject).toEqual({});
+    expect(useAzureBoardStore.getState().filtersByScope).toEqual({});
+    expect(useAzureBoardStore.getState().collapsedColumnIdsByScope).toEqual({});
   });
 
-  it('returns the stored project filter slice without copying it', () => {
-    useAzureBoardStore.getState().setFilters('project-a', { search: 'login' });
+  it('returns the stored scope filter slice without copying it', () => {
+    useAzureBoardStore.getState().setFilters(boardA, { search: 'login' });
 
-    expect(getAzureBoardFilters('project-a')).toBe(
-      useAzureBoardStore.getState().filtersByProject['project-a'],
+    expect(getAzureBoardFilters(boardA)).toBe(
+      useAzureBoardStore.getState().filtersByScope[boardA],
     );
   });
 
-  it('persists the board split width', () => {
-    useAzureBoardStore.getState().setPanelWidth(58);
-    expect(useAzureBoardStore.getState().panelWidth).toBe(58);
+  it('persists the split width and view mode per scope', () => {
+    const state = useAzureBoardStore.getState();
+    state.setPanelWidth(boardA, 58);
+    state.setPanelWidth(newTaskA, 42);
+    state.setViewMode(newTaskA, 'list');
+
+    expect(useAzureBoardStore.getState().panelWidthByScope).toEqual({
+      [boardA]: 58,
+      [newTaskA]: 42,
+    });
+    expect(useAzureBoardStore.getState().viewModeByScope[newTaskA]).toBe('list');
+    expect(
+      useAzureBoardStore.getState().viewModeByScope[boardA],
+    ).toBeUndefined();
   });
 
-  it('toggles collapsed columns independently per project', () => {
+  it('toggles collapsed columns independently per scope', () => {
     const store = useAzureBoardStore.getState();
-    store.toggleCollapsedColumn('project-a', 'column-active');
-    store.toggleCollapsedColumn('project-b', 'column-done');
-    expect(useAzureBoardStore.getState().collapsedColumnIdsByProject).toEqual({
-      'project-a': ['column-active'],
-      'project-b': ['column-done'],
+    store.toggleCollapsedColumn(boardA, 'column-active');
+    store.toggleCollapsedColumn(boardB, 'column-done');
+    expect(useAzureBoardStore.getState().collapsedColumnIdsByScope).toEqual({
+      [boardA]: ['column-active'],
+      [boardB]: ['column-done'],
     });
 
     useAzureBoardStore
       .getState()
-      .toggleCollapsedColumn('project-a', 'column-active');
+      .toggleCollapsedColumn(boardA, 'column-active');
     expect(
-      useAzureBoardStore.getState().collapsedColumnIdsByProject['project-a'],
+      useAzureBoardStore.getState().collapsedColumnIdsByScope[boardA],
     ).toEqual([]);
   });
 
-  it('migrates scalar filters from older versions', () => {
+  it('migrates scalar filters from older versions onto the board scope', () => {
     const migrated = migrateAzureBoardState({
       filtersByProject: {
-        project: {
+        'project-a': {
           assignee: 'Patrick Lin',
           iterationPath: 'Project\\Sprint 9',
           workItemType: 'Bug',
@@ -94,11 +129,53 @@ describe('azure board store', () => {
       },
     });
 
-    expect(migrated.filtersByProject.project.assignees).toEqual(['Patrick Lin']);
-    expect(migrated.filtersByProject.project.iterations).toEqual([
+    expect(migrated.filtersByScope[boardA].assignees).toEqual(['Patrick Lin']);
+    expect(migrated.filtersByScope[boardA].iterations).toEqual([
       'Project\\Sprint 9',
     ]);
-    expect(migrated.filtersByProject.project.workItemTypes).toEqual(['Bug']);
+    expect(migrated.filtersByScope[boardA].workItemTypes).toEqual(['Bug']);
+  });
+
+  it('migrates per-project collapsed columns and the shared panel width', () => {
+    const migrated = migrateAzureBoardState({
+      filtersByProject: { 'project-a': {} },
+      collapsedColumnIdsByProject: { 'project-a': ['column-done'] },
+      panelWidth: 58,
+    });
+
+    expect(migrated.collapsedColumnIdsByScope[boardA]).toEqual(['column-done']);
+    expect(migrated.panelWidthByScope[boardA]).toBe(58);
+    expect(migrated.viewModeByScope).toEqual({});
+  });
+
+  // The width used to be one global number, so it has to survive even when the
+  // user never touched a filter — dragging the splitter is its own gesture.
+  it('keeps the legacy panel width for a user who only resized the board', () => {
+    const migrated = migrateAzureBoardState({
+      selectedProjectId: 'project-a',
+      filtersByProject: {},
+      panelWidth: 58,
+    });
+
+    expect(migrated.panelWidthByScope[boardA]).toBe(58);
+  });
+
+  it('keeps the legacy panel width when only collapsed columns were stored', () => {
+    const migrated = migrateAzureBoardState({
+      collapsedColumnIdsByProject: { 'project-b': ['column-done'] },
+      panelWidth: 42,
+    });
+
+    expect(migrated.panelWidthByScope[boardB]).toBe(42);
+  });
+
+  it('leaves widths untouched when no legacy width was persisted', () => {
+    const migrated = migrateAzureBoardState({
+      selectedProjectId: 'project-a',
+      filtersByProject: { 'project-a': {} },
+    });
+
+    expect(migrated.panelWidthByScope).toEqual({});
   });
 
   it('defaults showPriority off for state persisted before v6', () => {
@@ -119,10 +196,15 @@ describe('azure board store', () => {
       },
     });
 
-    expect(migrated.filtersByProject.empty.workItemTypes).toEqual([]);
-    expect(migrated.filtersByProject.current.workItemTypes).toEqual([
-      'Feature',
-      'User Story',
-    ]);
+    expect(
+      migrated.filtersByScope[
+        workItemWorkspaceScopeKey({ surface: 'board', projectId: 'empty' })
+      ].workItemTypes,
+    ).toEqual([]);
+    expect(
+      migrated.filtersByScope[
+        workItemWorkspaceScopeKey({ surface: 'board', projectId: 'current' })
+      ].workItemTypes,
+    ).toEqual(['Feature', 'User Story']);
   });
 });

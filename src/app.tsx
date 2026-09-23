@@ -15,6 +15,7 @@ import { RootKeyboardBindings } from './common/context/keyboard-bindings';
 import { RootOverlay } from './common/context/overlay';
 import { routeTree } from './routeTree.gen';
 import { Toaster } from './common/ui/toast';
+import { useRunCommandAbortToasts } from './features/agent/use-run-command-abort-toasts';
 
 
 // All queries are backed by Electron IPC, not the network. Without
@@ -38,6 +39,8 @@ declare module '@tanstack/react-router' {
 }
 
 export default function App() {
+  useRunCommandAbortToasts();
+
   return (
     <>
       <DetectKeyboardLayout />

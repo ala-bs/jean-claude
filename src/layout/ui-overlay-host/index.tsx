@@ -13,13 +13,14 @@ import { CommandPaletteOverlay } from '@/features/command-palette/ui-command-pal
 import { LearningCenterOverlay } from '@/features/onboarding/ui-learning-center-overlay';
 import { NewTaskOverlay } from '@/features/new-task/ui-new-task-overlay';
 import { PipelinesOverlay } from '@/features/pipelines/ui-pipelines-overlay';
+import { PrCompletionQueueOverlay } from '@/features/pull-request/ui-pr-completion-queue-overlay';
 import { ProjectOverlay } from '@/features/project/ui-project-overlay';
 import { ResourcesOverlay } from '@/features/resources/ui-resources-overlay';
 import { RunningCommandsOverlay } from '@/features/run-commands/ui-running-commands-overlay';
 import { SettingsOverlay } from '@/features/settings/ui-settings-overlay';
 import { UsageOverlay } from '@/features/usage/ui-usage-overlay';
 import { useCurrentVisibleProject } from '@/stores/navigation';
-import { useNewTaskDraft } from '@/stores/new-task-draft';
+import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { WorkActivityOverlay } from '@/features/work-activity/ui-work-activity-overlay';
 
 const RENDERED_OVERLAYS = new Set<string>([
@@ -36,6 +37,7 @@ const RENDERED_OVERLAYS = new Set<string>([
   'azure-board',
   'running-commands',
   'pipelines',
+  'pr-completion-queue',
   'learning-center',
 ] satisfies OverlayType[]);
 
@@ -94,6 +96,11 @@ export function OverlayHost() {
     case 'pipelines':
       overlay = <PipelinesOverlay onClose={() => close('pipelines')} />;
       break;
+    case 'pr-completion-queue':
+      overlay = (
+        <PrCompletionQueueOverlay onClose={() => close('pr-completion-queue')} />
+      );
+      break;
     case 'learning-center':
       overlay = <LearningCenterOverlay onClose={() => close('learning-center')} />;
       break;
@@ -104,14 +111,26 @@ export function OverlayHost() {
 
 function NewTaskOverlayContainer() {
   const close = useOverlaysStore((state) => state.close);
-  const { draft, discardDraft, setSelectedProjectId } = useNewTaskDraft();
   const { projectId } = useCurrentVisibleProject();
+  // Deliberately not `useNewTaskDraft()`: that hook subscribes to the whole
+  // draft object, which gets a new identity on every `setDraft` and so
+  // re-rendered the entire overlay on each keystroke, defeating the narrow
+  // selectors inside it. Subscribe to just the one boolean this effect needs.
+  const hasBacklogTodos = useNewTaskDraftStore(
+    (state) =>
+      (state.drafts[state.selectedProjectId ?? 'all']?.backlogTodoIds?.length ??
+        0) > 0,
+  );
+  const setSelectedProjectId = useNewTaskDraftStore(
+    (state) => state.setSelectedProjectId,
+  );
+  const discardDraft = useNewTaskDraftStore((state) => state.clearAllDrafts);
 
   useEffect(() => {
     if (projectId === 'all') return;
-    if (draft?.backlogTodoIds?.length) return;
+    if (hasBacklogTodos) return;
     setSelectedProjectId(projectId);
-  }, [draft?.backlogTodoIds?.length, projectId, setSelectedProjectId]);
+  }, [hasBacklogTodos, projectId, setSelectedProjectId]);
 
   const handleClose = useCallback(() => close('new-task'), [close]);
   const handleDiscardDraft = useCallback(() => {

@@ -523,6 +523,17 @@ function JobDetails({ job }: { job: BackgroundJob }) {
         </div>
       );
     },
+    'pr-auto-complete': (typedJob) => {
+      if (typedJob.type !== 'pr-auto-complete') return null;
+
+      return (
+        <div className="text-ink-2 mt-1 space-y-0.5 text-xs">
+          <p className="truncate">
+            !{typedJob.details.prId} {typedJob.details.prTitle}
+          </p>
+        </div>
+      );
+    },
   };
 
   return renderers[job.type](job);

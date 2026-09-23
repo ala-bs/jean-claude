@@ -295,6 +295,57 @@ describe('compileForClaude', () => {
       ]),
     ).toEqual({ allow: [], deny: [] });
   });
+
+  it.each([
+    ['grep -r "bottom.*sheet" src --include=*.ts'],
+    ['find /pkg -path */es-v2* -name *.d.ts'],
+    ['rm -rf * --force'],
+    // Trailing path globs are skipped too: the `*` is not the final character,
+    // and our runtime evaluator still enforces the rule.
+    ['ls /icons/3x2/*.svg'],
+  ])('omits bash rules with an embedded wildcard: %s', (pattern) => {
+    expect(
+      compileForClaude([{ tool: 'bash', pattern, action: 'allow' }]),
+    ).toEqual({ allow: [], deny: [] });
+  });
+
+  // Under interaction mode `auto` the SDK uses `bypassPermissions`, which never
+  // invokes `canUseTool` and honours only the settings-file deny list. Dropping
+  // a deny rule there would remove the last gate on the command.
+  it.each([['curl * | sh'], ['rm -rf * --force']])(
+    'still emits deny rules with an embedded wildcard: %s',
+    (pattern) => {
+      expect(
+        compileForClaude([{ tool: 'bash', pattern, action: 'deny' }]),
+      ).toEqual({ allow: [], deny: [`Bash(${pattern})`] });
+    },
+  );
+
+  // `\*` means "literal asterisk" to us, but Claude has no escape syntax and
+  // sees a widening wildcard, so these must be dropped from allow too.
+  it.each([['grep -r "bottom\\*sheet" src'], ['grep \\* .']])(
+    'omits allow rules whose unescaped form has an embedded wildcard: %s',
+    (pattern) => {
+      expect(
+        compileForClaude([{ tool: 'bash', pattern, action: 'allow' }]),
+      ).toEqual({ allow: [], deny: [] });
+    },
+  );
+
+  it.each([['git add:*'], ['pnpm test'], ['foo\\']])(
+    'keeps bash rules without an embedded wildcard: %s',
+    (pattern) => {
+      expect(
+        compileForClaude([{ tool: 'bash', pattern, action: 'allow' }]),
+      ).toEqual({ allow: [`Bash(${pattern})`], deny: [] });
+    },
+  );
+
+  it('still compiles scalar bash rules to the bare tool name', () => {
+    expect(
+      compileForClaude([{ tool: 'bash', pattern: '*', action: 'allow' }]),
+    ).toEqual({ allow: ['Bash'], deny: [] });
+  });
 });
 
 describe('evaluatePermission', () => {

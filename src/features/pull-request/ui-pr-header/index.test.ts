@@ -18,6 +18,8 @@ const {
   navigate,
   createPrReviewTask,
   routerPathname,
+  divergence,
+  divergenceArgs,
 } = vi.hoisted(() => ({
   addToast: vi.fn(),
   markDraft: vi.fn(),
@@ -25,6 +27,10 @@ const {
   navigate: vi.fn(),
   createPrReviewTask: vi.fn(),
   routerPathname: { current: '/projects/project-1/prs/17' },
+  divergence: {
+    current: undefined as { aheadCount: number; behindCount: number } | undefined,
+  },
+  divergenceArgs: { current: [] as unknown[] },
 }));
 
 vi.mock('@tanstack/react-router', () => ({
@@ -47,6 +53,10 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/hooks/use-pull-requests', () => ({
   useMarkPullRequestDraft: () => ({ mutate: markDraft, isPending: false }),
   usePublishPullRequest: () => ({ mutate: vi.fn(), isPending: false }),
+  usePullRequestDivergence: (...args: unknown[]) => {
+    divergenceArgs.current = args;
+    return { data: divergence.current };
+  },
   useUpdatePullRequestTitle: () => ({
     mutate: updateTitle,
     isPending: false,
@@ -123,6 +133,8 @@ describe('PrHeader', () => {
     createPrReviewTask.mockReset();
     createPrReviewTask.mockResolvedValue({ id: 'task-9' });
     routerPathname.current = '/projects/project-1/prs/17';
+    divergence.current = undefined;
+    divergenceArgs.current = [];
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -138,6 +150,58 @@ describe('PrHeader', () => {
   afterEach(() => {
     root.unmount();
     container.remove();
+  });
+
+  it('copies the PR link and shows copied feedback', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+
+    const copyButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Copy PR link"]',
+    );
+    expect(copyButton).not.toBeNull();
+    expect(copyButton?.textContent).toContain('Copy link');
+
+    await new Promise<void>((resolve) => {
+      flushSync(() => {
+        copyButton?.click();
+      });
+      queueMicrotask(resolve);
+    });
+
+    expect(writeText).toHaveBeenCalledWith('https://example.com/pr/17');
+    expect(addToast).toHaveBeenCalledWith({
+      type: 'success',
+      message: 'PR link copied to clipboard',
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(
+      container.querySelector('[aria-label="Copy PR link"]')?.textContent,
+    ).toContain('Copied');
+  });
+
+  it('reports clipboard failures when copying the PR link', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn().mockRejectedValue(new Error('nope')) },
+      configurable: true,
+    });
+
+    await new Promise<void>((resolve) => {
+      flushSync(() => {
+        container
+          .querySelector<HTMLButtonElement>('[aria-label="Copy PR link"]')
+          ?.click();
+      });
+      queueMicrotask(resolve);
+    });
+
+    expect(addToast).toHaveBeenCalledWith({
+      type: 'error',
+      message: 'Failed to copy PR link',
+    });
   });
 
   it('submits edited title with Cmd+Enter', () => {
@@ -171,6 +235,54 @@ describe('PrHeader', () => {
     );
 
     expect(updateTitle).toHaveBeenCalledWith('Renamed PR', expect.any(Object));
+  });
+
+  it('shows how many commits the source branch is behind the target', () => {
+    expect(container.textContent).not.toContain('behind');
+
+    divergence.current = { aheadCount: 3, behindCount: 1 };
+    flushSync(() => {
+      root.render(
+        withProviders(createElement(PrHeader, { pr, projectId: 'project-1' })),
+      );
+    });
+    expect(container.textContent).toContain('1 behind');
+
+    divergence.current = { aheadCount: 3, behindCount: 12 };
+    flushSync(() => {
+      root.render(
+        withProviders(createElement(PrHeader, { pr, projectId: 'project-1' })),
+      );
+    });
+    expect(container.textContent).toContain('12 behind');
+
+    divergence.current = { aheadCount: 3, behindCount: 0 };
+    flushSync(() => {
+      root.render(
+        withProviders(createElement(PrHeader, { pr, projectId: 'project-1' })),
+      );
+    });
+    expect(container.textContent).not.toContain('behind');
+  });
+
+  it('queries divergence with the PR refs and only while the PR is active', () => {
+    expect(divergenceArgs.current[3]).toMatchObject({
+      enabled: true,
+      sourceRefName: 'refs/heads/feature',
+      targetRefName: 'refs/heads/main',
+    });
+
+    flushSync(() => {
+      root.render(
+        withProviders(
+          createElement(PrHeader, {
+            pr: { ...pr, status: 'completed' },
+            projectId: 'project-1',
+          }),
+        ),
+      );
+    });
+    expect(divergenceArgs.current[3]).toMatchObject({ enabled: false });
   });
 
   it('marks an active published PR as draft from the overflow menu', async () => {

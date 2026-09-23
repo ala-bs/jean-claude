@@ -21,7 +21,8 @@ import {
   flattenScope,
   normalizeToolRequest,
 } from '../../permission-settings-service';
-import { getPromptText } from '../../prompt-utils';
+import { getPromptImages, getPromptText } from '../../prompt-utils';
+import { renderPromptImagePlaceholders } from '@shared/prompt-image-placeholders';
 import type { ResolvedPermissionRule } from '../../../../shared/permission-types';
 
 import {
@@ -767,8 +768,15 @@ function toCopilotMessage(
     }
   }
 
+  // Copilot takes a flat prompt string plus a separate attachment list, so the
+  // best it can do is name the image where it was pasted; the attachment order
+  // matches, letting the model line the two up.
   const message: CopilotMessageOptions = {
-    prompt: getPromptText(parts),
+    prompt: renderPromptImagePlaceholders({
+      text: getPromptText(parts),
+      images: getPromptImages(parts),
+      render: (image) => `[image: ${image.filename || 'image'}]`,
+    }).text,
   };
   if (mode) {
     message.agentMode = toCopilotAgentMode(mode);

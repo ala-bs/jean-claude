@@ -10,6 +10,7 @@ import { useValue } from '@legendapp/state/react';
 
 import {
   api,
+  type AzureDevOpsBranchDivergence,
   type AzureDevOpsComment,
   type AzureDevOpsCommentThread,
   type AzureDevOpsCommit,
@@ -725,6 +726,46 @@ export function usePullRequestCommits(
       }),
     enabled: !!repoInfo && prId > 0,
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Commits the PR source branch is ahead of / behind its target branch.
+ * Only meaningful while the PR is open, so callers gate on status.
+ */
+export function usePullRequestDivergence(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+  options?: {
+    enabled?: boolean;
+    sourceRefName?: string;
+    targetRefName?: string;
+  },
+) {
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
+  const { sourceRefName, targetRefName } = options ?? {};
+
+  return useQuery<AzureDevOpsBranchDivergence>({
+    queryKey: [
+      'pull-request-divergence',
+      ...getPrQueryKey(projectId, prId, repoInfo),
+      sourceRefName ?? null,
+      targetRefName ?? null,
+    ],
+    queryFn: () =>
+      api.azureDevOps.getPullRequestDivergence({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+        sourceRefName,
+        targetRefName,
+      }),
+    enabled: (options?.enabled ?? true) && !!repoInfo && prId > 0,
+    staleTime: 60_000,
+    // Decorative indicator — don't burn 4 attempts when the endpoint is down.
+    retry: 1,
   });
 }
 

@@ -14,5 +14,7 @@ describe('project root run ids', () => {
 
   it('returns null for a regular task id', () => {
     expect(parseProjectRootRunId('task-1')).toBeNull();
+    // No project id in the suffix: not a usable project-root run.
+    expect(parseProjectRootRunId('project-root:')).toBeNull();
   });
 });

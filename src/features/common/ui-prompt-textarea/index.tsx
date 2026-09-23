@@ -28,11 +28,20 @@ import {
   useState,
 } from 'react';
 import clsx from 'clsx';
+import { createImageInsertBatch } from './image-insert-batch';
 import { createPortal } from 'react-dom';
 import Fuse from 'fuse.js';
 
 
 
+import {
+  buildImagePlaceholderInsertion,
+  type CaretRange,
+} from './image-placeholder-insertion';
+import {
+  buildPromptImagePlaceholder,
+  removePromptImagePlaceholder,
+} from '@shared/prompt-image-placeholders';
 import {
   getFilePathSuggestions,
   useProjectFilePaths,
@@ -1077,6 +1086,119 @@ export const PromptTextarea = forwardRef<
     [addToast],
   );
 
+  // --- Cursor-anchored image placeholders ---
+  // A pasted image is only meaningful next to the list item it illustrates, so
+  // we drop a `jc-image://<token>` marker at the caret and tag the attachment
+  // with the same token. `shared/prompt-image-placeholders.ts` turns that back
+  // into a real image block in the right slot when the prompt is sent.
+
+  // The latest value, including inserts React has not committed yet: pasting
+  // two images in one tick must not have the second overwrite the first.
+  const latestValueRef = useRef(value);
+  useLayoutEffect(() => {
+    latestValueRef.current = value;
+  }, [value]);
+  // Owns the caret and tokens while images decode. See image-insert-batch.ts.
+  const imageBatchRef = useRef<ReturnType<typeof createImageInsertBatch> | null>(
+    null,
+  );
+  imageBatchRef.current ??= createImageInsertBatch();
+  const imageBatchSeqRef = useRef(0);
+
+  const insertAtCursor = useCallback(
+    (placeholder: string) => {
+      const batch = imageBatchRef.current!;
+      const current = latestValueRef.current;
+      const textarea = textareaRef.current;
+      const caret = batch.getCaret() ?? {
+        start: textarea?.selectionStart ?? current.length,
+        end: textarea?.selectionEnd ?? current.length,
+      };
+
+      const next = buildImagePlaceholderInsertion({
+        value: current,
+        caret,
+        placeholder,
+      });
+
+      latestValueRef.current = next.value;
+      batch.setCaret(next.caret);
+      onChange(next.value);
+      setCursorPosition(next.caret.start);
+      // The inline completion was computed against the pre-marker text; leaving
+      // it live would splice it in at an offset that no longer exists.
+      setCompletionCursorPosition(next.caret.start);
+      dismiss();
+    },
+    [onChange, dismiss],
+  );
+
+  const attachImageAtCursor = useCallback(
+    (image: PromptImagePart) => {
+      if (!onImageAttach) return;
+      const token = imageBatchRef.current!.mintToken(
+        (images ?? [])
+          .map((existing) => existing.placeholderToken)
+          .filter((existing): existing is string => Boolean(existing)),
+      );
+      insertAtCursor(
+        buildPromptImagePlaceholder({
+          token,
+          filename: image.filename,
+          width: image.width,
+          height: image.height,
+        }),
+      );
+      onImageAttach({ ...image, placeholderToken: token });
+    },
+    [onImageAttach, insertAtCursor, images],
+  );
+
+  /**
+   * Runs one image through decoding with the batch caret held open. The caret
+   * is only released once every image in the batch has settled, which is also
+   * when the DOM selection is finally moved — doing it per-image would race
+   * React's commit and land the caret in stale text.
+   */
+  const processImageAtCursor = useCallback(
+    (file: File, batchId: number, caret: CaretRange | null) => {
+      const batch = imageBatchRef.current!;
+      batch.begin(batchId, caret);
+
+      void processImageFile(file, attachImageAtCursor, showImageError)
+        .catch((err) => {
+          showImageError('Failed to process image');
+          console.error('Failed to process image:', err);
+        })
+        .finally(() => {
+          const settled = batch.end();
+          if (!settled) return;
+          requestAnimationFrame(() => {
+            textareaRef.current?.setSelectionRange(settled.start, settled.end);
+          });
+        });
+    },
+    [attachImageAtCursor, showImageError],
+  );
+
+  const handleImageRemove = useCallback(
+    (index: number) => {
+      const token = images?.[index]?.placeholderToken;
+      if (token) {
+        const next = removePromptImagePlaceholder(
+          latestValueRef.current,
+          token,
+        );
+        if (next !== latestValueRef.current) {
+          latestValueRef.current = next;
+          onChange(next);
+        }
+      }
+      onImageRemove?.(index);
+    },
+    [images, onImageRemove, onChange],
+  );
+
   const handlePaste = useCallback(
     (e: ClipboardEvent<HTMLTextAreaElement>) => {
       dismiss();
@@ -1089,16 +1211,17 @@ export const PromptTextarea = forwardRef<
         if (allowed <= 0) return;
 
         e.preventDefault();
+        // Image decoding is async, so the caret is captured now — by the time
+        // the attachment lands the user may have clicked elsewhere. Selected
+        // text is replaced, matching what pasting anything else would do.
+        const caret = {
+          start: e.currentTarget.selectionStart,
+          end: e.currentTarget.selectionEnd,
+        };
+        const batchId = ++imageBatchSeqRef.current;
         for (const item of imageItems.slice(0, allowed)) {
           const file = item.getAsFile();
-          if (file) {
-            void processImageFile(file, onImageAttach, showImageError).catch(
-              (err) => {
-                showImageError('Failed to process image');
-                console.error('Failed to process pasted image:', err);
-              },
-            );
-          }
+          if (file) processImageAtCursor(file, batchId, caret);
         }
         return;
       }
@@ -1161,6 +1284,7 @@ export const PromptTextarea = forwardRef<
     },
     [
       onImageAttach,
+      processImageAtCursor,
       images,
       showImageError,
       onFileAttach,
@@ -1207,13 +1331,15 @@ export const PromptTextarea = forwardRef<
         const imageFiles = droppedFiles.filter((f) =>
           f.type.startsWith('image/'),
         );
-        for (const file of imageFiles.slice(0, allowedImages)) {
-          void processImageFile(file, onImageAttach, showImageError).catch(
-            (err) => {
-              showImageError('Failed to process image');
-              console.error('Failed to process dropped image:', err);
-            },
-          );
+        // A drop has no caret of its own; fall back to wherever the user last
+        // left it in the textarea. Guard the count explicitly: a negative
+        // `allowedImages` would make `slice` count from the end and attach
+        // images the parent will reject, stranding their markers in the draft.
+        if (allowedImages > 0) {
+          const batchId = ++imageBatchSeqRef.current;
+          for (const file of imageFiles.slice(0, allowedImages)) {
+            processImageAtCursor(file, batchId, null);
+          }
         }
       }
 
@@ -1232,7 +1358,14 @@ export const PromptTextarea = forwardRef<
         }
       }
     },
-    [onImageAttach, onFileAttach, images, projectRoot, showImageError],
+    [
+      onImageAttach,
+      processImageAtCursor,
+      onFileAttach,
+      images,
+      projectRoot,
+      showImageError,
+    ],
   );
 
   const handleFileSelect = useCallback(
@@ -1244,18 +1377,14 @@ export const PromptTextarea = forwardRef<
       if (allowed <= 0) return;
 
       const files = Array.from(e.target.files);
+      const batchId = ++imageBatchSeqRef.current;
       for (const file of files.slice(0, allowed)) {
-        void processImageFile(file, onImageAttach, showImageError).catch(
-          (err) => {
-            showImageError('Failed to process image');
-            console.error('Failed to process selected image:', err);
-          },
-        );
+        processImageAtCursor(file, batchId, null);
       }
       // Reset input so the same file can be selected again
       e.target.value = '';
     },
-    [onImageAttach, images, showImageError],
+    [onImageAttach, processImageAtCursor, images],
   );
 
   const handleOpenFilePicker = useCallback(async () => {
@@ -1759,7 +1888,7 @@ export const PromptTextarea = forwardRef<
 
       {/* Image previews — below the textarea in normal flow */}
       {images && images.length > 0 && (
-        <ImageThumbnails images={images} onImageRemove={onImageRemove} />
+        <ImageThumbnails images={images} onImageRemove={handleImageRemove} />
       )}
 
       {/* File previews — below images in normal flow */}

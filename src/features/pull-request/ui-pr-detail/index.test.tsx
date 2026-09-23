@@ -85,6 +85,7 @@ vi.mock('@/hooks/use-pull-requests', () => ({
   usePullRequest: () => ({ data: createPullRequest(), isLoading: false }),
   usePullRequestChanges: () => ({ data: [], isLoading: false }),
   usePullRequestCommits: () => ({ data: [], isLoading: false }),
+  usePullRequestDivergence: () => ({ data: undefined }),
   usePullRequestFileContent: () => ({ data: '', isLoading: false }),
   usePullRequestThreads: () => ({ data: [] }),
   useUpdatePullRequestTitle: mutation,

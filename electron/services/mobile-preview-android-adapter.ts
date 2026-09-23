@@ -70,6 +70,9 @@ const ANDROID_LAUNCH_TIMEOUT_MS = 30_000;
 const MAX_ANDROID_COORDINATE = 100_000;
 const MAX_ANDROID_DURATION_MS = 60_000;
 const ANDROID_EMULATOR_BOOT_TIMEOUT_MS = 90_000;
+// Covers the whole cold-boot chain (spawn + boot wait + preview-ready wait)
+// for the uncancellable `bootDevice` IPC.
+const ANDROID_BOOT_DEVICE_TIMEOUT_MS = 3 * 60 * 1000;
 const ANDROID_PREVIEW_READY_TIMEOUT_MS = 30_000;
 const ANDROID_EMULATOR_POLL_INTERVAL_MS = 1_000;
 const ANDROID_SCREENSHOT_POLL_INTERVAL_MS = 250;
@@ -1150,6 +1153,7 @@ async function resolveBootedAndroidAvdName(
 export async function resolveAndroidAdbSerial(
   deviceIdOrAvdName: string,
   signal?: AbortSignal,
+  options?: { minimizeWindow?: boolean },
 ) {
   const devices = parseAdbDevices(
     (await runAdbCommand(['devices', '-l'], signal ? { signal } : undefined)).stdout,
@@ -1192,14 +1196,19 @@ export async function resolveAndroidAdbSerial(
     detached: true,
     stdio: 'ignore',
   }).unref();
+  // The framebuffer preview hides the emulator window because it renders the
+  // device itself; the lightweight mobile dev pane wants it left on screen.
+  const shouldMinimizeWindow = options?.minimizeWindow !== false;
   const windowNameIncludes = [
     deviceIdOrAvdName,
     deviceIdOrAvdName.replaceAll('_', ' '),
   ];
-  void minimizeMobilePreviewWindows({
-    processNames: ANDROID_EMULATOR_PROCESS_NAMES,
-    windowNameIncludes,
-  });
+  if (shouldMinimizeWindow) {
+    void minimizeMobilePreviewWindows({
+      processNames: ANDROID_EMULATOR_PROCESS_NAMES,
+      windowNameIncludes,
+    });
+  }
 
   const adbSerial = await waitForBootedAndroidDevice({
     previousDeviceIds: new Set(devices.map((device) => device.id)),
@@ -1207,10 +1216,12 @@ export async function resolveAndroidAdbSerial(
     signal,
   });
   await waitForAndroidPreviewReady(adbSerial, signal);
-  void minimizeMobilePreviewWindows({
-    processNames: ANDROID_EMULATOR_PROCESS_NAMES,
-    windowNameIncludes: [...windowNameIncludes, adbSerial],
-  });
+  if (shouldMinimizeWindow) {
+    void minimizeMobilePreviewWindows({
+      processNames: ANDROID_EMULATOR_PROCESS_NAMES,
+      windowNameIncludes: [...windowNameIncludes, adbSerial],
+    });
+  }
   return adbSerial;
 }
 
@@ -1222,8 +1233,13 @@ export async function resolveAndroidAdbSerial(
 async function resolveUsableAndroidAdbSerial(
   deviceIdOrAvdName: string,
   signal?: AbortSignal,
+  options?: { minimizeWindow?: boolean },
 ): Promise<string> {
-  const adbSerial = await resolveAndroidAdbSerial(deviceIdOrAvdName, signal);
+  const adbSerial = await resolveAndroidAdbSerial(
+    deviceIdOrAvdName,
+    signal,
+    options,
+  );
   const devices = parseAdbDevices(
     (await runAdbCommand(['devices', '-l'], signal ? { signal } : undefined))
       .stdout,
@@ -2246,6 +2262,30 @@ export function createAndroidMobilePreviewAdapter({
     async listDevices(): Promise<MobilePreviewDevice[]> {
       await assertAdbInstalled();
       return listAllAndroidDevices();
+    },
+
+    /**
+     * Boots an emulator (or verifies an attached device) without opening a
+     * stream, for the lightweight mobile dev pane. The emulator window is
+     * intentionally left visible.
+     */
+    async bootDevice(deviceId: string): Promise<{ deviceId: string }> {
+      // Validate the argument before probing for tooling: a bad id should not
+      // depend on whether the Android SDK happens to be installed.
+      assertDeviceId(deviceId);
+      await assertAdbInstalled();
+      // Uses the "usable" variant so an attached-but-unauthorized or offline
+      // device reports its actionable reason here, rather than appearing to
+      // boot successfully and failing later.
+      //
+      // There is no cancel channel for this IPC, so the cold-boot wait is
+      // bounded here; otherwise the pane's spinner could stick indefinitely.
+      const adbSerial = await resolveUsableAndroidAdbSerial(
+        deviceId,
+        AbortSignal.timeout(ANDROID_BOOT_DEVICE_TIMEOUT_MS),
+        { minimizeWindow: false },
+      );
+      return { deviceId: adbSerial };
     },
 
     async installAndroidApk(params: {

@@ -87,4 +87,46 @@ describe('buildSummaryGenerationPrompt', () => {
     );
     await expect(readFile(preparedPrompt.transcriptPath!, 'utf-8')).rejects.toThrow();
   });
+
+  it('rejects model narration instead of injecting it as the summary', async () => {
+    generateTextMock.mockResolvedValue(
+      'I have already called the StructuredOutput tool at the end of my response above.',
+    );
+
+    await expect(
+      summarizeNormalizedMessages({
+        backend: 'claude-code',
+        model: 'default',
+        messages: [
+          {
+            id: 'msg-1',
+            date: '2026-06-13T00:00:00.000Z',
+            type: 'assistant-message',
+            value: 'did the thing',
+          },
+        ],
+      }),
+    ).rejects.toThrow('Failed to generate summary from normalized messages');
+  });
+
+  it('unwraps a summary returned as a JSON string', async () => {
+    generateTextMock.mockResolvedValue(
+      JSON.stringify({ summary: 'Generated summary.' }),
+    );
+
+    await expect(
+      summarizeNormalizedMessages({
+        backend: 'claude-code',
+        model: 'default',
+        messages: [
+          {
+            id: 'msg-1',
+            date: '2026-06-13T00:00:00.000Z',
+            type: 'assistant-message',
+            value: 'did the thing',
+          },
+        ],
+      }),
+    ).resolves.toBe('Generated summary.');
+  });
 });
