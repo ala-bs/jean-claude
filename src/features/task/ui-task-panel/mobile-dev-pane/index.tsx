@@ -69,6 +69,7 @@ import { resolveMobileDevDetectedApp } from './utils-detected-app';
 import { resolveRestartReattach } from './utils-restart-reattach';
 import { restartAppOnDevice } from './utils-restart-app';
 import { summarizeDeviceActionError } from './utils-action-error';
+import { verifyDeeplinkOnDevice } from './utils-verify-deeplink';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from '../constants';
 
 function StatusDot({
@@ -130,6 +131,7 @@ export function MobileDevPane({
   const [bootingDeviceKey, setBootingDeviceKey] = useState<string | null>(null);
   const [isReloading, setIsReloading] = useState(false);
   const [isCapturingScreenshot, setIsCapturingScreenshot] = useState(false);
+  const [isVerifyingDeeplink, setIsVerifyingDeeplink] = useState(false);
   const [restartingDeviceKey, setRestartingDeviceKey] = useState<string | null>(
     null,
   );
@@ -778,6 +780,53 @@ export function MobileDevPane({
     [activeDevice, isReloading, restartingDeviceKey],
   );
 
+  const handleVerifyDeeplink = useCallback(async () => {
+    if (!activeDevice || !isActiveDeviceBooted || isVerifyingDeeplink) return;
+    const verificationDeviceKey = activeDeviceKey;
+    setActionNotice(null);
+    setIsVerifyingDeeplink(true);
+    try {
+      const result = await verifyDeeplinkOnDevice({
+        api: api.mobilePreview,
+        device: activeDevice,
+        projectId,
+        taskId,
+        appPath,
+        androidProjectPath,
+      });
+      // Status probes can be slow on iOS physical devices. Do not report an
+      // old device's result after the user has selected another device (or
+      // cleared the selection while the probe was in flight).
+      if (activeDeviceKeyRef.current !== verificationDeviceKey) return;
+      const platformLabel = PLATFORM_LABELS[result.platform];
+      setActionNotice(
+        result.appInstalled === true
+          ? `${platformLabel} deeplink verified (${result.appId ?? 'installed app'}).`
+          : result.appInstalled === false
+            ? `${platformLabel} app is not installed on ${activeDevice.name}.`
+            : `${platformLabel} app installation could not be determined.`,
+      );
+    } catch (error) {
+      if (activeDeviceKeyRef.current !== verificationDeviceKey) return;
+      addToast({
+        message: `Deeplink verification failed: ${summarizeDeviceActionError(error)}`,
+        type: 'error',
+      });
+    } finally {
+      setIsVerifyingDeeplink(false);
+    }
+  }, [
+    activeDevice,
+    activeDeviceKey,
+    addToast,
+    androidProjectPath,
+    appPath,
+    isActiveDeviceBooted,
+    isVerifyingDeeplink,
+    projectId,
+    taskId,
+  ]);
+
   const handleCaptureScreenshot = useCallback(async () => {
     if (!activeDevice || !canCaptureScreenshot || isCapturingScreenshot) {
       return;
@@ -1350,6 +1399,26 @@ export function MobileDevPane({
                         : undefined
               }
               onOpenDeeplink={handleOpenDeeplink}
+            />
+            <IconButton
+              onClick={() => void handleVerifyDeeplink()}
+              size="sm"
+              disabled={
+                !activeDevice || !isActiveDeviceBooted || isVerifyingDeeplink
+              }
+              icon={
+                <RefreshCw
+                  className={clsx(isVerifyingDeeplink && 'animate-spin')}
+                />
+              }
+              tooltip={
+                !activeDevice
+                  ? 'Select a device to verify its deeplink app'
+                  : !isActiveDeviceBooted
+                    ? 'Boot the device to verify its deeplink app'
+                    : 'Refresh deeplink verification'
+              }
+              aria-label="Refresh deeplink verification"
             />
           </div>
 
