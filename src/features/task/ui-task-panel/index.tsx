@@ -1211,20 +1211,18 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     showWorkspaceOverview,
   });
   // Panes that are meaningless on the PR workspace overview: they are scoped to
-  // a task's worktree, which the overview does not have.
+  // an agent session rather than the workspace itself. Mobile Dev is
+  // workspace-scoped and remains available here when the project supports it.
   const isPaneHiddenOnPrWorkspaceOverview =
     rightPane?.type === 'settings' ||
-    rightPane?.type === 'debugMessages' ||
-    rightPane?.type === 'mobileDev';
+    rightPane?.type === 'debugMessages';
   const visibleRightPane =
     isPrWorkspaceOverview && isPaneHiddenOnPrWorkspaceOverview
       ? null
       : rightPane;
   // The Mobile Dev pane owns cmd+L (and the run button's log chevron) whenever
-  // it is available. On the PR workspace overview it is force-closed, so the
-  // standalone command logs pane takes cmd+L back there.
-  const logsShortcutTargetsMobileDev =
-    mobileDevPaneEnabled && !isPrWorkspaceOverview;
+  // it is available, including on the PR workspace overview.
+  const logsShortcutTargetsMobileDev = mobileDevPaneEnabled;
 
   useEffect(() => {
     if (isPrWorkspaceOverview && isPaneHiddenOnPrWorkspaceOverview) {
@@ -3267,7 +3265,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   onViewDiff={task.worktreePath ? openWorkspaceDiff : undefined}
                   onPull={handlePullPrWorkspace}
                   isPulling={pullBranchMutation.isPending}
-                  onOpenLogs={() => openCommandLogs()}
+                  onOpenLogs={() => {
+                    if (logsShortcutTargetsMobileDev) {
+                      openMobileDev();
+                    } else {
+                      openCommandLogs();
+                    }
+                  }}
+                  logsLabel={
+                    logsShortcutTargetsMobileDev ? 'Mobile Dev' : 'Logs'
+                  }
                   onOpenProjectSettings={() =>
                     useOverlaysStore.getState().open('settings')
                   }

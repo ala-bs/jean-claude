@@ -35,6 +35,7 @@ export function PrWorkspaceEmptyState({
   onAddStep,
   onDelete,
   onOpenLogs,
+  logsLabel,
   onOpenProjectSettings,
   onOpenPullRequest,
   onViewDiff,
@@ -55,6 +56,7 @@ export function PrWorkspaceEmptyState({
   onAddStep: () => void;
   onDelete: () => void;
   onOpenLogs: () => void;
+  logsLabel?: string;
   onOpenProjectSettings: () => void;
   onOpenPullRequest?: () => void;
   // Omitted when the workspace has no git worktree to diff against.
@@ -173,7 +175,7 @@ export function PrWorkspaceEmptyState({
               icon={<FileText />}
               onClick={onOpenLogs}
             >
-              Logs
+              {logsLabel ?? 'Logs'}
             </Button>
             <div className="min-w-0">{commandControls}</div>
             <Button

@@ -604,6 +604,28 @@ describe('TaskPanel zero-step PR workspace', () => {
     expect(container.textContent).toContain('Existing command logs pane');
   });
 
+  it('uses Mobile Dev as the PR overview logs surface when configured', async () => {
+    mocks.mobilePreviewRuntimeKey = 'runtime-1';
+    await renderPanel();
+
+    expect(container.textContent).toContain('Mobile Dev');
+    expect(container.textContent).not.toContain('Existing command logs pane');
+
+    await act(async () => findButton('Mobile Dev').click());
+    expect(container.textContent).toContain('Mobile dev pane');
+
+    // Command Logs remains available as the secondary pane action.
+    mocks.commands = [];
+    await renderPanel();
+    const commandLogs = mocks.commands.find(
+      (command) => command.label === 'Open Command Logs',
+    );
+    expect(commandLogs).toBeDefined();
+    expect(commandLogs!.shortcut).toBeUndefined();
+    await act(async () => commandLogs!.handler());
+    expect(container.textContent).toContain('Existing command logs pane');
+  });
+
   it('opens workspace deletion from zero-step empty state', async () => {
     await renderPanel();
 
@@ -1105,7 +1127,7 @@ describe('TaskPanel zero-step PR workspace', () => {
       expect(logs[0].keywords).toContain('logs');
     });
 
-    it('gives cmd+l to command logs and keeps a bare mobile dev entry on the workspace overview', async () => {
+    it('gives cmd+l to mobile dev and keeps a bare command logs entry on the workspace overview', async () => {
       const taskCommands = await renderAndCollect({
         mobileDevAvailable: true,
         prWorkspaceOverview: true,
@@ -1118,9 +1140,9 @@ describe('TaskPanel zero-step PR workspace', () => {
       );
       expect(mobile).toHaveLength(1);
       expect(logs).toHaveLength(1);
-      expect(mobile[0].shortcut).toBeUndefined();
+      expect(mobile[0].shortcut).toBe('cmd+l');
       expect(mobile[0].keywords).toContain('metro');
-      expect(logs[0].shortcut).toBe('cmd+l');
+      expect(logs[0].shortcut).toBeUndefined();
       expect(logs[0].keywords).toContain('logs');
     });
 
