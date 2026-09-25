@@ -93,6 +93,10 @@ import { WorkItemStateEditor } from '../ui-work-item-field-editors/work-item-sta
 import { WorkItemTabButton } from '../ui-work-item-tab-button';
 import { WorkItemTagEditor } from '../ui-work-item-tag-editor';
 import { WorkItemTypeIcon } from '../ui-work-item-shared';
+import {
+  AssociatedWorkItemTasks,
+  useAssociatedWorkItemTasks,
+} from '../ui-associated-work-item-tasks';
 type DetailsTab = 'content' | 'comments' | 'history' | 'test-cases';
 
 /**
@@ -146,6 +150,11 @@ export const WorkItemPreview = memo(function WorkItemPreview({
   parserSetting?: WorkItemTitleParserSetting | null;
 }) {
   const workItemId = workItem?.id ?? null;
+  const {
+    tasks: associatedTasks,
+    isLoading: isLoadingAssociatedTasks,
+    error: associatedTasksError,
+  } = useAssociatedWorkItemTasks(workItemId ?? 0);
   const [activeTab, setActiveTab] = useState<DetailsTab>('content');
   const [openedCommentsWorkItemIds, setOpenedCommentsWorkItemIds] = useState(
     () => new Set<number>(),
@@ -791,6 +800,15 @@ export const WorkItemPreview = memo(function WorkItemPreview({
                   error={relatedWorkItemsError}
                   onOpen={onOpenRelatedWorkItem}
                   parserSetting={parserSetting}
+                />
+              )}
+
+              {workItem && (
+                <AssociatedWorkItemTasks
+                  tasks={associatedTasks}
+                  isLoading={isLoadingAssociatedTasks}
+                  error={associatedTasksError}
+                  variant="editorial"
                 />
               )}
 

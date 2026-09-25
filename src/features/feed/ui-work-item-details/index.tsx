@@ -102,6 +102,10 @@ import { WorkItemMetadataValue } from '@/features/work-item/ui-work-item-field-e
 import { WorkItemTabButton } from '@/features/work-item/ui-work-item-tab-button';
 import { WorkItemTagEditor } from '@/features/work-item/ui-work-item-tag-editor';
 import { WorkItemTypeIcon } from '@/features/work-item/ui-work-item-shared';
+import {
+  AssociatedWorkItemTasks,
+  useAssociatedWorkItemTasks,
+} from '@/features/work-item/ui-associated-work-item-tasks';
 
 type DetailsTab = 'attachments' | 'comments' | 'history' | 'test-cases';
 
@@ -1079,6 +1083,12 @@ function WorkItemLinks({
   ) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const {
+    tasks: associatedTasks,
+    isLoading: isLoadingTasks,
+    error: associatedTasksError,
+  } =
+    useAssociatedWorkItemTasks(workItem.id);
   const findWorkItem = (id: number) => linkedWorkItems.find((wi) => wi.id === id);
   const findPullRequestStatus = (
     pr: NonNullable<AzureDevOpsWorkItem['linkedPrs']>[number],
@@ -1102,7 +1112,7 @@ function WorkItemLinks({
         <Link2 className="text-ink-3 h-3.5 w-3.5" />
         <h2 className="text-ink-1 flex-1 text-sm font-semibold">Links</h2>
         <span className="bg-ink-4/20 text-ink-3 rounded-full px-1.5 py-0.5 text-[10px]">
-          {getLinkCount(workItem)}
+          {getLinkCount(workItem, associatedTasks.length)}
         </span>
       </button>
 
@@ -1164,17 +1174,27 @@ function WorkItemLinks({
             ))}
           </LinkGroup>
         )}
+
+        <AssociatedWorkItemTasks
+          tasks={associatedTasks}
+          isLoading={isLoadingTasks}
+          error={associatedTasksError}
+        />
       </div>}
     </section>
   );
 }
 
-function getLinkCount(workItem: AzureDevOpsWorkItem): number {
+function getLinkCount(
+  workItem: AzureDevOpsWorkItem,
+  associatedTaskCount: number,
+): number {
   return (
     (workItem.linkedPrs?.length ?? 0) +
     (workItem.parentId ? 1 : 0) +
     (workItem.childIds?.length ?? 0) +
-    (workItem.relatedWorkItemIds?.length ?? 0)
+    (workItem.relatedWorkItemIds?.length ?? 0) +
+    associatedTaskCount
   );
 }
 
