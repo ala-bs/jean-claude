@@ -11,6 +11,13 @@ import {
   getTitle,
   getWorkItemType,
 } from '@shared/work-item-field-types';
+import {
+  getStatusChipRuleFieldRefNames,
+} from '@shared/work-item-status-chip-types';
+import {
+  matchWorkItemStatusChipRules,
+  mergeWorkItemStatusChipMatches,
+} from '@shared/work-item-status-chip';
 import type { TaskStatus, TaskStep, TaskStepStatus } from '@shared/types';
 import type { AzureDevOpsPullRequest } from '@shared/azure-devops-types';
 import { getWorkItemSummaryExcerpt } from '@shared/work-item-summary';
@@ -231,6 +238,7 @@ export async function getTaskFeedItems({
 }: {
   prItems?: FeedItem[];
 } = {}): Promise<FeedItem[]> {
+  const startedAt = Date.now();
   dbg.feed('getTaskFeedItems: fetching active tasks');
 
   const [activeTasks, prWorkspaceTasks] = await Promise.all([
@@ -410,13 +418,26 @@ export async function getTaskFeedItems({
     },
   );
 
+  const workItemEnrichmentStartedAt = Date.now();
   await enrichTaskFeedItemsWithWorkItemTypes({ feedItems });
+  dbg.feed(
+    'getTaskFeedItems: work-item enrichment finished in %dms (%d linked feed items)',
+    Date.now() - workItemEnrichmentStartedAt,
+    feedItems.reduce(
+      (count, item) => count + (item.workItemIds?.length ?? 0),
+      0,
+    ),
+  );
   await enrichTaskFeedItemsWithPrStatus({
     feedItems,
     prItems,
   });
 
-  dbg.feed('getTaskFeedItems: returning %d tasks', feedItems.length);
+  dbg.feed(
+    'getTaskFeedItems: returning %d tasks after %dms',
+    feedItems.length,
+    Date.now() - startedAt,
+  );
   return feedItems;
 }
 
@@ -468,7 +489,7 @@ async function enrichTaskFeedItemsWithWorkItemTypes({
   const providerByProjectId = new Map(
     projects.map((project) => [project.id, project.workItemProviderId]),
   );
-  const typeCache = new Map<string, string | null>();
+  const workItemCache = new Map<string, Awaited<ReturnType<typeof getWorkItemById>>>();
   const linkedItems = feedItems.flatMap((item) => [
     item,
     ...(item.children ?? []),
@@ -479,14 +500,17 @@ async function enrichTaskFeedItemsWithWorkItemTypes({
     const providerId = providerByProjectId.get(item.projectId);
     if (!providerId) return;
 
-    const workItemTypes = await Promise.all(
+    const project = projects.find((candidate) => candidate.id === item.projectId);
+    const rules = project?.workItemDisplayConfig?.statusChips ?? [];
+    const uniqueExtraFieldRefNames = getStatusChipRuleFieldRefNames(rules);
+    const workItemDetails = await Promise.all(
       item.workItemIds.map(async (workItemId) => {
-        const cacheKey = `${providerId}:${workItemId}`;
-        if (typeCache.has(cacheKey)) return typeCache.get(cacheKey) ?? null;
+        const cacheKey = `${providerId}:${workItemId}:${uniqueExtraFieldRefNames.join(',')}`;
+        if (workItemCache.has(cacheKey)) return workItemCache.get(cacheKey) ?? null;
 
         const numericWorkItemId = Number(workItemId);
         if (!Number.isFinite(numericWorkItemId)) {
-          typeCache.set(cacheKey, null);
+          workItemCache.set(cacheKey, null);
           return null;
         }
 
@@ -494,12 +518,12 @@ async function enrichTaskFeedItemsWithWorkItemTypes({
           const workItem = await getWorkItemById({
             providerId,
             workItemId: numericWorkItemId,
+            ...(uniqueExtraFieldRefNames.length > 0
+              ? { extraFieldRefNames: uniqueExtraFieldRefNames }
+              : {}),
           });
-          const type = workItem
-            ? (getStringField(workItem, FIELD_WORK_ITEM_TYPE) ?? null)
-            : null;
-          typeCache.set(cacheKey, type);
-          return type;
+          workItemCache.set(cacheKey, workItem);
+          return workItem;
         } catch (err) {
           dbg.feed(
             'enrichTaskFeedItemsWithWorkItemTypes: failed fetching work item %s for project %s: %O',
@@ -507,13 +531,37 @@ async function enrichTaskFeedItemsWithWorkItemTypes({
             item.projectId,
             err,
           );
-          typeCache.set(cacheKey, null);
+          workItemCache.set(cacheKey, null);
           return null;
         }
       }),
     );
 
-    item.workItemTypes = workItemTypes;
+    item.workItemTypes = workItemDetails.map((workItem) =>
+      workItem ? (getStringField(workItem, FIELD_WORK_ITEM_TYPE) ?? null) : null,
+    );
+    if (rules.length > 0) {
+      for (const [index, workItem] of workItemDetails.entries()) {
+        if (!workItem) continue;
+        for (const rule of rules) {
+          if (workItem.fields[rule.field] === undefined) {
+            dbg.feed(
+              'enrichTaskFeedItemsWithWorkItemTypes: missing status chip field %s for work item %s (project %s, linked index %d)',
+              rule.field,
+              item.workItemIds[index],
+              item.projectId,
+              index,
+            );
+          }
+        }
+      }
+      const matches = workItemDetails.flatMap((workItem) =>
+        workItem
+          ? matchWorkItemStatusChipRules({ workItem, rules })
+          : [],
+      );
+      item.workItemStatusChips = mergeWorkItemStatusChipMatches(matches);
+    }
   });
 }
 

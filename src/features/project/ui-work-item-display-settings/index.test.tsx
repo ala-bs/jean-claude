@@ -41,6 +41,7 @@ const fieldsQuery = {
 
 vi.mock('@/hooks/use-work-items', () => ({
   useWorkItemTypeFields: () => fieldsQuery,
+  useBoardColumns: () => ({ data: [] }),
   useWorkItemFieldMetadataMap: () => ({
     ...CORE_FIELD_METADATA,
     ...Object.fromEntries(

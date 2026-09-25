@@ -8,6 +8,7 @@ import {
   type WorkItemTabId,
 } from '@shared/work-item-display-config-types';
 import {
+  useBoardColumns,
   useWorkItemFieldMetadataMap,
   useWorkItemTypeFields,
 } from '@/hooks/use-work-items';
@@ -15,6 +16,7 @@ import { Button } from '@/common/ui/button';
 import type { Project } from '@shared/types';
 import { RowListEditor } from '@/features/project/ui-work-item-display-settings/field-picker';
 import { TypeOverrideList } from '@/features/project/ui-work-item-display-settings/type-override-list';
+import { StatusChipRules } from '@/features/project/ui-work-item-display-settings/status-chip-rules';
 
 const TAB_LABELS: Record<WorkItemTabId, string> = {
   description: 'Description',
@@ -49,6 +51,11 @@ export function WorkItemDisplaySettings({
   };
   const fieldsQuery = useWorkItemTypeFields(queryParams);
   const metadataMap = useWorkItemFieldMetadataMap(queryParams);
+  const boardColumnsQuery = useBoardColumns({
+    providerId: project.workItemProviderId ?? '',
+    projectId: project.workItemProjectId ?? '',
+    projectName: project.workItemProjectName ?? '',
+  });
   // Only a successful fetch tells us the real field universe. While loading or
   // after a failure (F4) we fall back to built-in core metadata and never
   // accuse a configured field of being unavailable (F2).
@@ -184,6 +191,13 @@ export function WorkItemDisplaySettings({
         metadataResolved={metadataResolved}
         workItemTypes={workItemTypes}
         onChange={onChange}
+      />
+
+      <StatusChipRules
+        rules={config.statusChips ?? []}
+        metadataMap={metadataMap}
+        boardColumns={boardColumnsQuery.data ?? []}
+        onChange={(statusChips) => onChange({ ...config, statusChips })}
       />
     </section>
   );

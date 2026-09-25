@@ -49,6 +49,7 @@ import {
   DropdownItem,
 } from '@/common/ui/dropdown';
 import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
+import type { WorkItemStatusChipMatch } from '@shared/work-item-status-chip-types';
 import {
   getPrStateColor,
   getPrStatusLabel,
@@ -116,6 +117,42 @@ function FeedProjectLabel({ item }: { item: FeedItem }) {
     <span className="min-w-0">
       <span className="text-ink-3 text-[11px]">{project.name}</span>
     </span>
+  );
+}
+
+const STATUS_CHIP_CLASSES: Record<WorkItemStatusChipMatch['tone'], string> = {
+  warning: 'border-status-run/30 bg-status-run/10 text-status-run',
+  danger: 'border-status-fail/30 bg-status-fail/10 text-status-fail',
+  info: 'border-status-azure/30 bg-status-azure/10 text-status-azure',
+  success: 'border-status-done/30 bg-status-done/10 text-status-done',
+  neutral: 'border-glass-border bg-glass-medium text-ink-2',
+};
+
+function WorkItemStatusChips({
+  matches,
+}: {
+  matches?: WorkItemStatusChipMatch[];
+}) {
+  if (!matches?.length) return null;
+  return (
+    <>
+      {matches.map((match) => {
+        const ids = match.workItemIds.map((id) => `#${id}`).join(', ');
+        return (
+          <span
+            key={match.ruleId}
+            aria-label={match.label}
+            title={`${match.label} · matching work items: ${ids}`}
+            className={clsx(
+              'mt-px shrink-0 rounded border px-1 py-0.5 text-[10px] font-medium leading-none',
+              STATUS_CHIP_CLASSES[match.tone],
+            )}
+          >
+            {match.label}
+          </span>
+        );
+      })}
+    </>
   );
 }
 
@@ -877,6 +914,7 @@ export function FeedItemCard({
                       }
                     />
                   ))}
+                  <WorkItemStatusChips matches={item.workItemStatusChips} />
                 </div>
               )}
 
@@ -1508,7 +1546,7 @@ function SubtaskRow({
         {/* Sub-task work items */}
         {child.workItemIds && child.workItemIds.length > 0 && (
           <div className="mt-0.5 flex flex-wrap gap-1">
-            {child.workItemIds.map((wiId, index) => (
+          {child.workItemIds.map((wiId, index) => (
               <WorkItemChip
                 key={wiId}
                 label={`#${wiId}`}
@@ -1519,6 +1557,7 @@ function SubtaskRow({
                 }
               />
             ))}
+            <WorkItemStatusChips matches={child.workItemStatusChips} />
           </div>
         )}
       </div>

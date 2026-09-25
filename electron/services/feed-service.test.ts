@@ -14,6 +14,7 @@ import {
   getCurrentUser,
   getPullRequestActivityMetadata,
   getPullRequestStatuses,
+  getWorkItemById,
   listPullRequests,
   queryAssignedWorkItems,
 } from './azure-devops-service';
@@ -736,5 +737,133 @@ describe('getTaskFeedItems', () => {
     ]);
     expect(items[0]).not.toHaveProperty('hasUncommittedChanges');
     expect(items[0]).toHaveProperty('hasUnpushedCommits', true);
+  });
+
+  it('enriches linked work items with configured status chips', async () => {
+    vi.mocked(ProjectRepository.findAll).mockResolvedValue([
+      {
+        id: 'project-1',
+        workItemProviderId: 'provider-1',
+        workItemDisplayConfig: {
+          statusChips: [
+            {
+              id: 'blocked',
+              field: 'System.State',
+              values: ['Blocked'],
+              label: 'Needs clarification',
+              tone: 'warning',
+              enabled: true,
+            },
+            {
+              id: 'severity',
+              field: 'Custom.Severity',
+              values: ['High'],
+              label: 'High severity',
+              tone: 'danger',
+              enabled: true,
+            },
+          ],
+        },
+      } as never,
+    ]);
+    vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
+      {
+        id: 'task-1',
+        projectId: 'project-1',
+        type: 'agent',
+        name: 'Clarify checkout',
+        prompt: 'Clarify checkout',
+        status: 'waiting',
+        hasUnread: false,
+        pullRequestId: null,
+        workItemIds: ['101', '102'],
+        workItemUrls: ['url-101', 'url-102'],
+        updatedAt: '2026-07-14T00:00:00.000Z',
+        projectName: 'oes-v2',
+        projectColor: '#ff6b6b',
+        projectLogoPath: null,
+        repoProviderId: null,
+        repoId: null,
+      } as never,
+    ]);
+    vi.mocked(getWorkItemById)
+      .mockResolvedValueOnce({
+        id: 101,
+        fields: { 'System.WorkItemType': 'Bug', 'System.State': 'Blocked' },
+      } as never)
+      .mockResolvedValueOnce({
+        id: 102,
+        fields: { 'System.WorkItemType': 'Task', 'Custom.Severity': 'High' },
+      } as never);
+    vi.mocked(getPullRequestStatuses).mockResolvedValue(new Map());
+
+    const [item] = await getTaskFeedItems();
+
+    expect(item?.workItemStatusChips).toEqual([
+      {
+        ruleId: 'blocked',
+        label: 'Needs clarification',
+        tone: 'warning',
+        workItemIds: ['101'],
+      },
+      {
+        ruleId: 'severity',
+        label: 'High severity',
+        tone: 'danger',
+        workItemIds: ['102'],
+      },
+    ]);
+    expect(getWorkItemById).toHaveBeenNthCalledWith(1, {
+      providerId: 'provider-1',
+      workItemId: 101,
+      extraFieldRefNames: ['Custom.Severity'],
+    });
+  });
+
+  it('keeps linked IDs and types when status enrichment fails', async () => {
+    vi.mocked(ProjectRepository.findAll).mockResolvedValue([
+      {
+        id: 'project-1',
+        workItemProviderId: 'provider-1',
+        workItemDisplayConfig: {
+          statusChips: [
+            {
+              id: 'blocked',
+              field: 'System.State',
+              values: ['Blocked'],
+              label: 'Blocked',
+              tone: 'warning',
+              enabled: true,
+            },
+          ],
+        },
+      } as never,
+    ]);
+    vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
+      {
+        id: 'task-1',
+        projectId: 'project-1',
+        type: 'agent',
+        name: 'Keep task visible',
+        prompt: 'Keep task visible',
+        status: 'waiting',
+        pullRequestId: null,
+        workItemIds: ['101'],
+        workItemUrls: ['url-101'],
+        updatedAt: '2026-07-14T00:00:00.000Z',
+        projectName: 'oes-v2',
+        projectColor: '#ff6b6b',
+        projectLogoPath: null,
+        repoProviderId: null,
+        repoId: null,
+      } as never,
+    ]);
+    vi.mocked(getWorkItemById).mockRejectedValue(new Error('Azure unavailable'));
+    vi.mocked(getPullRequestStatuses).mockResolvedValue(new Map());
+
+    const [item] = await getTaskFeedItems();
+
+    expect(item?.workItemIds).toEqual(['101']);
+    expect(item?.workItemStatusChips).toEqual([]);
   });
 });

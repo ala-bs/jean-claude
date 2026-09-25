@@ -186,6 +186,12 @@ export function useUpdateProject() {
       ) {
         invalidateFeedResource(queryClient, 'workItems');
       }
+      if (data.workItemDisplayConfig !== undefined) {
+        // Status chips are enriched into linked task feed items on the main
+        // process. Invalidate the custom cache immediately after the save
+        // resolves instead of waiting for the project event listener.
+        invalidateFeedResources(queryClient, ['tasks', 'workItems']);
+      }
       if (data.archivedAt !== undefined) {
         queryClient.invalidateQueries({ queryKey: feedQueryKeys.tasks });
       }

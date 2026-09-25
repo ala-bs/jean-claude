@@ -20,6 +20,10 @@ import {
   FIELD_STORY_POINTS,
   FIELD_TAGS,
 } from './work-item-field-types';
+import {
+  WORK_ITEM_STATUS_CHIP_TONES,
+  type WorkItemStatusChipRule,
+} from './work-item-status-chip-types';
 
 export const WORK_ITEM_DISPLAY_CONFIG_MAX_ROWS = 40;
 export const WORK_ITEM_DISPLAY_CONFIG_MAX_OVERRIDES = 20;
@@ -65,6 +69,7 @@ export interface WorkItemDisplayConfig {
   board: { rows: WorkItemRowConfig[] };
   /** Absent key ⇒ inherit `detail`. */
   overridesByType: Record<string, WorkItemDetailLayout>;
+  statusChips?: WorkItemStatusChipRule[];
 }
 
 /**
@@ -161,6 +166,7 @@ export const DEFAULT_WORK_ITEM_DISPLAY_CONFIG: WorkItemDisplayConfig = {
     ],
   },
   overridesByType: {},
+  statusChips: [],
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -183,6 +189,50 @@ function isTabConfig(value: unknown): value is WorkItemTabConfig {
     typeof value.id === 'string' &&
     (WORK_ITEM_TAB_IDS as readonly string[]).includes(value.id) &&
     typeof value.visible === 'boolean'
+  );
+}
+
+const STATUS_CHIP_MAX_RULES = 50;
+const STATUS_CHIP_MAX_VALUES = 50;
+const STATUS_CHIP_MAX_TEXT_LENGTH = 200;
+
+function isStatusChipRule(value: unknown): value is WorkItemStatusChipRule {
+  if (!isRecord(value)) return false;
+  if (
+    typeof value.id !== 'string' ||
+    value.id.length === 0 ||
+    value.id.length > STATUS_CHIP_MAX_TEXT_LENGTH
+  ) {
+    return false;
+  }
+  if (
+    typeof value.field !== 'string' ||
+    !REFNAME_PATTERN.test(value.field) ||
+    value.field.length > WORK_ITEM_DISPLAY_CONFIG_MAX_REFNAME_LENGTH
+  ) {
+    return false;
+  }
+  if (
+    !Array.isArray(value.values) ||
+    value.values.length === 0 ||
+    value.values.length > STATUS_CHIP_MAX_VALUES ||
+    value.values.some(
+      (entry) =>
+        typeof entry !== 'string' ||
+        entry.trim().length === 0 ||
+        entry.length > STATUS_CHIP_MAX_TEXT_LENGTH,
+    )
+  ) {
+    return false;
+  }
+  return (
+    typeof value.label === 'string' &&
+    value.label.trim().length > 0 &&
+    value.label.length <= STATUS_CHIP_MAX_TEXT_LENGTH &&
+    (WORK_ITEM_STATUS_CHIP_TONES as readonly string[]).includes(
+      value.tone as string,
+    ) &&
+    typeof value.enabled === 'boolean'
   );
 }
 
@@ -211,6 +261,14 @@ export function isWorkItemDisplayConfig(
   if (!isDetailLayout(value.detail)) return false;
   if (!isRecord(value.board) || !isRowList(value.board.rows)) return false;
   if (!isRecord(value.overridesByType)) return false;
+  if (
+    value.statusChips !== undefined &&
+    (!Array.isArray(value.statusChips) ||
+      value.statusChips.length > STATUS_CHIP_MAX_RULES ||
+      value.statusChips.some((rule) => !isStatusChipRule(rule)))
+  ) {
+    return false;
+  }
 
   const overrideKeys = Object.keys(value.overridesByType);
   if (overrideKeys.length > WORK_ITEM_DISPLAY_CONFIG_MAX_OVERRIDES) {
