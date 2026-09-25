@@ -12,7 +12,7 @@ describe('getPrStateColor', () => {
     ['abandoned', false, true, true, 'var(--color-ink-4)'],
     ['active', false, true, true, 'var(--color-status-fail)'],
     ['active', false, false, true, 'var(--color-status-run)'],
-    ['active', true, false, false, 'var(--color-ink-3)'],
+    ['active', true, false, false, 'var(--color-status-pr)'],
     ['active', false, false, false, 'var(--color-status-azure)'],
   ] as const)(
     'maps %s PR state to %s',
