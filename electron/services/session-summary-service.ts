@@ -16,6 +16,7 @@ import { generateText } from './ai-generation-service';
 
 const MAX_INLINE_TRANSCRIPT_CHARS = 30_000;
 const MAX_TOOL_RESULT_CHARS = 4_000;
+const MAX_SUMMARY_CHARS = 8_000;
 
 function truncateMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
@@ -214,7 +215,7 @@ export async function summarizeNormalizedMessages({
     typeof (result as { summary?: unknown }).summary === 'string'
   ) {
     const summary = (result as { summary: string }).summary.trim();
-    if (summary) return summary;
+    if (summary && summary.length <= MAX_SUMMARY_CHARS) return summary;
   }
 
   // A raw string means the backend did not honor the schema. Only accept it if
@@ -230,7 +231,7 @@ export async function summarizeNormalizedMessages({
         typeof (parsed as { summary?: unknown }).summary === 'string'
       ) {
         const summary = (parsed as { summary: string }).summary.trim();
-        if (summary) return summary;
+        if (summary && summary.length <= MAX_SUMMARY_CHARS) return summary;
       }
     } catch {
       // fall through to the error below

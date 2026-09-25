@@ -56,10 +56,13 @@ function canUseStepAsContinueSource(status: TaskStep['status']): boolean {
   );
 }
 
+const MAX_FALLBACK_SUMMARY_CHARS = 8_000;
+const FALLBACK_SUMMARY_MARKER = '...[fallback summary truncated]...';
+
 /**
  * Simple text condensation fallback for `{{summary(...)}}` when the argument
  * resolves to a raw value rather than a step reference (which uses normalized
- * messages instead). Collapses whitespace and truncates to 320 characters.
+ * messages instead). Collapses whitespace and keeps both ends of long output.
  */
 function condenseText(value: string): string {
   const normalized = value.replace(/\r\n/g, '\n').trim();
@@ -74,8 +77,14 @@ function condenseText(value: string): string {
     .trim();
 
   if (!condensed) return '';
-  if (condensed.length <= 320) return condensed;
-  return `${condensed.slice(0, 317).trim()}...`;
+  if (condensed.length <= MAX_FALLBACK_SUMMARY_CHARS) return condensed;
+  const contentLength =
+    MAX_FALLBACK_SUMMARY_CHARS - FALLBACK_SUMMARY_MARKER.length - 2;
+  const headLength = Math.ceil(contentLength / 2);
+  const tailLength = Math.floor(contentLength / 2);
+  return `${condensed.slice(0, headLength).trimEnd()}
+${FALLBACK_SUMMARY_MARKER}
+${condensed.slice(-tailLength).trimStart()}`;
 }
 
 function getSummaryFallbackText({
@@ -188,14 +197,16 @@ async function resolvePromptTemplate({
       // and reuse what the step already produced.
       if (summaryModel.off) {
         const fallback = getSummaryFallbackText({ step, messages });
+        if (!fallback) {
+          throw new Error(
+            `Failed to summarize step "${step.name}" (${stepId}): summary generation is disabled and no previous output is available`,
+          );
+        }
         warnings.push(
-          `Summary generation is disabled by the active model profile; used ${
-            fallback ? fallback.source : 'no'
-          } fallback for step "${step.name}" (${stepId}).`,
+          `Summary generation is disabled by the active model profile; used ${fallback.source} fallback for step "${step.name}" (${stepId}).`,
         );
-        const text = fallback?.text ?? '';
-        await onSummaryLifecycle?.onResolved?.(step, text);
-        return text;
+        await onSummaryLifecycle?.onResolved?.(step, fallback.text);
+        return fallback.text;
       }
 
       if (summaryModel.blocked) {
@@ -213,26 +224,6 @@ async function resolvePromptTemplate({
         | undefined;
 
       const handleSummaryFailure = async (error: unknown): Promise<string> => {
-        const fallback = getSummaryFallbackText({ step, messages });
-        if (fallback) {
-          warnings.push(
-            `Summary generation failed for step "${step.name}" (${stepId}); used ${fallback.source} fallback.`,
-          );
-          debug(
-            'Prompt summary failed for step %s (%s); using %s fallback durationMs=%d messages=%d messageTypes=%o fallbackLength=%d error=%O',
-            stepId,
-            step.name,
-            fallback.source,
-            Date.now() - summaryStartedAt,
-            messages.length,
-            messageTypes,
-            fallback.text.length,
-            error,
-          );
-          await onSummaryLifecycle?.onResolved?.(step, fallback.text);
-          return fallback.text;
-        }
-
         debug(
           'Prompt summary failed for step %s (%s): sourceStep=%s backend=%s model=%s durationMs=%d messages=%d messageTypes=%o summaryPromptLength=%d error=%O',
           stepId,

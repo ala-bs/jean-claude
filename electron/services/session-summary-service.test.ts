@@ -129,4 +129,23 @@ describe('buildSummaryGenerationPrompt', () => {
       }),
     ).resolves.toBe('Generated summary.');
   });
+
+  it('rejects summaries that are too large to inject into a prompt', async () => {
+    generateTextMock.mockResolvedValue({ summary: 'x'.repeat(8_001) });
+
+    await expect(
+      summarizeNormalizedMessages({
+        backend: 'claude-code',
+        model: 'default',
+        messages: [
+          {
+            id: 'msg-1',
+            date: '2026-06-13T00:00:00.000Z',
+            type: 'assistant-message',
+            value: 'did the thing',
+          },
+        ],
+      }),
+    ).rejects.toThrow('Failed to generate summary from normalized messages');
+  });
 });

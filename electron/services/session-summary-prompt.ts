@@ -12,7 +12,7 @@ export const SESSION_SUMMARY_PROMPT = [
 export const SESSION_SUMMARY_SCHEMA = {
   type: 'object',
   properties: {
-    summary: { type: 'string' },
+    summary: { type: 'string', maxLength: 8_000 },
   },
   required: ['summary'],
 } as const;

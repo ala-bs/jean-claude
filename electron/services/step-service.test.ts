@@ -195,7 +195,7 @@ describe('StepService.resolveAndValidate', () => {
     expect(result.archivedAt).toBe(archivedStep.archivedAt);
   });
 
-  it('falls back to captured output when continue summary generation fails', async () => {
+  it('fails continuation when summary generation fails', async () => {
     findMessagesByStepIdMock.mockResolvedValue([
       {
         id: 'msg-1',
@@ -207,34 +207,42 @@ describe('StepService.resolveAndValidate', () => {
       new Error('Failed to generate summary from normalized messages'),
     );
 
-    const result = await StepService.resolveAndValidate('step-2');
-
-    expect(result.resolvedPrompt).toBe(
-      'Continue from:\nImplemented login flow. Added tests. Fixed lint.',
+    await expect(StepService.resolveAndValidate('step-2')).rejects.toThrow(
+      'Failed to summarize step "Step 1" (step-1) using backend opencode',
     );
-    expect(result.warnings).toEqual([
-      'Summary generation failed for step "Step 1" (step-1); used captured output fallback.',
-    ]);
-    expect(updateStepMock).toHaveBeenCalledWith('step-2', {
-      resolvedPrompt:
-        'Continue from:\nImplemented login flow. Added tests. Fixed lint.',
-    });
   });
 
-  it('falls back to captured output when messages are empty', async () => {
+  it('does not use truncated captured output when summary generation fails', async () => {
+    const longOutput = `${'Implemented an important change. '.repeat(300)}Final risk: migration still needs review.`;
+    findStepsByTaskIdMock.mockResolvedValue([
+      { ...previousStep, output: longOutput },
+      continueStep,
+    ]);
+    findMessagesByStepIdMock.mockResolvedValue([
+      {
+        id: 'msg-1',
+        type: 'assistant-message',
+        value: 'Implemented login flow.',
+      },
+    ]);
+    summarizeNormalizedMessagesMock.mockRejectedValue(
+      new Error('Failed to generate summary from normalized messages'),
+    );
+
+    await expect(StepService.resolveAndValidate('step-2')).rejects.toThrow(
+      'Failed to summarize step "Step 1" (step-1) using backend opencode',
+    );
+  });
+
+  it('fails continuation when messages are empty', async () => {
     findMessagesByStepIdMock.mockResolvedValue([]);
 
-    const result = await StepService.resolveAndValidate('step-2');
-
-    expect(result.resolvedPrompt).toBe(
-      'Continue from:\nImplemented login flow. Added tests. Fixed lint.',
+    await expect(StepService.resolveAndValidate('step-2')).rejects.toThrow(
+      'Cannot summarize empty message history',
     );
-    expect(result.warnings).toEqual([
-      'Summary generation failed for step "Step 1" (step-1); used captured output fallback.',
-    ]);
   });
 
-  it('falls back to last assistant or result message when output is empty', async () => {
+  it('fails continuation when summary generation fails with output empty', async () => {
     findStepsByTaskIdMock.mockResolvedValue([
       { ...previousStep, output: null },
       continueStep,
@@ -255,12 +263,9 @@ describe('StepService.resolveAndValidate', () => {
       new Error('Failed to generate summary from normalized messages'),
     );
 
-    const result = await StepService.resolveAndValidate('step-2');
-
-    expect(result.resolvedPrompt).toBe('Continue from:\nFinal result summary.');
-    expect(result.warnings).toEqual([
-      'Summary generation failed for step "Step 1" (step-1); used last message fallback.',
-    ]);
+    await expect(StepService.resolveAndValidate('step-2')).rejects.toThrow(
+      'Failed to summarize step "Step 1" (step-1) using backend opencode',
+    );
   });
 
   it('resolves the summary model through the summary role', async () => {
@@ -305,7 +310,26 @@ describe('StepService.resolveAndValidate', () => {
     ]);
   });
 
-  it('skips interrupted error result when falling back to last message', async () => {
+  it('fails when summary generation is disabled and no fallback exists', async () => {
+    resolveForRoleMock.mockResolvedValue({
+      backend: 'opencode',
+      model: 'default',
+      thinkingEffort: 'default',
+      source: 'profile',
+      off: true,
+    });
+    findStepsByTaskIdMock.mockResolvedValue([
+      { ...previousStep, output: null },
+      continueStep,
+    ]);
+    findMessagesByStepIdMock.mockResolvedValue([]);
+
+    await expect(StepService.resolveAndValidate('step-2')).rejects.toThrow(
+      'summary generation is disabled and no previous output is available',
+    );
+  });
+
+  it('fails continuation instead of using an interrupted error result', async () => {
     findStepsByTaskIdMock.mockResolvedValue([
       { ...previousStep, output: null },
       continueStep,
@@ -327,14 +351,9 @@ describe('StepService.resolveAndValidate', () => {
       new Error('Failed to generate summary from normalized messages'),
     );
 
-    const result = await StepService.resolveAndValidate('step-2');
-
-    expect(result.resolvedPrompt).toBe(
-      'Continue from:\nImplemented login flow before interruption.',
+    await expect(StepService.resolveAndValidate('step-2')).rejects.toThrow(
+      'Failed to summarize step "Step 1" (step-1) using backend opencode',
     );
-    expect(result.warnings).toEqual([
-      'Summary generation failed for step "Step 1" (step-1); used last message fallback.',
-    ]);
   });
 });
 
