@@ -76,9 +76,9 @@ export const PROJECT_MODEL_POLICY_QUERY_KEY = [
 /**
  * The profile that governs a project — the renderer twin of
  * `ModelProfileService.getEffectiveProfile`. Both call the same shared rule,
- * `pickEffectiveProfile`: pin first, then (under `enforce`) the first profile
- * the allow-list permits when the active one is not permitted, else the
- * globally active profile.
+ * `pickEffectiveProfile`: project default pin first, then (under `enforce`)
+ * the first profile the allow-list permits when the active one is not
+ * permitted, else the globally active profile.
  *
  * Use this — never `useActiveModelProfile` — for anything project-scoped, such
  * as the preset list or the composer's quick chips. `useActiveModelProfile`

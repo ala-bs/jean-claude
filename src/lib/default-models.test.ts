@@ -49,14 +49,17 @@ const ENABLED_BACKENDS = ['claude-code', 'opencode'] as const;
 
 function resolve({
   activeProfileId,
+  policy,
   draft,
 }: {
   activeProfileId: string | null;
+  policy?: Parameters<typeof resolveAgentModelSelection>[0]['policy'];
   draft?: Parameters<typeof buildModelOverrideFromDraft>[0];
 }) {
   return resolveAgentModelSelection({
     profiles: PROFILES,
     activeProfileId,
+    policy,
     enabledBackends: [...ENABLED_BACKENDS],
     draft,
   });
@@ -81,6 +84,35 @@ describe('resolveAgentModelSelection', () => {
     expect(after.backend).toBe('opencode');
     expect(after.model).toBe('gpt-5');
     expect(after.thinkingEffort).toBe('low');
+  });
+
+  it('uses a project default profile for an untouched new-task draft', () => {
+    const resolved = resolve({
+      activeProfileId: 'anthropic',
+      policy: { mode: 'prefer', pinnedProfileId: 'fallback' },
+      draft: {
+        modelPreference: 'default',
+        thinkingEffort: 'default',
+      },
+    });
+
+    expect(resolved.profileId).toBe('fallback');
+    expect(resolved.backend).toBe('opencode');
+    expect(resolved.model).toBe('gpt-5');
+    expect(resolved.source).toBe('policy');
+  });
+
+  it('keeps an explicit new-task override over the project default', () => {
+    const resolved = resolve({
+      activeProfileId: 'anthropic',
+      policy: { mode: 'prefer', pinnedProfileId: 'fallback' },
+      draft: { agentBackend: 'claude-code', modelPreference: 'opus' },
+    });
+
+    expect(resolved.profileId).toBe('fallback');
+    expect(resolved.backend).toBe('claude-code');
+    expect(resolved.model).toBe('opus');
+    expect(resolved.source).toBe('override');
   });
 
   it('lets an explicit per-step override win over the active profile', () => {

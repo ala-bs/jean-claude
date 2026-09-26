@@ -24,8 +24,8 @@ const MODE_OPTIONS: {
   },
   {
     value: 'prefer',
-    label: 'Start this project on a profile',
-    description: 'A starting point you can still change',
+    label: 'Use a project default profile',
+    description: 'New tasks start here, but you can still switch',
   },
   {
     value: 'enforce',
@@ -82,7 +82,7 @@ const BACKEND_CONSTRAINT_OPTIONS: SelectOption<BackendConstraint>[] = [
 
 function profileName(profiles: ModelProfile[], id: string | undefined) {
   if (!id) return null;
-  return profiles.find((profile) => profile.id === id)?.name ?? id;
+  return profiles.find((profile) => profile.id === id)?.name ?? null;
 }
 
 function backendLabel(
@@ -112,9 +112,12 @@ function describePolicy({
   }
 
   if (policy.mode === 'prefer') {
+    if (policy.pinnedProfileId && !pinned) {
+      return 'The configured project default is unavailable. New tasks follow the globally active profile.';
+    }
     return pinned
-      ? `Starts on ${pinned}. You can still switch profiles in this project.`
-      : 'Follows the globally active profile until you pick a starting profile.';
+      ? `New tasks start on ${pinned}. You can still switch profiles in this project.`
+      : 'Follows the globally active profile until you choose a project default.';
   }
 
   const parts: string[] = [];
@@ -301,7 +304,7 @@ export function ProjectModelPolicyEditor({
 
   const profilePicker = (
     <Select
-      label="Pinned model profile"
+      label={mode === 'prefer' ? 'Default profile' : 'Pinned model profile'}
       value={policy.pinnedProfileId ?? ''}
       options={profileOptions}
       disabled={readOnly}
@@ -348,7 +351,7 @@ export function ProjectModelPolicyEditor({
       {mode === 'prefer' && (
         <div>
           <span className="text-ink-1 mb-1 block text-sm font-medium">
-            Starting profile
+            Default profile
           </span>
           {profilePicker}
         </div>

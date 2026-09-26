@@ -124,7 +124,7 @@ describe('ProjectModelPolicyEditor', () => {
     expect(byLabel('Policy mode')).toBeTruthy();
     expect(byLabel('Profile constraint')).toBeNull();
     expect(byLabel('Backend constraint')).toBeNull();
-    expect(byLabel('Pinned model profile')).toBeNull();
+    expect(byLabel('Default profile')).toBeNull();
     expect(byLabel('Allow Claude Code')).toBeNull();
     expect(byLabel('Allow profile Anthropic')).toBeNull();
     expect(outcome()).toContain('Follows the globally active profile');
@@ -133,13 +133,13 @@ describe('ProjectModelPolicyEditor', () => {
   it('renders only the profile picker under prefer', () => {
     render({ policy: { mode: 'prefer', pinnedProfileId: 'codex' } });
 
-    expect(byLabel('Pinned model profile')).toBeTruthy();
+    expect(byLabel('Default profile')).toBeTruthy();
     // The resolver ignores allowedBackends/allowedProfileIds outside enforce,
     // so those controls must not be offered here.
     expect(byLabel('Allow Claude Code')).toBeNull();
     expect(byLabel('Allow profile Anthropic')).toBeNull();
     expect(byLabel('Allow all enabled backends')).toBeNull();
-    expect(outcome()).toContain('Starts on Codex fallback');
+    expect(outcome()).toContain('New tasks start on Codex fallback');
     expect(outcome()).toContain('can still switch');
   });
 
@@ -152,9 +152,17 @@ describe('ProjectModelPolicyEditor', () => {
       },
     });
 
-    selectValue('Policy mode', 'Start this project on a profile');
+    selectValue('Policy mode', 'Use a project default profile');
 
     expect(lastPolicy()).toEqual({ mode: 'prefer' });
+  });
+
+  it('explains when a preferred profile no longer exists', () => {
+    render({ policy: { mode: 'prefer', pinnedProfileId: 'deleted' } });
+
+    expect(outcome()).toContain('configured project default is unavailable');
+    expect(outcome()).toContain('globally active profile');
+    expect(outcome()).not.toContain('New tasks start on deleted');
   });
 
   it('drops every field when switching back to inherit', () => {

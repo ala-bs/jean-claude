@@ -35,8 +35,14 @@ export function buildModelOverrideFromDraft(
 
   const override: ModelOverride = {};
   if (draft.agentBackend) override.backend = draft.agentBackend;
-  if (draft.modelPreference) override.model = draft.modelPreference;
-  if (draft.thinkingEffort) override.thinkingEffort = draft.thinkingEffort;
+  // The persisted new-task form uses `'default'` as its untouched sentinel.
+  // It means "follow the selected profile", not an explicit model override.
+  if (draft.modelPreference && draft.modelPreference !== 'default') {
+    override.model = draft.modelPreference;
+  }
+  if (draft.thinkingEffort && draft.thinkingEffort !== 'default') {
+    override.thinkingEffort = draft.thinkingEffort;
+  }
   if (draft.backendModelPresetId) override.presetId = draft.backendModelPresetId;
 
   return Object.keys(override).length > 0 ? override : null;

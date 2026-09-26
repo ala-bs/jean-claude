@@ -110,7 +110,7 @@ export function ModelProfileSwitcher({
   const isEnforced = policy?.mode === 'enforce';
 
   // Design §2: under `enforce`, disallowed options are hidden, not disabled.
-  // `prefer` is a starting point, not a restriction, so it lists everything.
+  // `prefer` is a project default, not a restriction, so it lists everything.
   // `listSelectableProfiles` falls back to the full list rather than rendering
   // an empty menu when the policy names profiles that no longer exist.
   const entries = useMemo(
