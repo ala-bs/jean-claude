@@ -710,7 +710,10 @@ process.on('exit', () => {
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     dbg.main('Received %s; requesting graceful Electron quit', signal);
-    if (!isQuittingAfterCleanup) app.quit();
+    // Dev-server shutdown is an internal/programmatic quit, not a user
+    // request. Keep the awaited cleanup path, but do not show the Cmd+Q
+    // confirmation modal while restarting the dev instance.
+    if (!isQuittingAfterCleanup) quitWithoutConfirmation();
   });
 }
 
