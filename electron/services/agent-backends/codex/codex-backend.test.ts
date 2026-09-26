@@ -142,6 +142,87 @@ describe('CodexBackend', () => {
     });
   });
 
+  it('routes MCP elicitation requests through the question UI', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask through MCP elicitation' },
+    ]);
+    const events = session.events[Symbol.asyncIterator]();
+    await events.next();
+    const nextEvent = events.next();
+
+    emitRequest({
+      id: 'elicitation-1',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        mode: 'form',
+        message: 'Choose an environment',
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            environment: {
+              type: 'string',
+              title: 'Environment',
+              enum: ['staging', 'production'],
+            },
+          },
+          required: ['environment'],
+        },
+      },
+    });
+
+    await expect(nextEvent).resolves.toMatchObject({
+      value: {
+        type: 'question',
+        request: {
+          requestId: 'elicitation-1',
+          contextReminder: 'Choose an environment',
+          questions: [{ id: 'environment', type: 'single_choice' }],
+        },
+      },
+    });
+
+    await backend.respondToQuestion(
+      session.sessionId,
+      'elicitation-1',
+      { environment: 'production' },
+      { questionKeys: ['environment'] },
+    );
+    expect(client.request).toHaveBeenCalledWith('thread/increment_elicitation', {
+      threadId: 'thread-1',
+    });
+    expect(client.request).toHaveBeenCalledWith('thread/decrement_elicitation', {
+      threadId: 'thread-1',
+    });
+    expect(client.respond).toHaveBeenCalledWith('elicitation-1', {
+      action: 'accept',
+      content: { environment: 'production' },
+    });
+  });
+
+  it('declines unsupported MCP elicitation modes', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    await backend.start(createConfig(), [{ type: 'text', text: 'Sign in' }]);
+
+    emitRequest({
+      id: 'elicitation-url',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        mode: 'url',
+        message: 'Sign in',
+        url: 'https://example.test',
+      },
+    });
+
+    expect(client.respond).toHaveBeenCalledWith('elicitation-url', {
+      action: 'decline',
+    });
+  });
+
   it('turns a Codex permission-profile request into a permission event', async () => {
     const { backend, client, emitRequest } = createBackend();
     const session = await backend.start(createConfig(), [
@@ -298,6 +379,39 @@ describe('CodexBackend', () => {
     });
   });
 
+  it('cancels pending MCP elicitations during cleanup', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Choose an environment' },
+    ]);
+
+    emitRequest({
+      id: 'elicitation-cleanup',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        mode: 'form',
+        requestedSchema: {
+          type: 'object',
+          properties: { environment: { type: 'string' } },
+        },
+      },
+    });
+
+    await backend.stop(session.sessionId);
+
+    expect(client.request).toHaveBeenCalledWith('thread/increment_elicitation', {
+      threadId: 'thread-1',
+    });
+    expect(client.request).toHaveBeenCalledWith('thread/decrement_elicitation', {
+      threadId: 'thread-1',
+    });
+    expect(client.respond).toHaveBeenCalledWith('elicitation-cleanup', {
+      action: 'cancel',
+    });
+  });
+
   it('resumes existing thread when config.sessionId is present', async () => {
     const { backend, client } = createBackend();
 
@@ -324,7 +438,7 @@ describe('CodexBackend', () => {
     );
   });
 
-  it('does not pass runtime MCP config to the app-server or thread config', async () => {
+  it('passes runtime MCP config into the Codex thread config', async () => {
     const { backend, client } = createBackend();
 
     await backend.start(
@@ -356,12 +470,24 @@ describe('CodexBackend', () => {
           network_access: true,
           writable_roots: expectedPackageManagerCacheRoots(),
         },
+        mcp_servers: {
+          'jean-claude-mcp': {
+            command: 'node',
+            args: ['jean-claude-mcp-server.js'],
+            env: {
+              JC_MCP_BRIDGE_URL: 'http://127.0.0.1:4567',
+              JC_MCP_AUTH_TOKEN: 'token-1',
+              JC_MCP_STEP_ID: 'step-1',
+              JC_MCP_REGISTRATION_ID: 'registration-1',
+            },
+          },
+        },
       },
       serviceName: 'jean_claude',
     });
   });
 
-  it('omits runtime MCP config when resuming threads', async () => {
+  it('passes runtime MCP config when resuming threads', async () => {
     const { backend, client } = createBackend();
 
     await backend.start(
@@ -394,6 +520,18 @@ describe('CodexBackend', () => {
         sandbox_workspace_write: {
           network_access: true,
           writable_roots: expectedPackageManagerCacheRoots(),
+        },
+        mcp_servers: {
+          'jean-claude-mcp': {
+            command: 'node',
+            args: ['jean-claude-mcp-server.js'],
+            env: {
+              JC_MCP_BRIDGE_URL: 'http://127.0.0.1:4567',
+              JC_MCP_AUTH_TOKEN: 'token-1',
+              JC_MCP_STEP_ID: 'step-1',
+              JC_MCP_REGISTRATION_ID: 'registration-1',
+            },
+          },
         },
       },
     });
@@ -1017,6 +1155,54 @@ describe('CodexBackend', () => {
     });
     await expect(iterator.next()).resolves.toMatchObject({ done: true });
     expect(unsubscribe).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
+  it('does not complete while an MCP elicitation is pending', async () => {
+    vi.useFakeTimers();
+    const { backend, client, emitNotification, emitRequest, unsubscribe } =
+      createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Wait for an answer' },
+    ]);
+    const iterator = session.events[Symbol.asyncIterator]();
+    await iterator.next();
+
+    emitNotification({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { id: 'msg-1', type: 'message', role: 'assistant' },
+      },
+    });
+    await iterator.next();
+
+    const question = iterator.next();
+    emitRequest({
+      id: 'elicitation-waiting',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        mode: 'form',
+        requestedSchema: {
+          type: 'object',
+          properties: { answer: { type: 'string' } },
+        },
+      },
+    });
+    await expect(question).resolves.toMatchObject({
+      value: { type: 'question', request: { requestId: 'elicitation-waiting' } },
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await backend.stop(session.sessionId);
+    expect(client.respond).toHaveBeenCalledWith('elicitation-waiting', {
+      action: 'cancel',
+    });
     vi.useRealTimers();
   });
 

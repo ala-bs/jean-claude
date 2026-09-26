@@ -1,9 +1,73 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  codexMcpElicitationContentFromAnswers,
   createCodexNormalizationContext,
+  normalizeCodexMcpElicitation,
   normalizeCodexNotification,
 } from './normalize-codex-message-v2';
+
+describe('Codex MCP elicitation normalization', () => {
+  it('maps a form schema to Jean-Claude questions and typed answers', () => {
+    const elicitation = normalizeCodexMcpElicitation({
+      requestId: 'elicitation-1',
+      params: {
+        mode: 'form',
+        message: 'Choose a deployment target',
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            target: {
+              type: 'string',
+              title: 'Target',
+              enum: ['staging', 'production'],
+            },
+            dryRun: { type: 'boolean', title: 'Dry run' },
+            features: {
+              type: 'array',
+              title: 'Features',
+              items: { type: 'string', enum: ['logs', 'metrics'] },
+            },
+          },
+          required: ['target'],
+        },
+      },
+    });
+
+    expect(elicitation?.request).toMatchObject({
+      requestId: 'elicitation-1',
+      contextReminder: 'Choose a deployment target',
+      questions: [
+        { id: 'target', type: 'single_choice', required: true },
+        { id: 'dryRun', type: 'text', required: false },
+        { id: 'features', type: 'multi_choice', required: false },
+      ],
+    });
+    expect(
+      codexMcpElicitationContentFromAnswers({
+        schema: elicitation!.schema,
+        answers: {
+          target: 'production',
+          dryRun: 'true',
+          features: JSON.stringify(['logs', 'metrics']),
+        },
+      }),
+    ).toEqual({
+      target: 'production',
+      dryRun: true,
+      features: ['logs', 'metrics'],
+    });
+  });
+
+  it('rejects URL-mode elicitation', () => {
+    expect(
+      normalizeCodexMcpElicitation({
+        requestId: 'elicitation-1',
+        params: { mode: 'url', message: 'Sign in', url: 'https://example.test' },
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe('normalizeCodexNotification', () => {
   it('labels sandbox-allowed tool use in Ask mode', () => {

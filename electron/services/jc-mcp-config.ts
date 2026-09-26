@@ -11,6 +11,7 @@ export function buildJcMcpServersConfigForCwd({
   questionBridge,
   enableAgentTool = false,
   enableReviewTool = false,
+  useCodexElicitation = false,
   environmentMode = 'env',
 }: {
   cwd: string;
@@ -23,6 +24,7 @@ export function buildJcMcpServersConfigForCwd({
   };
   enableAgentTool?: boolean;
   enableReviewTool?: boolean;
+  useCodexElicitation?: boolean;
   environmentMode?: 'env' | 'argv';
 }): Record<
   string,
@@ -41,6 +43,7 @@ export function buildJcMcpServersConfigForCwd({
     JC_MCP_AUTH_TOKEN: questionBridge.token,
     ...(enableAgentTool ? { JC_MCP_ENABLE_AGENT_TOOL: '1' } : {}),
     ...(enableReviewTool ? { JC_MCP_ENABLE_REVIEW_TOOL: '1' } : {}),
+    ...(useCodexElicitation ? { JC_MCP_USE_CODEX_ELICITATION: '1' } : {}),
   };
 
   if (environmentMode === 'env') {

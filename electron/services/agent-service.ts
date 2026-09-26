@@ -2071,35 +2071,34 @@ class AgentService {
     let resourceMonitorOwner: symbol | undefined;
     try {
       let mcpServers: AgentBackendConfig['mcpServers'];
-      if (session.backendType !== 'codex') {
-        const questionBridge = await this.jcMcpBridgeService.registerStep({
-          taskId,
-          stepId,
-          onQuestionRequest: async (request) => {
-            await this.enqueueQuestionRequest(
-              stepId,
-              session,
-              request,
-              'jc-mcp',
-            );
-          },
-          onQuestionCancelled: async (requestId) => {
-            await this.cancelPendingQuestionRequest(
-              stepId,
-              session,
-              requestId,
-            );
-          },
-        });
-        jcMcpRegistrationId = questionBridge.registrationId;
-        mcpServers = buildJcMcpServersConfigForCwd({
-          cwd: workingDir,
-          questionBridge,
-          enableAgentTool: step?.type === 'feature-map',
-          enableReviewTool: step?.type === 'review',
-          environmentMode: session.backendType === 'opencode' ? 'argv' : 'env',
-        });
-      }
+      const questionBridge = await this.jcMcpBridgeService.registerStep({
+        taskId,
+        stepId,
+        onQuestionRequest: async (request) => {
+          await this.enqueueQuestionRequest(
+            stepId,
+            session,
+            request,
+            'jc-mcp',
+          );
+        },
+        onQuestionCancelled: async (requestId) => {
+          await this.cancelPendingQuestionRequest(
+            stepId,
+            session,
+            requestId,
+          );
+        },
+      });
+      jcMcpRegistrationId = questionBridge.registrationId;
+      mcpServers = buildJcMcpServersConfigForCwd({
+        cwd: workingDir,
+        questionBridge,
+        enableAgentTool: step?.type === 'feature-map',
+        enableReviewTool: step?.type === 'review',
+        useCodexElicitation: session.backendType === 'codex',
+        environmentMode: session.backendType === 'opencode' ? 'argv' : 'env',
+      });
 
       // Start the backend
       dbg.agentSession('Starting backend for step %s', stepId);

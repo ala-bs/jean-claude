@@ -19,7 +19,9 @@ import type { NormalizedQuestionRequest } from '@shared/agent-backend-types';
 import type { QuestionResponseMetadata } from '@shared/agent-types';
 
 import {
+  codexMcpElicitationContentFromAnswers,
   createCodexNormalizationContext,
+  normalizeCodexMcpElicitation,
   normalizeCodexNotification,
   normalizeCodexQuestionRequest,
 } from './normalize-codex-message-v2';
@@ -125,6 +127,10 @@ type CodexSessionState = {
       client: Awaited<ReturnType<typeof getOrCreateCodexAppServer>>['client'];
       rpcId: CodexJsonRpcId;
       request: NormalizedQuestionRequest;
+      kind: 'user-input' | 'mcp-elicitation';
+      schema?: Record<string, unknown>;
+      elicitationPaused?: boolean;
+      threadId?: string;
     }
   >;
 };
@@ -209,7 +215,7 @@ export class CodexBackend implements AgentBackend {
         this.enqueueNotification(session, notification);
       });
       session.unsubscribeRequest = client.onRequest((request) => {
-        this.handleServerRequest(session, client, request);
+        void this.handleServerRequest(session, client, request);
       });
 
       const collaborationMode = await createCodexCollaborationMode(
@@ -291,6 +297,26 @@ export class CodexBackend implements AgentBackend {
     const pending = session.pendingQuestions.get(requestId);
     if (!pending) throw new Error(`No pending Codex question: ${requestId}`);
 
+    if (pending.kind === 'mcp-elicitation') {
+      if (!pending.schema) {
+        throw new Error(`Missing Codex elicitation schema: ${requestId}`);
+      }
+      dbg.agent('Responding to Codex MCP elicitation request=%s', requestId);
+      try {
+        await pending.client.respond(pending.rpcId, {
+          action: 'accept',
+          content: codexMcpElicitationContentFromAnswers({
+            schema: pending.schema,
+            answers: answer,
+          }),
+        });
+      } finally {
+        await this.resumeCodexElicitation(pending, requestId);
+        session.pendingQuestions.delete(requestId);
+      }
+      return;
+    }
+
     const answers = Object.fromEntries(
       pending.request.questions.map((question) => [
         question.id ?? question.question,
@@ -333,11 +359,11 @@ export class CodexBackend implements AgentBackend {
     );
   }
 
-  private handleServerRequest(
+  private async handleServerRequest(
     session: CodexSessionState,
     client: Awaited<ReturnType<typeof getOrCreateCodexAppServer>>['client'],
     request: CodexJsonRpcRequest,
-  ): void {
+  ): Promise<void> {
     if (session.closed || !requestBelongsToSession(request, session)) return;
 
     const params = record(request.params) ?? {};
@@ -370,8 +396,60 @@ export class CodexBackend implements AgentBackend {
         client,
         rpcId: request.id,
         request: questionRequest,
+        kind: 'user-input',
       });
       session.eventChannel.push({ type: 'question', request: questionRequest });
+      return;
+    }
+
+    if (request.method === 'mcpServer/elicitation/request') {
+      const elicitation = normalizeCodexMcpElicitation({
+        requestId,
+        params,
+      });
+      if (!elicitation) {
+        dbg.agent(
+          'Declining unsupported Codex MCP elicitation request=%s mode=%s',
+          requestId,
+          params.mode,
+        );
+        void client.respond(request.id, { action: 'decline' });
+        return;
+      }
+      dbg.agent(
+        'Codex MCP elicitation request received request=%s questions=%d',
+        requestId,
+        elicitation.request.questions.length,
+      );
+      this.clearIdleCompletionTimer(session);
+      dbg.agent(
+        'Holding Codex idle completion while question is pending request=%s',
+        requestId,
+      );
+      let elicitationPaused = false;
+      if (threadId !== null) {
+        try {
+          await client.request('thread/increment_elicitation', { threadId });
+          elicitationPaused = true;
+          dbg.agent('Paused Codex elicitation timeout thread=%s', threadId);
+        } catch (error) {
+          dbg.agent(
+            'Failed to pause Codex elicitation timeout thread=%s error=%O',
+            threadId,
+            error,
+          );
+        }
+      }
+      session.pendingQuestions.set(requestId, {
+        client,
+        rpcId: request.id,
+        request: elicitation.request,
+        kind: 'mcp-elicitation',
+        schema: elicitation.schema,
+        elicitationPaused,
+        threadId: threadId ?? undefined,
+      });
+      session.eventChannel.push({ type: 'question', request: elicitation.request });
       return;
     }
 
@@ -594,6 +672,34 @@ export class CodexBackend implements AgentBackend {
     }
   }
 
+  private async resumeCodexElicitation(
+    pending: {
+      client: Awaited<ReturnType<typeof getOrCreateCodexAppServer>>['client'];
+      elicitationPaused?: boolean;
+      threadId?: string;
+    },
+    requestId: string,
+  ): Promise<void> {
+    if (!pending.elicitationPaused || !pending.threadId) return;
+    try {
+      await pending.client.request('thread/decrement_elicitation', {
+        threadId: pending.threadId,
+      });
+      dbg.agent(
+        'Resumed Codex elicitation timeout thread=%s request=%s',
+        pending.threadId,
+        requestId,
+      );
+    } catch (error) {
+      dbg.agent(
+        'Failed to resume Codex elicitation timeout thread=%s request=%s error=%O',
+        pending.threadId,
+        requestId,
+        error,
+      );
+    }
+  }
+
   private async cleanupSession(
     sessionId: string,
     session: CodexSessionState,
@@ -618,9 +724,17 @@ export class CodexBackend implements AgentBackend {
     );
     session.pendingApprovals.clear();
     await Promise.allSettled(
-      [...session.pendingQuestions.values()].map(({ client, rpcId }) =>
-        client.respond(rpcId, { answers: {} }),
-      ),
+      [...session.pendingQuestions.values()].map(async (pending) => {
+        if (pending.kind === 'mcp-elicitation') {
+          try {
+            await pending.client.respond(pending.rpcId, { action: 'cancel' });
+          } finally {
+            await this.resumeCodexElicitation(pending, String(pending.rpcId));
+          }
+          return;
+        }
+        await pending.client.respond(pending.rpcId, { answers: {} });
+      }),
     );
     session.pendingQuestions.clear();
     try {
@@ -639,6 +753,7 @@ export class CodexBackend implements AgentBackend {
       session.turnId === null ||
       !session.sawTurnActivity ||
       session.pendingItemIds.size > 0 ||
+      session.pendingQuestions.size > 0 ||
       session.idleCompletionTimer !== null
     ) {
       return;
@@ -649,7 +764,8 @@ export class CodexBackend implements AgentBackend {
       if (
         session.closed ||
         session.turnId === null ||
-        session.pendingItemIds.size > 0
+        session.pendingItemIds.size > 0 ||
+        session.pendingQuestions.size > 0
       ) {
         return;
       }
@@ -779,12 +895,7 @@ function createCodexThreadConfig(config: AgentBackendConfig): {
   model: string | undefined;
   approvalPolicy: string;
   sandbox: string;
-  config?: {
-    sandbox_workspace_write: {
-      network_access: boolean;
-      writable_roots: string[];
-    };
-  };
+  config?: Record<string, unknown>;
 } {
   const sandbox = toCodexSandbox(config.interactionMode);
   return {
@@ -799,9 +910,12 @@ function createCodexThreadConfig(config: AgentBackendConfig): {
               network_access: true,
               writable_roots: getCodexWritableRoots(config),
             },
+            ...(config.mcpServers ? { mcp_servers: config.mcpServers } : {}),
           },
         }
-      : {}),
+      : config.mcpServers
+        ? { config: { mcp_servers: config.mcpServers } }
+        : {}),
   };
 }
 
