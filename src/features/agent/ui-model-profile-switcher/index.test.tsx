@@ -204,6 +204,27 @@ describe('ModelProfileSwitcher', () => {
     ).toContain('Codex fallback');
   });
 
+  it('shows the profile matching the selected step model', async () => {
+    await act(() =>
+      root.render(
+        <ModelProfileSwitcher
+          projectId={null}
+          stepModel={{
+            backend: 'codex',
+            model: 'gpt-5',
+            thinkingEffort: 'high',
+          }}
+        />,
+      ),
+    );
+
+    const trigger = container.querySelector('button[aria-haspopup="menu"]');
+    expect(trigger?.textContent).toContain('Codex fallback');
+    expect(
+      container.querySelector('[aria-current="true"]')?.textContent,
+    ).toContain('Codex fallback');
+  });
+
   it('marks the active profile and lists every profile with a shortcut hint', async () => {
     await render();
 

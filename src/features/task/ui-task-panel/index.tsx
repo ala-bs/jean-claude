@@ -4348,6 +4348,15 @@ const TaskInputFooter = memo(function TaskInputFooter({
       />
       <ModelProfileSwitcher
         projectId={task?.projectId}
+        stepModel={
+          activeStep?.agentBackend
+            ? {
+                backend: activeStep.agentBackend,
+                model: activeStep.modelPreference ?? 'default',
+                thinkingEffort: activeStep.thinkingEffort ?? 'default',
+              }
+            : null
+        }
         side="top"
         overrideContent={rawModelPickers}
       />
@@ -4444,6 +4453,16 @@ const TaskInputFooter = memo(function TaskInputFooter({
               <>
                 <ModelProfileSwitcher
                   projectId={task?.projectId}
+                  stepModel={
+                    activeStep?.agentBackend
+                      ? {
+                          backend: activeStep.agentBackend,
+                          model: activeStep.modelPreference ?? 'default',
+                          thinkingEffort:
+                            activeStep.thinkingEffort ?? 'default',
+                        }
+                      : null
+                  }
                   side="top"
                   overrideContent={
                     <ModeModelComboSelector

@@ -73,6 +73,7 @@ function agentTripleFor(profile: ModelProfile): ModelTriple | undefined {
  */
 export function ModelProfileSwitcher({
   projectId,
+  stepModel,
   overrideContent,
   align,
   side,
@@ -80,6 +81,8 @@ export function ModelProfileSwitcher({
 }: {
   /** Project whose model policy constrains the list. */
   projectId?: string | null;
+  /** The model triple persisted on the task step currently shown in the composer. */
+  stepModel?: ModelTriple | null;
   /**
    * The existing backend / model / thinking pickers, rendered inside the
    * "Override this step only…" submenu. Hidden entirely under `enforce`.
@@ -95,7 +98,21 @@ export function ModelProfileSwitcher({
   // marker, otherwise the header can display Anthropic while this project
   // resolves Codex.
   const { profile: effectiveProfile } = useEffectiveModelProfile(projectId);
-  const activeProfile = effectiveProfile;
+  const stepProfile = useMemo(
+    () =>
+      stepModel
+        ? profiles.find((profile) => {
+            const triple = agentTripleFor(profile);
+            return (
+              triple?.backend === stepModel.backend &&
+              triple.model === stepModel.model &&
+              triple.thinkingEffort === stepModel.thinkingEffort
+            );
+          })
+        : undefined,
+    [profiles, stepModel],
+  );
+  const activeProfile = stepProfile ?? effectiveProfile;
   const activate = useActivateModelProfile();
   const openOverlay = useOverlaysStore((state) => state.open);
   const [isOverrideOpen, setIsOverrideOpen] = useState(false);
