@@ -17,6 +17,7 @@ import { generateText } from './ai-generation-service';
 const MAX_INLINE_TRANSCRIPT_CHARS = 30_000;
 const MAX_TOOL_RESULT_CHARS = 4_000;
 const MAX_SUMMARY_CHARS = 8_000;
+const STEP_SUMMARY_TIMEOUT_MS = 10 * 60 * 1000;
 
 function truncateMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
@@ -201,6 +202,7 @@ export async function summarizeNormalizedMessages({
           }
         : {}),
       throwOnError: true,
+      timeoutMs: STEP_SUMMARY_TIMEOUT_MS,
       usageContext,
     });
   } finally {

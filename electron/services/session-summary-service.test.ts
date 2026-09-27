@@ -83,6 +83,7 @@ describe('buildSummaryGenerationPrompt', () => {
         allowedTools: ['Read'],
         allowedToolPatterns: { Read: [preparedPrompt.transcriptPath] },
         prompt: preparedPrompt.prompt,
+        timeoutMs: 10 * 60 * 1000,
       }),
     );
     await expect(readFile(preparedPrompt.transcriptPath!, 'utf-8')).rejects.toThrow();
