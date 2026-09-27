@@ -3446,6 +3446,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         {!isPrWorkspaceOverview && rightPane?.type === 'debugMessages' && (
           <DebugMessagesPane
             taskId={taskId}
+            taskTitle={getTaskTitle({ name: task.name, prompt: task.prompt })}
             stepId={activeStepId}
             scrollToEntryId={rightPane.scrollToEntryId}
             onClose={closeRightPane}
