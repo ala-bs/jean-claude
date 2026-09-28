@@ -66,6 +66,7 @@ export interface Database {
   work_activity_events: WorkActivityEventTable;
   work_item_summaries: WorkItemSummaryTable;
   mobile_preview_device_usage: MobilePreviewDeviceUsageTable;
+  mobile_build_artifacts: MobileBuildArtifactTable;
   project_env_vars: ProjectEnvVarTable;
 }
 
@@ -606,3 +607,22 @@ export type NewMobilePreviewDeviceUsageRow =
   Insertable<MobilePreviewDeviceUsageTable>;
 export type UpdateMobilePreviewDeviceUsageRow =
   Updateable<MobilePreviewDeviceUsageTable>;
+
+export interface MobileBuildArtifactTable {
+  id: string;
+  name: string | null;
+  repositoryPath: string | null;
+  platform: string;
+  packageId: string;
+  appPath: string;
+  fingerprint: string;
+  buildCommand: string;
+  artifactKind: string;
+  artifactPath: string;
+  sizeBytes: number;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+export type MobileBuildArtifactRow = Selectable<MobileBuildArtifactTable>;
+export type NewMobileBuildArtifactRow = Insertable<MobileBuildArtifactTable>;

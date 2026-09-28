@@ -525,6 +525,7 @@ import { McpTemplateRepository } from '../database/repositories/mcp-templates';
 import { mobilePreviewExpoLaunchService } from '../services/mobile-preview-expo-launch-service';
 import { mobilePreviewIosAppService } from '../services/mobile-preview-ios-app-service';
 import { mobilePreviewService } from '../services/mobile-preview-service';
+import { mobileBuildStoreService } from '../services/mobile-build-store-service';
 import { NotificationRepository } from '../database/repositories/notifications';
 import { notificationService } from '../services/notification-service';
 import { orchestrateReloadedPreview } from '../services/reload-preview-service';
@@ -6048,6 +6049,12 @@ export function registerIpcHandlers() {
   ipcMain.handle('mobilePreview:listDevices', (_, platform: MobilePlatform) =>
     mobilePreviewService.listDevices(platform),
   );
+  ipcMain.handle('mobileBuildStore:list', (_, params) => mobileBuildStoreService.list(params));
+  ipcMain.handle('mobileBuildStore:build', (_, params) => mobileBuildStoreService.build(params));
+  ipcMain.handle('mobileBuildStore:store', (_, params) => mobileBuildStoreService.store(params));
+  ipcMain.handle('mobileBuildStore:install', (_, params) => mobileBuildStoreService.install(params));
+  ipcMain.handle('mobileBuildStore:delete', (_, params) => mobileBuildStoreService.delete(params));
+  ipcMain.handle('mobileBuildStore:rename', (_, params) => mobileBuildStoreService.rename(params));
   ipcMain.handle(
     'mobilePreview:listSessions',
     (_, params: MobilePreviewListSessionsParams) =>

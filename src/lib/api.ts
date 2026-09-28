@@ -6,6 +6,15 @@ import type {
 } from '@shared/source-management-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
 import type {
+  MobileBuildArtifact,
+  MobileBuildStoreBuildParams,
+  MobileBuildStoreDeleteParams,
+  MobileBuildStoreInstallParams,
+  MobileBuildStoreListParams,
+  MobileBuildStoreRenameParams,
+  MobileBuildStoreStoreParams,
+} from '@shared/mobile-build-store';
+import type {
   AgentBackgroundTask,
   AgentQuestion,
   PermissionResponse,
@@ -1728,6 +1737,14 @@ export interface Api {
       callback: (event: MobilePreviewSessionEvent) => void,
     ) => UnsubscribeFn;
   };
+  mobileBuildStore: {
+    list: (params: MobileBuildStoreListParams) => Promise<MobileBuildArtifact[]>;
+    build: (params: MobileBuildStoreBuildParams) => Promise<MobileBuildArtifact>;
+    store: (params: MobileBuildStoreStoreParams) => Promise<MobileBuildArtifact>;
+    install: (params: MobileBuildStoreInstallParams) => Promise<void>;
+    delete: (params: MobileBuildStoreDeleteParams) => Promise<void>;
+    rename: (params: MobileBuildStoreRenameParams) => Promise<void>;
+  };
   debug: {
     log: (params: {
       scope: string;
@@ -3050,6 +3067,24 @@ export const api: Api = hasWindowApi
         onNativeLog: () => () => {},
         onFrame: () => () => {},
         onSession: () => () => {},
+      },
+      mobileBuildStore: {
+        list: async () => [],
+        build: async () => {
+          throw new Error('API not available');
+        },
+        store: async () => {
+          throw new Error('API not available');
+        },
+        install: async () => {
+          throw new Error('API not available');
+        },
+        delete: async () => {
+          throw new Error('API not available');
+        },
+        rename: async () => {
+          throw new Error('API not available');
+        },
       },
       debug: {
         log: async () => {},

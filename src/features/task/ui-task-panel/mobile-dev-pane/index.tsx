@@ -71,6 +71,7 @@ import { restartAppOnDevice } from './utils-restart-app';
 import { summarizeDeviceActionError } from './utils-action-error';
 import { verifyDeeplinkOnDevice } from './utils-verify-deeplink';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from '../constants';
+import { BuildStore } from './ui-build-store';
 
 function StatusDot({
   tone,
@@ -103,12 +104,14 @@ function StatusDot({
  */
 export function MobileDevPane({
   taskId,
+  taskName,
   projectId,
   projectPath,
   mobilePreviewConfig,
   onClose,
 }: {
   taskId: string;
+  taskName?: string;
   projectId: string;
   projectPath: string;
   mobilePreviewConfig: MobilePreviewProjectConfig | null | undefined;
@@ -168,6 +171,14 @@ export function MobileDevPane({
   const [stickyBuild, setStickyBuild] = useState<{
     taskId: string;
     commandId: string;
+  } | null>(null);
+  const buildCaptureRef = useRef<{
+    commandId: string;
+    startedAt: number;
+    cancelled: boolean;
+    stored: boolean;
+    command: string;
+    fingerprintCommand: string;
   } | null>(null);
 
   const appPath = useMemo(
@@ -418,6 +429,14 @@ export function MobileDevPane({
       }),
     [activeDevice, appPath, mobilePreviewConfig],
   );
+  const detectedApp = mobilePreviewConfig?.detectedApps?.find(
+    (app) => app.path === appPath,
+  );
+  const packageId = activeDevice
+    ? activeDevice.platform === 'android'
+      ? mobilePreviewConfig?.androidPackageName ?? detectedApp?.detectedAndroidPackageName ?? null
+      : mobilePreviewConfig?.iosBundleId ?? detectedApp?.detectedIosBundleId ?? null
+    : null;
   const buildCommandId = build.commandId;
   const buildStatus = buildCommandId
     ? runCommands.statusByCommandId[buildCommandId]
@@ -435,6 +454,9 @@ export function MobileDevPane({
     // nothing to build onto and no command id to scope the run to.
     if (!activeDevice || !buildCommandId) return;
     if (buildRunning) {
+      if (buildCaptureRef.current?.commandId === buildCommandId) {
+        buildCaptureRef.current.cancelled = true;
+      }
       setStickyBuild({ taskId, commandId: buildCommandId });
       setSelectedLogTab(buildCommandId);
       void runCommands.stopCommand(buildCommandId);
@@ -443,14 +465,27 @@ export function MobileDevPane({
     // Guards run before any UI state changes, so a click that cannot start a
     // build does not yank the log box onto an empty stream.
     if (!build.command || !activeDevice) return;
+    const command = build.command;
+    const device = activeDevice;
+    const startedAt = Date.now();
     setStickyBuild({ taskId, commandId: buildCommandId });
     setSelectedLogTab(buildCommandId);
     void runCommands.startAdHocCommand({
       runCommandId: buildCommandId,
       // Matches the preview pane's labels for the same command id.
-      name: activeDevice.platform === 'ios' ? 'iOS build' : 'Android build',
-      command: build.command,
+      name: device.platform === 'ios' ? 'iOS build' : 'Android build',
+      command,
       ports: [],
+    }).then((result) => {
+      if (result?.started === false) return;
+      buildCaptureRef.current = {
+        commandId: buildCommandId,
+        startedAt,
+        cancelled: false,
+        stored: false,
+        command,
+        fingerprintCommand: command.replaceAll(device.id, '{{device}}'),
+      };
     });
   }, [
     activeDevice,
@@ -461,6 +496,44 @@ export function MobileDevPane({
     setSelectedLogTab,
     taskId,
   ]);
+
+  useEffect(() => {
+    const capture = buildCaptureRef.current;
+    if (
+      !capture ||
+      capture.commandId !== buildCommandId ||
+      capture.cancelled ||
+      capture.stored ||
+      buildStatus?.status !== 'stopped' ||
+      !activeDevice ||
+      !packageId
+    ) {
+      return;
+    }
+    capture.stored = true;
+    const storeBuild = api.mobileBuildStore.store;
+    if (typeof storeBuild !== 'function') {
+      console.warn('Mobile Build Store IPC is unavailable. Restart Jean-Claude to reload the preload bridge.');
+      queueMicrotask(() => {
+        setActionNotice('Build finished, but Build Store is unavailable. Restart Jean-Claude and try again.');
+      });
+      return;
+    }
+    void storeBuild({
+      projectPath,
+      taskName,
+      appPath,
+      platform: activeDevice.platform,
+      packageId,
+      command: capture.command,
+      fingerprintCommand: capture.fingerprintCommand,
+      startedAt: capture.startedAt,
+    }).then(() => {
+      setActionNotice('Build stored for quick reinstall.');
+    }).catch((cause) => {
+      setActionNotice(`Build finished, but could not be stored: ${cause instanceof Error ? cause.message : String(cause)}`);
+    });
+  }, [activeDevice, appPath, buildCommandId, buildStatus?.status, packageId, projectPath, taskName]);
 
   const stickyBuildCommandId =
     stickyBuild?.taskId === taskId ? stickyBuild.commandId : null;
@@ -1261,11 +1334,13 @@ export function MobileDevPane({
                   project settings (or detection) and, where the CLI is
                   recognized, is pointed at this exact device rather than the
                   tool's own default simulator. */}
-              <Button
-                onClick={handleToggleBuild}
-                size="sm"
-                variant="secondary"
-                loading={buildStarting || buildStopping}
+              <div className="flex items-stretch">
+                <Button
+                  onClick={handleToggleBuild}
+                  size="sm"
+                  variant="secondary"
+                  className="!rounded-r-none"
+                  loading={buildStarting || buildStopping}
                 // No device selected means no build, full stop -- a build
                 // always targets one device, and the command id is keyed by
                 // it. Stated ahead of the `buildRunning` escape hatch so it
@@ -1279,9 +1354,15 @@ export function MobileDevPane({
                     : (build.unavailableReason ??
                       `Build and run on ${activeDevice?.name ?? 'the selected device'}`)
                 }
-              >
-                {buildRunning ? 'Stop' : 'Build'}
-              </Button>
+                >
+                  {buildRunning ? 'Stop' : 'Build'}
+                </Button>
+                <BuildStore
+                  projectPath={projectPath}
+                  platform={activeDevice?.platform ?? 'android'}
+                  device={activeDevice}
+                />
+              </div>
               <Button
                 onClick={handleToggleDevServer}
                 size="sm"

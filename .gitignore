@@ -2,6 +2,7 @@ node_modules
 /out
 /dist
 .worktrees
+.jean-claude/build-artifacts/
 
 .claude/settings.local.worktrees.json
 .claude/settings.local.json

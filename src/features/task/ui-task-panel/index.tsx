@@ -3457,6 +3457,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         {visibleRightPane?.type === 'mobileDev' && (
           <MobileDevPane
             taskId={taskId}
+            taskName={taskTitle}
             projectId={project.id}
             projectPath={taskRootPath}
             mobilePreviewConfig={project.mobilePreviewConfig}

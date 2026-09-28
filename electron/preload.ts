@@ -1323,6 +1323,14 @@ contextBridge.exposeInMainWorld('api', {
       return () => ipcRenderer.removeListener('mobilePreview:session', handler);
     },
   },
+  mobileBuildStore: {
+    list: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:list', params),
+    build: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:build', params),
+    store: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:store', params),
+    install: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:install', params),
+    delete: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:delete', params),
+    rename: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:rename', params),
+  },
   debug: {
     log: (params: { scope: string; message: string; data?: unknown }) =>
       ipcRenderer.invoke('debug:log', params),
