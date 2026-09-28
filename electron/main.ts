@@ -709,11 +709,15 @@ process.on('exit', () => {
 // renderer boot guard remains the last line of defence for that case.
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    dbg.main('Received %s; requesting graceful Electron quit', signal);
     // Dev-server shutdown is an internal/programmatic quit, not a user
     // request. Keep the awaited cleanup path, but do not show the Cmd+Q
-    // confirmation modal while restarting the dev instance.
-    if (!isQuittingAfterCleanup) quitWithoutConfirmation();
+    // confirmation modal while restarting the dev instance. Set this before
+    // logging: the dev command's output stream may already be closing, and a
+    // logging failure must not prevent the quit from being marked internal.
+    if (!isQuittingAfterCleanup) {
+      quitWithoutConfirmation();
+      dbg.main('Received %s; requesting graceful Electron quit', signal);
+    }
   });
 }
 

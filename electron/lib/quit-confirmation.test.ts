@@ -63,6 +63,31 @@ describe('quit confirmation', () => {
     expect(confirmQuit()).toBe(false);
   });
 
+  it('keeps the programmatic skip decision for every before-quit listener', async () => {
+    dialogMock.showMessageBoxSync.mockReturnValue(1);
+    const { confirmQuit, quitWithoutConfirmation } = await loadModule();
+
+    quitWithoutConfirmation();
+
+    // Electron dispatches before-quit to all listeners. Both the main cleanup
+    // listener and the mobile-preview listener must observe the same decision.
+    expect(confirmQuit()).toBe(true);
+    expect(confirmQuit()).toBe(true);
+    expect(dialogMock.showMessageBoxSync).not.toHaveBeenCalled();
+  });
+
+  it('lets a programmatic quit override a cached cancelled quit', async () => {
+    dialogMock.showMessageBoxSync.mockReturnValue(1);
+    const { confirmQuit, quitWithoutConfirmation } = await loadModule();
+
+    expect(confirmQuit()).toBe(false);
+    quitWithoutConfirmation();
+
+    expect(confirmQuit()).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(confirmQuit()).toBe(false);
+  });
+
   it('does not prompt before the app is ready', async () => {
     appMock.isReady.mockReturnValue(false);
     const { confirmQuit } = await loadModule();
