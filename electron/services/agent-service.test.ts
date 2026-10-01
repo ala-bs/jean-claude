@@ -1006,6 +1006,21 @@ describe('buildJcMcpServersConfigForCwd', () => {
     });
   });
 
+  it('auto-approves only ask_question for Codex elicitation', () => {
+    const config = buildJcMcpServersConfigForCwd({
+      cwd: '/tmp/worktree',
+      useCodexElicitation: true,
+      questionBridge: {
+        serverUrl: 'http://127.0.0.1:4321',
+        token: 'token-1',
+      },
+    });
+
+    expect(config['jean-claude-mcp'].tools).toEqual({
+      ask_question: { approval_mode: 'auto' },
+    });
+  });
+
   it('can inject question bridge settings through argv for OpenCode runtime MCP', () => {
     const config = buildJcMcpServersConfigForCwd({
       cwd: '/tmp/worktree',

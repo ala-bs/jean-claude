@@ -95,7 +95,12 @@ export interface AgentBackendConfig {
   /** Runtime MCP server configurations (stdio-based) passed directly to the agent SDK */
   mcpServers?: Record<
     string,
-    { command: string; args?: string[]; env?: Record<string, string> }
+    {
+      command: string;
+      args?: string[];
+      env?: Record<string, string>;
+      tools?: Record<string, { approval_mode?: 'auto' | 'prompt' | 'approve' }>;
+    }
   >;
   /**
    * Project-scoped environment variables (secrets already decrypted) layered

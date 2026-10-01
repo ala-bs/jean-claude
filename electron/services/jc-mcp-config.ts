@@ -28,7 +28,12 @@ export function buildJcMcpServersConfigForCwd({
   environmentMode?: 'env' | 'argv';
 }): Record<
   string,
-  { command: string; args: string[]; env?: Record<string, string> }
+  {
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+    tools?: Record<string, { approval_mode?: 'auto' | 'prompt' | 'approve' }>;
+  }
 > {
   const serverPath = getJcMcpServerPath();
   const env = {
@@ -52,6 +57,9 @@ export function buildJcMcpServersConfigForCwd({
         command: 'node',
         args: [serverPath, '--workdir', cwd],
         env,
+        ...(useCodexElicitation
+          ? { tools: { ask_question: { approval_mode: 'auto' as const } } }
+          : {}),
       },
     };
   }
@@ -66,6 +74,9 @@ export function buildJcMcpServersConfigForCwd({
         '--workdir',
         cwd,
       ],
+      ...(useCodexElicitation
+        ? { tools: { ask_question: { approval_mode: 'auto' as const } } }
+        : {}),
     },
   };
 }

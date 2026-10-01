@@ -453,6 +453,9 @@ describe('CodexBackend', () => {
               JC_MCP_STEP_ID: 'step-1',
               JC_MCP_REGISTRATION_ID: 'registration-1',
             },
+            tools: {
+              ask_question: { approval_mode: 'auto' },
+            },
           },
         },
       }),
@@ -479,6 +482,9 @@ describe('CodexBackend', () => {
               JC_MCP_AUTH_TOKEN: 'token-1',
               JC_MCP_STEP_ID: 'step-1',
               JC_MCP_REGISTRATION_ID: 'registration-1',
+            },
+            tools: {
+              ask_question: { approval_mode: 'auto' },
             },
           },
         },
