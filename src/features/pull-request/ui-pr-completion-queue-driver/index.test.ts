@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveArmedPrSettlement, shouldAutoRequeue } from './index';
+import {
+  isCurrentProjectQueueHead,
+  resolveArmedPrSettlement,
+  shouldAutoRequeue,
+} from './index';
 import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
+import type { PrCompletionQueueEntry } from '@/stores/pr-completion-queue';
 
 function makePr(
   overrides: Partial<AzureDevOpsPullRequestDetails> = {},
@@ -195,6 +200,41 @@ describe('shouldAutoRequeue', () => {
       shouldAutoRequeue({
         evaluation: expiredRunningEvaluation,
         failureRetries: 0,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe('isCurrentProjectQueueHead', () => {
+  const entries = [
+    { id: 'first', projectId: 'project-a' },
+    { id: 'second', projectId: 'project-a' },
+    { id: 'other-project', projectId: 'project-b' },
+  ] as PrCompletionQueueEntry[];
+
+  it('accepts only the first entry for the project', () => {
+    expect(
+      isCurrentProjectQueueHead({
+        entries,
+        projectId: 'project-a',
+        entryId: 'first',
+      }),
+    ).toBe(true);
+    expect(
+      isCurrentProjectQueueHead({
+        entries,
+        projectId: 'project-a',
+        entryId: 'second',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not let another project affect the head check', () => {
+    expect(
+      isCurrentProjectQueueHead({
+        entries,
+        projectId: 'project-b',
+        entryId: 'other-project',
       }),
     ).toBe(true);
   });

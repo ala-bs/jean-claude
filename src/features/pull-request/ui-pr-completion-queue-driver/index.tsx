@@ -85,6 +85,23 @@ export const MIN_COUNTED_READ_GAP_MS = POLL_INTERVAL_MS * 0.8;
 export const REJECTED_POLICY_READS_BEFORE_TRUSTED = 2;
 
 /**
+ * Queue entries can be removed or reordered between render and an effect
+ * running. Side effects must verify the store's current head, not rely only on
+ * the parent having rendered this entry as the head.
+ */
+export function isCurrentProjectQueueHead({
+  entries,
+  projectId,
+  entryId,
+}: {
+  entries: PrCompletionQueueEntry[];
+  projectId: string;
+  entryId: string;
+}): boolean {
+  return entries.find((entry) => entry.projectId === projectId)?.id === entryId;
+}
+
+/**
  * How many times the queue re-runs a *failed* required build policy before it
  * accepts the failure and skips the PR.
  *
@@ -400,11 +417,22 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
     [prId, projectId],
   );
 
+  const isCurrentQueueHead = useCallback(
+    () =>
+      isCurrentProjectQueueHead({
+        entries: usePrCompletionQueueStore.getState().entries,
+        projectId,
+        entryId: entry.id,
+      }),
+    [entry.id, projectId],
+  );
+
   // Arm the head exactly once.
   const armStartedRef = useRef(false);
   useEffect(() => {
     if (entry.status !== 'waiting') return;
     if (armStartedRef.current) return;
+    if (!isCurrentQueueHead()) return;
 
     // Only the head is polled, so an entry can sit in line while its PR is
     // merged or abandoned elsewhere (Azure web UI, another client). Arming that
@@ -474,6 +502,7 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
     entry.status,
     disarm,
     isStillQueued,
+    isCurrentQueueHead,
     markJobFailed,
     pr,
     prId,
@@ -520,7 +549,7 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
     requeueRef.current = requeueMutation;
   }, [requeueMutation]);
   useEffect(() => {
-    if (!isArmed) return;
+    if (!isArmed || !isCurrentQueueHead()) return;
     for (const evaluation of evaluations) {
       const configId = evaluation.configuration.id;
       const { evaluationId } = evaluation;
@@ -564,6 +593,7 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
     addToast,
     entry.completionOptions?.autoCompleteIgnoreConfigIds,
     evaluations,
+    isCurrentQueueHead,
     isArmed,
     prId,
   ]);

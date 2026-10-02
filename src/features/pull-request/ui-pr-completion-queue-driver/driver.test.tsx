@@ -64,6 +64,7 @@ let queueEnabled = true;
 const setAutoComplete = vi.fn();
 const invalidatePr = vi.fn();
 const requeueCi = vi.fn();
+const requeuePrIds: number[] = [];
 /** Policy evaluations the mocked hook serves to the armed entry's runner. */
 let policyEvaluations: unknown[] = [];
 /**
@@ -106,8 +107,9 @@ vi.mock('@/hooks/use-pull-requests', () => ({
     data: policyEvaluations,
     dataUpdatedAt: policyFetchedAt,
   }),
-  useRequeuePolicyEvaluation: () => ({
+  useRequeuePolicyEvaluation: (_projectId: string, prId: number) => ({
     mutateAsync: async (params: { evaluationId: string }) => {
+      requeuePrIds.push(prId);
       requeueCi(params.evaluationId);
     },
     isPending: false,
@@ -200,6 +202,7 @@ describe('PrCompletionQueueDriver', () => {
     armDeferred = null;
     setAutoComplete.mockClear();
     invalidatePr.mockClear();
+    requeuePrIds.length = 0;
     // `mockReset`, not `mockClear`: one test makes every requeue throw via
     // `mockImplementation`, which `mockClear` leaves installed for the rest of
     // the file — a leaked throw silently changes the retry-budget assertions.
@@ -412,6 +415,17 @@ describe('PrCompletionQueueDriver', () => {
     ];
     await render();
     expect(requeueCi.mock.calls.map(([id]) => id)).toEqual(['e1', 'e1']);
+  });
+
+  it('does not requeue CI for a PR waiting behind the armed head', async () => {
+    policyEvaluations = [pendingBuildPolicy('e1', 1)];
+    enqueue(101);
+    enqueue(102);
+    await render();
+    await acceptArm(101);
+
+    expect(requeuePrIds).toEqual([101]);
+    expect(statusOf(102)).toBe('waiting');
   });
 
   it('retries a requeue that Azure rejected instead of wedging the queue', async () => {

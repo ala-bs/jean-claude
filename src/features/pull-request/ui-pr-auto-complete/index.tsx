@@ -183,6 +183,7 @@ export function PrAutoComplete({
   const [ignoreOptionalPolicies, setIgnoreOptionalPolicies] = useState(
     !!pr.completionOptions?.autoCompleteIgnoreConfigIds?.length,
   );
+  const enableStartedRef = useRef(false);
 
   const resetForm = useCallback(() => {
     setMergeStrategy(
@@ -216,6 +217,16 @@ export function PrAutoComplete({
       // `getAllowedMergeStrategies([])` returns *every* strategy, which would
       // bake `noFastForward` into a squash-only repo and make the arm fail.
       if (!currentIdentityId || isEvaluationsPending) return;
+      // React may not have re-rendered after an immediately preceding click.
+      // Read the store directly so rapid clicks cannot emit duplicate success
+      // toasts or enqueue work that the current render does not know about yet.
+      if (
+        usePrCompletionQueueStore.getState().entries.some(
+          (entry) => entry.projectId === projectId && entry.prId === pr.id,
+        )
+      ) {
+        return;
+      }
       enqueue({
         projectId,
         prId: pr.id,
@@ -263,7 +274,13 @@ export function PrAutoComplete({
   );
 
   const handleEnable = useCallback(() => {
-    if (!currentIdentityId || autoCompleteMutation.isAnyPending) return;
+    if (
+      !currentIdentityId ||
+      autoCompleteMutation.isAnyPending ||
+      enableStartedRef.current
+    )
+      return;
+    enableStartedRef.current = true;
 
     const completionOptions = {
       mergeStrategy,
@@ -277,13 +294,53 @@ export function PrAutoComplete({
           : undefined,
     };
 
+    // The modal may have been opened just before the project switched into
+    // queued mode. Do not let that stale modal bypass the serialized queue.
+    if (isQueueEnabled) {
+      if (
+        usePrCompletionQueueStore.getState().entries.some(
+          (entry) => entry.projectId === projectId && entry.prId === pr.id,
+        )
+      ) {
+        enableStartedRef.current = false;
+        return;
+      }
+      enqueue({
+        projectId,
+        prId: pr.id,
+        prTitle: pr.title,
+        targetBranch: pr.targetRefName.replace('refs/heads/', ''),
+        repoInfo,
+        autoCompleteSetById: currentIdentityId,
+        completionOptions,
+      });
+      addToast({
+        type: 'success',
+        message: `PR !${pr.id} added to the completion queue`,
+      });
+      enableStartedRef.current = false;
+      setIsModalOpen(false);
+      return;
+    }
+
     autoCompleteMutation.mutate(
       { enabled: true, autoCompleteSetById: currentIdentityId, completionOptions },
-      { onSuccess: () => setIsModalOpen(false) },
+      {
+        onError: () => {
+          enableStartedRef.current = false;
+        },
+        onSuccess: () => {
+          enableStartedRef.current = false;
+          setIsModalOpen(false);
+        },
+      },
     );
   }, [
     currentIdentityId,
     autoCompleteMutation,
+    addToast,
+    enqueue,
+    isQueueEnabled,
     mergeStrategy,
     deleteSourceBranch,
     transitionWorkItems,
@@ -291,6 +348,11 @@ export function PrAutoComplete({
     showCommitMessage,
     ignoreOptionalPolicies,
     optionalPolicyConfigIds,
+    pr.id,
+    pr.targetRefName,
+    pr.title,
+    projectId,
+    repoInfo,
   ]);
 
   const handleCancel = useCallback(
