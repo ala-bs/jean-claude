@@ -641,18 +641,13 @@ export function MobileDevPane({
 
   const handleToggleDevServer = useCallback(async () => {
     if (devServerRunning) {
-      // The feed list badge reads `deviceByTaskId` directly, so a selection that
-      // outlives Metro would keep advertising a device this task no longer runs
-      // on. Clearing here is what makes the badge disappear -- but only once the
-      // stop actually succeeded. `stopCommand` rethrows, and the status stays
-      // 'running' on failure, so clearing up front would drop the selection
-      // (disabling Boot/Restart) while Metro is still very much alive.
+      // Stopping Metro does not change the device the user is working on. Keep
+      // the selection so the user can start Metro again without re-selecting a
+      // device, and so Boot/Restart remain scoped to that device.
       // A stop cancels any deeplink the previous Start was still waiting to
       // fire, otherwise it would land on the next run's port.
       startLaunchDeviceKeyRef.current = null;
-      void runCommands
-        .stopCommand(devServerCommandId)
-        .then(() => selectDevice(null));
+      void runCommands.stopCommand(devServerCommandId);
       return;
     }
     // Start means "run the app", not just "run Metro": the deeplink is what
@@ -725,7 +720,6 @@ export function MobileDevPane({
     isDeviceUnavailable,
     refetchDevices,
     runCommands,
-    selectDevice,
   ]);
 
   // Reload = swap the JS bundle in the already-running app, via Metro's own
