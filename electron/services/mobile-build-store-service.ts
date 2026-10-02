@@ -22,6 +22,7 @@ import { fingerprintMobileBuildInputs } from './mobile-build-store-fingerprint';
 import { discoverMobileBuildArtifact } from './mobile-build-store-discovery';
 import { runCommand } from './mobile-preview-process';
 import { dbg } from '../lib/debug';
+import { repositoryPathFromGitCommonDir } from './mobile-build-store-path';
 
 const BUILD_TIMEOUT_MS = 30 * 60 * 1000;
 const execFileAsync = promisify(execFile);
@@ -76,8 +77,8 @@ async function resolveRepositoryPath(projectPath: string): Promise<string> {
       { cwd: projectPath, encoding: 'utf-8' },
     );
     const commonDir = stdout.trim();
-    if (commonDir) {
-      const repositoryPath = dirname(resolve(projectPath, commonDir));
+    const repositoryPath = repositoryPathFromGitCommonDir(projectPath, commonDir);
+    if (repositoryPath) {
       dbg.mobilePreview(
         'Build Store repository resolved: project=%s commonDir=%s repository=%s',
         projectPath,
