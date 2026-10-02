@@ -17,7 +17,13 @@ export function BuildStore({
   projectPath,
   platform,
   device,
-}: { projectPath: string; platform: MobilePlatform; device: MobilePreviewDevice | null }) {
+  refreshToken = 0,
+}: {
+  projectPath: string;
+  platform: MobilePlatform;
+  device: MobilePreviewDevice | null;
+  refreshToken?: number;
+}) {
   const dropdownRef = useRef<{ toggle: () => void } | null>(null);
   const [artifacts, setArtifacts] = useState<MobileBuildArtifact[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -25,15 +31,22 @@ export function BuildStore({
   const [managerOpen, setManagerOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const listParams = useMemo(() => ({ platform, projectPath }), [platform, projectPath]);
+  const listRequestRef = useRef(0);
   const refresh = useCallback(async () => {
+    const requestId = ++listRequestRef.current;
+    const requestParams = listParams;
+    const isCurrent = () => requestId === listRequestRef.current;
     setLoading(true);
     try {
-      setArtifacts(await api.mobileBuildStore.list(listParams));
+      const nextArtifacts = await api.mobileBuildStore.list(requestParams);
+      if (!isCurrent()) return;
+      setArtifacts(nextArtifacts);
       setError(null);
     } catch (cause) {
+      if (!isCurrent()) return;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [listParams]);
 
@@ -42,6 +55,11 @@ export function BuildStore({
   useEffect(() => {
     queueMicrotask(() => void refresh());
   }, [refresh]);
+
+  useEffect(() => {
+    if (refreshToken === 0) return;
+    queueMicrotask(() => void refresh());
+  }, [refresh, refreshToken]);
 
   const install = async (artifact: MobileBuildArtifact) => {
     if (!device) return;
@@ -119,6 +137,7 @@ export function BuildStore({
         <BuildStoreManager
           input={listParams}
           initialArtifacts={artifacts}
+          refreshToken={refreshToken}
           onClose={() => setManagerOpen(false)}
         />
       </Modal>
@@ -129,10 +148,12 @@ export function BuildStore({
 function BuildStoreManager({
   input,
   initialArtifacts,
+  refreshToken,
   onClose,
 }: {
   input: MobileBuildStoreListParams;
   initialArtifacts: MobileBuildArtifact[];
+  refreshToken: number;
   onClose: () => void;
 }) {
   const [artifacts, setArtifacts] = useState<MobileBuildArtifact[]>(initialArtifacts);
@@ -144,21 +165,34 @@ function BuildStoreManager({
     () => ({ platform: input.platform, projectPath: input.projectPath }),
     [input.platform, input.projectPath],
   );
+  const listRequestRef = useRef(0);
 
   const refresh = useCallback(async () => {
+    const requestId = ++listRequestRef.current;
+    const requestParams = listParams;
+    const isCurrent = () => requestId === listRequestRef.current;
     setLoading(true);
     try {
-      setArtifacts(await api.mobileBuildStore.list(listParams));
+      const nextArtifacts = await api.mobileBuildStore.list(requestParams);
+      if (!isCurrent()) return;
+      setArtifacts(nextArtifacts);
+      setError(null);
     } catch (cause) {
+      if (!isCurrent()) return;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [listParams]);
 
   useEffect(() => {
     queueMicrotask(() => void refresh());
   }, [refresh]);
+
+  useEffect(() => {
+    if (refreshToken === 0) return;
+    queueMicrotask(() => void refresh());
+  }, [refresh, refreshToken]);
 
   const remove = async (artifact: MobileBuildArtifact) => {
     if (!window.confirm(`Delete stored build from ${new Date(artifact.createdAt).toLocaleString()}?`)) return;

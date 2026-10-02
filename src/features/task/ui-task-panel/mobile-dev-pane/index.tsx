@@ -25,6 +25,7 @@ import {
   DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
   type MobilePreviewProjectConfig,
 } from '@shared/types';
+import type { MobilePlatform } from '@shared/mobile-simulator-types';
 import {
   makeMobileDevDeviceKey,
   useMobileDevPaneFavorites,
@@ -156,6 +157,7 @@ export function MobileDevPane({
   // Only success/progress copy lives inline; failures go to a toast because
   // device errors (devicectl dumps) are far too long for this narrow pane.
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [buildStoreRefreshToken, setBuildStoreRefreshToken] = useState(0);
   const addToast = useToastStore((state) => state.addToast);
   const activeDeviceKeyRef = useRef('');
   const paneRef = useRef<HTMLDivElement>(null);
@@ -179,6 +181,9 @@ export function MobileDevPane({
     stored: boolean;
     command: string;
     fingerprintCommand: string;
+    platform: MobilePlatform;
+    packageId: string | null;
+    appPath: string;
   } | null>(null);
 
   const appPath = useMemo(
@@ -485,6 +490,9 @@ export function MobileDevPane({
         stored: false,
         command,
         fingerprintCommand: command.replaceAll(device.id, '{{device}}'),
+        platform: device.platform,
+        packageId,
+        appPath,
       };
     });
   }, [
@@ -493,6 +501,8 @@ export function MobileDevPane({
     buildCommandId,
     buildRunning,
     runCommands,
+    appPath,
+    packageId,
     setSelectedLogTab,
     taskId,
   ]);
@@ -505,8 +515,7 @@ export function MobileDevPane({
       capture.cancelled ||
       capture.stored ||
       buildStatus?.status !== 'stopped' ||
-      !activeDevice ||
-      !packageId
+      !capture.packageId
     ) {
       return;
     }
@@ -522,18 +531,19 @@ export function MobileDevPane({
     void storeBuild({
       projectPath,
       taskName,
-      appPath,
-      platform: activeDevice.platform,
-      packageId,
+      appPath: capture.appPath,
+      platform: capture.platform,
+      packageId: capture.packageId,
       command: capture.command,
       fingerprintCommand: capture.fingerprintCommand,
       startedAt: capture.startedAt,
     }).then(() => {
+      setBuildStoreRefreshToken((token) => token + 1);
       setActionNotice('Build stored for quick reinstall.');
     }).catch((cause) => {
       setActionNotice(`Build finished, but could not be stored: ${cause instanceof Error ? cause.message : String(cause)}`);
     });
-  }, [activeDevice, appPath, buildCommandId, buildStatus?.status, packageId, projectPath, taskName]);
+  }, [buildCommandId, buildStatus?.status, projectPath, taskName]);
 
   const stickyBuildCommandId =
     stickyBuild?.taskId === taskId ? stickyBuild.commandId : null;
@@ -1361,6 +1371,7 @@ export function MobileDevPane({
                   projectPath={projectPath}
                   platform={activeDevice?.platform ?? 'android'}
                   device={activeDevice}
+                  refreshToken={buildStoreRefreshToken}
                 />
               </div>
               <Button
