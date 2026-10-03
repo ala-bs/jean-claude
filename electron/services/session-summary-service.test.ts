@@ -85,6 +85,9 @@ describe('buildSummaryGenerationPrompt', () => {
         allowedToolPatterns: { Read: [preparedPrompt.transcriptPath] },
         prompt: preparedPrompt.prompt,
         timeoutMs: 10 * 60 * 1000,
+        // The tool options above are backend-specific, and the `summary` role
+        // picked this backend: a rate-limit swap must not move it.
+        allowRateLimitSwap: false,
       }),
     );
     await expect(readFile(preparedPrompt.transcriptPath!, 'utf-8')).rejects.toThrow();

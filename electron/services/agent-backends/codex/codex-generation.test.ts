@@ -139,3 +139,36 @@ it('rejects a prompt over the Codex character limit before spawning anything', a
   })).rejects.toThrow('prompt is too large');
   expect(execFileMock).not.toHaveBeenCalled();
 });
+
+it('surfaces the JSON turn failure when the CLI exits nonzero with empty stderr', async () => {
+  const stdout = [
+    { type: 'thread.started', thread_id: 'x' },
+    // Startup warnings share the `error` item type and must not be reported.
+    { type: 'item.completed', item: { type: 'error', message: 'Code Mode is unavailable' } },
+    { type: 'error', message: 'You’ve hit your usage limit.' },
+    { type: 'turn.failed', error: { message: 'You’ve hit your usage limit.' } },
+  ].map((event) => JSON.stringify(event)).join('\n');
+  execFileMock.mockImplementation((_command, _args, _options, callback) => {
+    queueMicrotask(() =>
+      callback(Object.assign(new Error('Command failed'), { code: 1 }), stdout, ''),
+    );
+    return { stdin };
+  });
+  await expect(generateCodexWithoutTools({
+    model: 'default', prompt: 'summarize', abortController: new AbortController(),
+  })).rejects.toThrow('Codex isolated generation failed: You’ve hit your usage limit.');
+});
+
+it('surfaces the JSON turn failure on a zero-exit failed turn', async () => {
+  const stdout = JSON.stringify({
+    type: 'turn.failed',
+    error: { message: 'model is overloaded' },
+  });
+  execFileMock.mockImplementation((_command, _args, _options, callback) => {
+    queueMicrotask(() => callback(null, stdout, ''));
+    return { stdin };
+  });
+  await expect(generateCodexWithoutTools({
+    model: 'default', prompt: 'summarize', abortController: new AbortController(),
+  })).rejects.toThrow('Codex isolated generation failed: model is overloaded');
+});

@@ -194,6 +194,12 @@ export async function summarizeNormalizedMessages({
       model,
       outputSchema: SESSION_SUMMARY_SCHEMA,
       prompt,
+      // Never swap the summary backend on a rate limit. The tool options below
+      // are picked from `backend`, so a swap would hand e.g. Codex a scoped
+      // `Read` permission it cannot honor — and more importantly it silently
+      // runs the summary on a backend the active model profile never selected
+      // for the `summary` role.
+      allowRateLimitSwap: false,
       ...(backend === 'codex'
         ? {
             // Codex has no scoped Read tool, so the isolated runner is given
@@ -202,7 +208,6 @@ export async function summarizeNormalizedMessages({
             // transcript size, so no history is dropped.
             toolPolicy: 'none' as const,
             allowedTools: [],
-            allowRateLimitSwap: false,
             ...(transcriptPath
               ? {
                   allowReadOnlyShell: true,

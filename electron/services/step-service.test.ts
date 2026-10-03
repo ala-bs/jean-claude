@@ -278,12 +278,47 @@ describe('StepService.resolveAndValidate', () => {
     expect(resolveForRoleMock).toHaveBeenCalledWith({
       role: 'summary',
       projectId: 'project-1',
+      // The continuation's own backend overrides the role's, so the summary
+      // never runs on a backend the step was not given.
+      override: { backend: 'opencode' },
     });
     expect(summarizeNormalizedMessagesMock).toHaveBeenCalledWith(
       expect.objectContaining({ backend: 'opencode', model: 'gpt-5.5' }),
     );
     expect(result.resolvedPrompt).toBe(
       'Continue from:\nGenerated AI summary.',
+    );
+  });
+
+  it('summarizes on the backend the continuation step was given', async () => {
+    const codexStep = {
+      ...continueStep,
+      agentBackend: 'codex',
+      modelPreference: 'opus',
+    };
+    findStepByIdMock.mockResolvedValue(codexStep);
+    findStepsByTaskIdMock.mockResolvedValue([previousStep, codexStep]);
+    findMessagesByStepIdMock.mockResolvedValue([
+      { id: 'msg-1', type: 'assistant-message', value: 'Implemented login.' },
+    ]);
+    // What `resolveForRole` returns once the override is applied: the step's
+    // backend, never the step's agent-sized model.
+    resolveForRoleMock.mockResolvedValue({
+      backend: 'codex',
+      model: 'default',
+      thinkingEffort: 'default',
+      source: 'override',
+    });
+
+    await StepService.resolveAndValidate('step-2');
+
+    expect(resolveForRoleMock).toHaveBeenCalledWith({
+      role: 'summary',
+      projectId: 'project-1',
+      override: { backend: 'codex' },
+    });
+    expect(summarizeNormalizedMessagesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: 'codex', model: 'default' }),
     );
   });
 

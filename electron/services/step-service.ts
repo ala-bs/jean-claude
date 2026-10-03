@@ -136,6 +136,11 @@ async function resolvePromptTemplate({
 }): Promise<{ resolvedPrompt: string; warnings: string[] }> {
   const warnings: string[] = [];
   const summaryBackend = summaryModel.backend;
+  // Provenance of the summary backend, so a surprising one ("why is my Claude
+  // profile summarizing on codex?") is attributable from the error alone.
+  const summaryOrigin = `source=${summaryModel.source}${
+    summaryModel.profileId ? ` profile=${summaryModel.profileId}` : ''
+  }${summaryModel.presetId ? ` preset=${summaryModel.presetId}` : ''}`;
 
   // {{step.<id>}} is an alias for {{step.<id>.output}} — both return step.output.
   function resolveValueExpression(expression: string): string {
@@ -238,7 +243,7 @@ async function resolvePromptTemplate({
           error,
         );
         const wrappedError = new Error(
-          `Failed to summarize step "${step.name}" (${stepId}) using backend ${summaryBackend}: ${getErrorMessage(error)}`,
+          `Failed to summarize step "${step.name}" (${stepId}) using backend ${summaryBackend} (model ${model}, ${summaryOrigin}): ${getErrorMessage(error)}`,
         );
         (wrappedError as Error & { cause?: unknown }).cause = error;
         throw wrappedError;
@@ -696,11 +701,24 @@ export const StepService = {
       }
     }
 
+    // The summary runs on the backend THIS step was given, so a continuation
+    // never summarizes on a backend the user did not pick for it. Only the
+    // backend is overridden: the step's own `modelPreference` is an agent-sized
+    // model (e.g. opus) and must not become the summary model — the model stays
+    // whatever the profile binds for `summary` on that backend, and degrades to
+    // the backend default when the profile's summary slot targets another one.
     const summaryModel = await getModelProfileService().resolveForRole({
       role: 'summary',
       projectId: task.projectId,
+      override: step.agentBackend ? { backend: step.agentBackend } : null,
     });
     const summaryBackend = summaryModel.backend;
+
+    // Visible without DEBUG: this is the one decision that explains a summary
+    // running on a backend the user did not expect.
+    console.log(
+      `[step-summary] step=${step.id} role=summary backend=${summaryBackend} model=${summaryModel.model} source=${summaryModel.source} profile=${summaryModel.profileId ?? 'none'} stepBackend=${step.agentBackend ?? 'none'}${summaryModel.off ? ' off' : ''}`,
+    );
 
     debug(
       'Resolving prompt template for step %s (%s): backend=%s dependsOn=%d',

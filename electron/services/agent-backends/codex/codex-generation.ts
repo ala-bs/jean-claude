@@ -47,6 +47,44 @@ const DISABLED_FEATURES = [
 // `chars().count()`, so this guard errs conservatively and never under-counts.
 const MAX_CODEX_PROMPT_CHARS = 1_048_576;
 
+/**
+ * The human-readable failure out of a `codex exec --json` stream.
+ *
+ * Turn-level failures (usage limit, auth, model error) are emitted as JSON
+ * events on stdout while the process exits 1 with no stderr, so this is the
+ * only place the actual reason exists. Startup warnings (`item.completed` of
+ * type `error`) are deliberately ignored: they are not failures.
+ */
+function codexErrorFromJsonStream(stdout: string): string | null {
+  let reason: string | null = null;
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{')) continue;
+    let event: unknown;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (!event || typeof event !== 'object') continue;
+    const { type, message, error } = event as {
+      type?: unknown;
+      message?: unknown;
+      error?: { message?: unknown };
+    };
+    if (type === 'error' && typeof message === 'string' && message.trim()) {
+      reason = message.trim();
+    } else if (
+      type === 'turn.failed' &&
+      typeof error?.message === 'string' &&
+      error.message.trim()
+    ) {
+      reason = error.message.trim();
+    }
+  }
+  return reason ? reason.slice(0, 2000) : null;
+}
+
 export async function generateCodexWithoutTools({
   model,
   prompt,
@@ -131,9 +169,16 @@ export async function generateCodexWithoutTools({
         if (error) {
           // Do not include the command or prompt in errors. CLI diagnostics are
           // bounded so a failing process cannot flood the step error UI.
+          //
+          // `codex exec --json` reports turn failures (usage limit, auth, model
+          // errors) as JSON on STDOUT and exits 1 with an EMPTY stderr, so
+          // reading stderr alone produced the useless "failed: 1".
           const reason = signal.aborted
             ? 'canceled'
-            : stderr.trim().slice(-2000) || error.code || 'process error';
+            : codexErrorFromJsonStream(output) ||
+              stderr.trim().slice(-2000) ||
+              error.code ||
+              'process error';
           reject(new Error(`Codex isolated generation failed: ${reason}`));
         } else {
           resolve(output);
@@ -150,7 +195,12 @@ export async function generateCodexWithoutTools({
     for (const line of stdout.split('\n').filter((value) => value.trim())) {
       const event = JSON.parse(line);
       if (event.type === 'error' || event.type === 'turn.failed') {
-        throw new Error('Codex isolated generation reported a failed turn');
+        const reason = codexErrorFromJsonStream(stdout);
+        throw new Error(
+          reason
+            ? `Codex isolated generation failed: ${reason}`
+            : 'Codex isolated generation reported a failed turn',
+        );
       }
       if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
         text = event.item.text;
