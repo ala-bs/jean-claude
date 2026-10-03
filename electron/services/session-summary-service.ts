@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -189,12 +189,19 @@ export async function summarizeNormalizedMessages({
 
   let result: unknown;
   try {
+    // Codex cannot enforce the scoped Read permission used for spilled
+    // transcripts. Supply that data ourselves to its isolated no-tools runner.
+    const generationPrompt = backend === 'codex' && transcriptPath
+      ? `${SESSION_SUMMARY_PROMPT}\n\nPrior step normalized message history:\n\n${await readFile(transcriptPath, 'utf-8')}`
+      : prompt;
     result = await generateText({
       backend,
       model,
       outputSchema: SESSION_SUMMARY_SCHEMA,
-      prompt,
-      ...(transcriptPath
+      prompt: generationPrompt,
+      ...(backend === 'codex'
+        ? { toolPolicy: 'none' as const, allowedTools: [], allowRateLimitSwap: false }
+        : transcriptPath
         ? {
             cwd: path.dirname(transcriptPath),
             allowedTools: ['Read'],

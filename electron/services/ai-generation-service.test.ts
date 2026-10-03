@@ -7,6 +7,7 @@ const {
   rateLimitResolveBackendMock,
   recordUsageSafeMock,
   resolveForRoleMock,
+  generateCodexWithoutToolsMock,
 } = vi.hoisted(() => ({
   getOrCreateServerMock: vi.fn(),
   getOrCreateCodexAppServerMock: vi.fn(),
@@ -14,6 +15,11 @@ const {
   rateLimitResolveBackendMock: vi.fn(),
   recordUsageSafeMock: vi.fn(),
   resolveForRoleMock: vi.fn(),
+  generateCodexWithoutToolsMock: vi.fn(),
+}));
+
+vi.mock('./agent-backends/codex/codex-generation', () => ({
+  generateCodexWithoutTools: generateCodexWithoutToolsMock,
 }));
 
 vi.mock('./model-profile-service', () => ({
@@ -888,6 +894,19 @@ describe('generateText codex structured output', () => {
       backend,
       swapped: false,
     }));
+  });
+
+  it('routes explicit no-tools Codex generation through the isolated runner', async () => {
+    generateCodexWithoutToolsMock.mockResolvedValueOnce({ summary: 'Done' });
+    await expect(generateText({
+      backend: 'codex', model: 'selected-model', prompt: 'full history',
+      outputSchema: { type: 'object' }, toolPolicy: 'none', allowedTools: [],
+      throwOnError: true,
+    })).resolves.toEqual({ summary: 'Done' });
+    expect(generateCodexWithoutToolsMock).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'selected-model', prompt: 'full history', outputSchema: { type: 'object' },
+    }));
+    expect(getOrCreateCodexAppServerMock).not.toHaveBeenCalled();
   });
 
   it.each([

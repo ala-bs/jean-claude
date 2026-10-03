@@ -89,6 +89,36 @@ describe('buildSummaryGenerationPrompt', () => {
     await expect(readFile(preparedPrompt.transcriptPath!, 'utf-8')).rejects.toThrow();
   });
 
+  it.each([false, true])('sends the complete Codex transcript without tools (failure=%s)', async (fail) => {
+    const value = `${'a'.repeat(35_000)}IMPORTANT MIDDLE${'z'.repeat(35_000)}`;
+    const preparedPrompt = await prepareSummaryGenerationPrompt([{
+      id: 'long', date: '2026-06-13T00:00:00.000Z', type: 'assistant-message', value,
+    }]);
+    if (fail) generateTextMock.mockRejectedValueOnce(new Error('generation failed'));
+    else generateTextMock.mockResolvedValueOnce({ summary: 'Complete summary' });
+    const result = summarizeNormalizedMessages({
+      backend: 'codex', model: 'selected-model', messages: [], preparedPrompt,
+    });
+    if (fail) await expect(result).rejects.toThrow('generation failed');
+    else await expect(result).resolves.toBe('Complete summary');
+    expect(generateTextMock).toHaveBeenCalledWith(expect.objectContaining({
+      backend: 'codex', model: 'selected-model', prompt: expect.stringContaining(value),
+      toolPolicy: 'none', allowedTools: [], allowRateLimitSwap: false,
+    }));
+    expect(generateTextMock.mock.calls[0][0].allowedToolPatterns).toBeUndefined();
+    await expect(readFile(preparedPrompt.transcriptPath!, 'utf-8')).rejects.toThrow();
+  });
+
+  it('uses the isolated runner for short Codex histories too', async () => {
+    generateTextMock.mockResolvedValueOnce({ summary: 'Summary' });
+    await summarizeNormalizedMessages({
+      backend: 'codex', model: 'default', messages: [{
+        id: 'short', date: '2026-06-13T00:00:00.000Z', type: 'assistant-message', value: 'Done',
+      }],
+    });
+    expect(generateTextMock).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: 'none' }));
+  });
+
   it('rejects model narration instead of injecting it as the summary', async () => {
     generateTextMock.mockResolvedValue(
       'I have already called the StructuredOutput tool at the end of my response above.',
