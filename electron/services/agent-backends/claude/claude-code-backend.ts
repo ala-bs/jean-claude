@@ -252,6 +252,75 @@ interface ClaudeSession {
  */
 const WITHHELD_RESULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
+/**
+ * A `system` message that means "a NEW turn starts now".
+ *
+ * The CLI resumes the agent on its own when background work reports back
+ * (background bash, Monitor, a background subagent), and that new turn runs for
+ * as long as it needs — in one real transcript, a full hour — before emitting
+ * its `result`.
+ *
+ * It must reset `sawRealResult`. Without it the PREVIOUS turn's end-of-turn
+ * close keeps counting down straight through the new turn: every message
+ * re-arms a 30s close, so the first stretch of model-generation silence longer
+ * than the grace (composing a long subagent prompt takes minutes and emits
+ * nothing at all) closes stdin mid-run. The CLI survives, so the run keeps
+ * going with a dead `canUseTool` channel and every tool call that needs a
+ * permission round-trip fails with "AbortError: Stream closed".
+ *
+ * ONLY `init` qualifies. The SDK documents it as "session metadata the CLI
+ * emits at the start of each turn, normally ahead of every other message of
+ * that turn" — a turn-start edge.
+ *
+ * `task_notification` is deliberately NOT matched, though it accompanies `init`
+ * on the resumption path and looks like the more specific signal. It is a task
+ * SETTLEMENT record (`status: 'completed' | 'failed' | 'stopped'`), and the
+ * SDK's `result` docs state that "informational system messages such as task
+ * notifications ... may still follow" the turn-complete `result`. So a
+ * background task settling after the user's turn genuinely ended emits one with
+ * no new turn behind it; treating that as a turn start would stand down the
+ * close for a turn that never comes.
+ *
+ * `init` is not a hard guarantee either — the SDK re-emits it on reconnect /
+ * `reinitialize()` without a new model turn. That is why the reset pairs itself
+ * with a liveness flag (`awaitingTurnResult`) instead of trusting the signal
+ * outright.
+ */
+function isTurnStartSystemMessage(message: AgentMessage): boolean {
+  return message.type === 'system' && message.subtype === 'init';
+}
+
+/**
+ * The CLI's explicit turn state, or null if this message is not one.
+ *
+ * Verified empirically against the bundled CLI (2.1.278) rather than trusted
+ * from the types, because the exact ordering decides whether it is safe to
+ * close stdin on it. One background-task run produced:
+ *
+ *   +0.4s  running            turn 1 starts
+ *   +4.7s  result             turn 1 ends
+ *   +4.7s  idle               1 background task STILL LIVE
+ *   +28.5s task_notification  the task settles
+ *   +28.6s running            turn 2 starts (ahead of that turn's `init`)
+ *   +30.6s result / idle      0 background tasks — the run is really over
+ *
+ * The lesson is in the +4.7s line: `idle` means the TURN is over, not the RUN.
+ * Closing stdin there would kill the control channel for the turn that starts
+ * at +28.6s — the very "AbortError: Stream closed" this machinery exists to
+ * prevent. So `idle` is only an immediate-close signal when no background work
+ * is live; otherwise it falls back to the timed grace.
+ */
+function readSessionState(
+  message: AgentMessage,
+): 'idle' | 'running' | 'requires_action' | null {
+  if (message.type !== 'system') return null;
+  if (message.subtype !== 'session_state_changed') return null;
+  const { state } = message;
+  return state === 'idle' || state === 'running' || state === 'requires_action'
+    ? state
+    : null;
+}
+
 function isBackgroundNotificationResult(message: AgentMessage): boolean {
   if (message.type !== 'result') return false;
   // Origins other than a human prompt (`task-notification`, `auto-continuation`,
@@ -302,6 +371,28 @@ const POST_RESULT_CLOSE_GRACE_MS = 30 * 1000;
  * WITHHELD_RESULT_IDLE_TIMEOUT_MS so both silence-based exits agree.
  */
 const BACKGROUND_WORK_CLOSE_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * Grace after an explicit `session_state_changed: 'idle'` with no background
+ * work left — the one moment this file actually KNOWS the turn is over.
+ *
+ * Small but deliberately NOT zero. `idle` is a turn boundary, and the only
+ * thing standing between it and a resumption is `backgroundTaskIds`, a guard
+ * this very file documents as unreliable: see POST_RESULT_CLOSE_GRACE_MS's
+ * `idx 1164` case — "result, origin task-notification, num_turns 1, 0 tasks
+ * live -> looked like a real end-of-turn; the run continued 20 minutes". A
+ * resumption with zero TRACKED background tasks is attested, and other
+ * non-background resumptions exist (a `Stop` hook returning
+ * `decision: "block"`, an auto-continuation turn).
+ *
+ * Closing at 0ms would leave no window for the `running`/`init` that announces
+ * such a turn to cancel the close, and the cost of being wrong is the original
+ * bug: a live run whose every permission round-trip fails with "AbortError:
+ * Stream closed". Two seconds keeps 93% of the latency win over the 30s guess
+ * while leaving a cancellation window orders of magnitude larger than the gap
+ * between two messages of a live turn.
+ */
+const IDLE_CLOSE_GRACE_MS = 2 * 1000;
 
 /**
  * How often a suspended close timer re-checks whether the thing it is waiting
@@ -656,7 +747,23 @@ export class ClaudeCodeBackend implements AgentBackend {
 
     const queryOptions: NonNullable<Parameters<typeof query>[0]['options']> = {
       cwd: config.cwd,
-      env: getChildProcessEnv({ overrides: config.env }),
+      env: getChildProcessEnv({
+        overrides: {
+          // Opts the CLI into `system`/`session_state_changed`, the only
+          // explicit turn boundary it exposes: `running` when a turn starts,
+          // `idle` once it is over ("authoritative turn-over signal" per the
+          // SDK types). Emission is gated behind this env var in the CLI
+          // binary, and nothing sets it by default — which is why an
+          // hour-long transcript of this app contains zero of these messages
+          // and the close logic below had to infer turn ends from silence.
+          //
+          // Listed BEFORE `config.env` on purpose: a project or user env entry
+          // can still override it, and every consumer below treats the signal
+          // as optional, so an empty value just restores the timer-only path.
+          CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
+          ...config.env,
+        },
+      }),
       allowedTools: [],
       // Disable the built-in question tool: we expose our own
       // `mcp__jean-claude-mcp__ask_question` which renders in the task UI.
@@ -737,7 +844,29 @@ export class ClaudeCodeBackend implements AgentBackend {
     // previous turn can't be mistaken for a response to it.
     let injectedPromptWritten = false;
 
+    // Wall-clock of the last message received from the SDK. Diagnostics only:
+    // every "AbortError: Stream closed" bug so far has been a close fired after
+    // a silence that was NOT the end of the run, and the silence length is the
+    // single most useful number for telling those apart in a log.
+    let lastMessageAt = Date.now();
+
     const closePromptStream = () => {
+      if (promptStreamOpen) {
+        // Deliberately neutral wording: `jc:*` namespaces are on by default and
+        // broadcast to the renderer's debug pane, so this fires on every
+        // healthy run and must not read as an error. It is a forensic anchor —
+        // if "AbortError: Stream closed" shows up later in the same run, this
+        // line names the silence that was misjudged as the end of it.
+        dbg.agent(
+          'Session %s closing input stream after %dms of silence (sawRealResult=%s, %d background task(s), %d pending permission request(s), %d live tool call(s))',
+          sessionKey,
+          Date.now() - lastMessageAt,
+          sawRealResult,
+          session.backgroundTaskIds.size,
+          session.pendingResolvers.size,
+          liveToolUseCount(),
+        );
+      }
       promptStreamOpen = false;
       // Mirrored onto the session so `handleToolRequest` — which runs on the
       // control channel, outside this closure's reach — can fail fast instead
@@ -800,6 +929,28 @@ export class ClaudeCodeBackend implements AgentBackend {
     // message would leave the generator suspended, stdin open, and the step
     // stuck `running` forever. Any message at all clears it.
     let awaitingInjectedResponse = false;
+
+    // Set when an `init` stood down the post-result close, and cleared by the
+    // next `result`. It is the liveness half of that stand-down: without it the
+    // run would have NO terminating timer at all, because the real `result`
+    // that preceded the `init` already cleared `deferredResultEvents` and
+    // `awaitingInjectedResponse`, the two conditions the idle watchdog arms on.
+    // That matters because `init` can also be re-emitted on a reconnect with no
+    // new turn behind it: the watchdog bounds that case at
+    // WITHHELD_RESULT_IDLE_TIMEOUT_MS of TOTAL silence instead of leaving a
+    // live-but-silent CLI holding stdin, and the step on `running`, forever.
+    //
+    // It cannot cut a real resumed turn short — every message re-arms the
+    // watchdog, and an unanswered permission card or a running tool call holds
+    // it off through `describeCloseHold`.
+    let awaitingTurnResult = false;
+
+    // Set by an explicit `idle`: the CLI says this turn is over. Deliberately
+    // SEPARATE from `sawRealResult`, which means "a real result finalized the
+    // step" and is what the withhold/replay logic keys off — `idle` can arrive
+    // on a turn whose only result was withheld, so folding the two together
+    // would let a later turn start discard the events that finalize the step.
+    let turnOverSignalled = false;
 
     // Tool calls that were already unresolved when the turn's `result` arrived.
     // The normalizer only drains `pendingToolUses` on a matching `tool_result`,
@@ -931,14 +1082,16 @@ export class ClaudeCodeBackend implements AgentBackend {
 
     const syncIdleWatchdog = () => {
       clearIdleWatchdog();
-      // Only armed while a withheld result or an unanswered injected prompt is
-      // outstanding — a normal run in progress may legitimately be silent for a
-      // long time (a slow tool call).
+      // Only armed while a withheld result, an unanswered injected prompt, or a
+      // CLI-resumed turn is outstanding — a normal run in progress may
+      // legitimately be silent for a long time (a slow tool call).
       const reason = session.deferredResultEvents
         ? 'a withheld background result'
         : awaitingInjectedResponse
           ? 'an injected follow-up prompt'
-          : null;
+          : awaitingTurnResult
+            ? 'a turn the CLI started that has not reported a result'
+            : null;
       if (!reason) return;
       const fire = () => {
         idleTimer = null;
@@ -978,12 +1131,18 @@ export class ClaudeCodeBackend implements AgentBackend {
       closeTimer = null;
       closeHold.held = false;
     };
-    const schedulePromptStreamClose = () => {
+    const schedulePromptStreamClose = (graceMsOverride?: number) => {
       cancelScheduledClose();
+      // An override only ever comes from an explicit `idle`. It still goes
+      // through the timer so that (a) `evaluateCloseHold` runs — an unanswered
+      // permission card or a running tool call must outrank even an
+      // authoritative turn-over signal, since stdin is the channel their answer
+      // travels on — and (b) any further message can still cancel it.
       const graceMs =
-        session.backgroundTaskIds.size > 0
+        graceMsOverride ??
+        (session.backgroundTaskIds.size > 0
           ? BACKGROUND_WORK_CLOSE_GRACE_MS
-          : POST_RESULT_CLOSE_GRACE_MS;
+          : POST_RESULT_CLOSE_GRACE_MS);
       dbg.agentPermission(
         'Result for session %s — closing stdin in %dms unless more activity arrives (%d background task(s) live, %d pending permission request(s))',
         sessionKey,
@@ -1002,6 +1161,8 @@ export class ClaudeCodeBackend implements AgentBackend {
           return;
         }
         if (decision === 'rearm') {
+          // Deliberately without the override: a hold that just ended earns a
+          // fresh FULL grace, not another immediate close.
           schedulePromptStreamClose();
           return;
         }
@@ -1031,6 +1192,7 @@ export class ClaudeCodeBackend implements AgentBackend {
       // means "the run ends on the next silence", and any withheld
       // background-notification result must not be replayed onto this turn.
       sawRealResult = false;
+      turnOverSignalled = false;
       session.deferredResultEvents = null;
       pendingPrompts.push(message);
       notifyPrompt?.();
@@ -1054,9 +1216,92 @@ export class ClaudeCodeBackend implements AgentBackend {
 
         const message = rawMessage as AgentMessage;
 
+        // Set by an explicit `idle` that ends the run, so the close armed at the
+        // bottom of this iteration uses the short grace rather than the long
+        // one meant for guessing.
+        //
+        // Per-iteration, and that is load-bearing rather than incidental: if
+        // ANY message follows the `idle`, it re-arms at the bottom of its own
+        // iteration with the conservative grace instead. That is the behaviour
+        // we want — a CLI still emitting messages has falsified the fast path's
+        // premise that the turn is over and nothing more is coming — so the
+        // override must not be made sticky to "keep" the fast close.
+        let closeGraceOverrideMs: number | undefined;
+
         // Any message at all proves the previous `result` did not end the run,
         // so stand down the pending stdin close and keep `canUseTool` alive.
         cancelScheduledClose();
+        lastMessageAt = Date.now();
+
+        // The explicit turn boundary, when the CLI is emitting it. Everything
+        // else in this close machinery is an inference from silence; this is
+        // the one signal that states the turn's status outright.
+        const sessionState = readSessionState(message);
+
+        // `idle` with no background work left is the only place in this file
+        // that KNOWS the run is over. Close immediately instead of waiting out
+        // a grace period invented for the case where we had to guess.
+        //
+        // With background work still live it is not a run-end at all (see
+        // `readSessionState`), so it is treated exactly like a result: arm the
+        // long grace and let a resumption cancel it.
+        if (sessionState === 'idle') {
+          turnOverSignalled = true;
+          awaitingTurnResult = false;
+          if (session.backgroundTaskIds.size === 0) {
+            closeGraceOverrideMs = IDLE_CLOSE_GRACE_MS;
+            dbg.agentPermission(
+              'Session %s reported idle with no background work — closing input stream in %dms',
+              sessionKey,
+              IDLE_CLOSE_GRACE_MS,
+            );
+          } else {
+            dbg.agentPermission(
+              'Session %s reported idle but %d background task(s) are live — keeping the control channel open',
+              sessionKey,
+              session.backgroundTaskIds.size,
+            );
+          }
+        }
+
+        // A turn is starting (or is blocked on a human). Either way the run is
+        // live, so the previous turn's end-of-turn close must stand down:
+        // model-generation silence inside a live turn is routinely longer than
+        // the 30s grace, and closing under it kills the `canUseTool` channel
+        // for every later tool call.
+        //
+        // `isTurnStartSystemMessage` (`init`) stays as the fallback for when
+        // the session-state signal is unavailable — it is gated behind an env
+        // var in the CLI, so this must keep working without it.
+        //
+        // `awaitingTurnResult` is what keeps the run terminating: the idle
+        // watchdog arms on it, so a turn that never reports anything is still
+        // bounded by total silence rather than hanging forever. The withheld
+        // result is dropped for the same reason `pushPromptMessage` drops it —
+        // it belongs to the turn that just ended, and replaying it onto this
+        // one would re-finalize an already-completed step.
+        const turnIsLive =
+          sessionState === 'running' ||
+          sessionState === 'requires_action' ||
+          isTurnStartSystemMessage(message);
+        if ((sawRealResult || turnOverSignalled) && turnIsLive) {
+          dbg.agentPermission(
+            'Session %s resumed by a new turn (%s) — standing down the post-result stdin close',
+            sessionKey,
+            sessionState ?? 'init',
+          );
+          // The withheld result is discarded ONLY when a real result already
+          // finalized the step — the same condition `pushPromptMessage` relies
+          // on, and the reason it is safe there. Without this guard an `init`
+          // re-emitted on a reconnect (which the SDK does, with no turn behind
+          // it) would throw away the only events that can finalize a step whose
+          // turn ended on a withheld background-notification result, leaving it
+          // on `running` for good.
+          if (sawRealResult) session.deferredResultEvents = null;
+          sawRealResult = false;
+          turnOverSignalled = false;
+          awaitingTurnResult = true;
+        }
 
         // 1. Persist raw message
         const rawMessageId = await this.taskContext.persistRaw({
@@ -1116,6 +1361,10 @@ export class ClaudeCodeBackend implements AgentBackend {
         // (it would finalize the turn while the agent keeps working) and replay
         // it only if the run ends without ever emitting a real result.
         if (isBackgroundNotificationResult(message)) {
+          // The resumed turn did report back, so the liveness flag has done its
+          // job; `deferredResultEvents` takes over as the watchdog's reason.
+          awaitingTurnResult = false;
+          turnOverSignalled = false;
           if (!sawRealResult) session.deferredResultEvents = agentEvents;
           // Deliberately does NOT excuse in-flight tool calls. This branch is
           // reached precisely because the result does not end the user's turn,
@@ -1135,8 +1384,10 @@ export class ClaudeCodeBackend implements AgentBackend {
           // "the run is over" (see POST_RESULT_CLOSE_GRACE_MS), and closing
           // early kills the `canUseTool` channel for every later tool call.
           sawRealResult = true;
+          turnOverSignalled = false;
           session.deferredResultEvents = null;
           awaitingInjectedResponse = false;
+          awaitingTurnResult = false;
           // A turn that ended as `error_max_turns` / `error_during_execution`
           // leaves `tool_use` entries the CLI will never send a `tool_result`
           // for. Excusing them here is what stops a wedged tool from holding
@@ -1185,8 +1436,12 @@ export class ClaudeCodeBackend implements AgentBackend {
 
         // Once a result has been seen, the run ends on silence, not on the
         // result itself. Every message re-arms this, so the stream closes a
-        // grace period after the LAST message rather than the first result.
-        if (sawRealResult) schedulePromptStreamClose();
+        // grace period after the LAST message rather than the first result —
+        // unless an explicit `idle` already told us the run is over, in which
+        // case the grace is skipped.
+        if (sawRealResult || turnOverSignalled) {
+          schedulePromptStreamClose(closeGraceOverrideMs);
+        }
       }
     } catch (error) {
       // SDK threw an unexpected error — push it as an error event so

@@ -61,6 +61,12 @@ const HIDDEN_SYSTEM_SUBTYPES = new Set([
   'hook_started',
   'hook_completed',
   'hook_response',
+  // A control signal for the backend's stdin-close logic, not conversation
+  // content. Hidden for the same reason `init` is — and specifically so it
+  // cannot reach the session-id emitter below: it is the first message of a
+  // turn (ahead of `init`), so letting it through would change which message
+  // first reports the session id.
+  'session_state_changed',
 ]);
 
 // --- Main normalization function ---
