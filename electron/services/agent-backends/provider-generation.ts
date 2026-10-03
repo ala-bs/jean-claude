@@ -458,6 +458,7 @@ async function generateWithCodex({
   toolPolicy,
   abortController,
   usageContext,
+  allowReadOnlyShell,
 }: Parameters<TextGenerationCapability['generate']>[0] & {
   outputSchema?: Record<string, unknown>;
 }): Promise<unknown | null> {
@@ -477,6 +478,8 @@ async function generateWithCodex({
       thinkingEffort,
       abortController,
       usageContext,
+      allowReadOnlyShell,
+      cwd,
     });
   }
   const hasRestrictions =

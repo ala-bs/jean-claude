@@ -49,6 +49,7 @@ export async function generateText({
   allowedTools,
   allowedToolPatterns,
   toolPolicy,
+  allowReadOnlyShell,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   throwOnError = false,
   allowRateLimitSwap = true,
@@ -65,6 +66,7 @@ export async function generateText({
   allowedTools?: string[];
   allowedToolPatterns?: Record<string, string[]>;
   toolPolicy?: 'default' | 'none';
+  allowReadOnlyShell?: boolean;
   timeoutMs?: number;
   throwOnError?: boolean;
   allowRateLimitSwap?: boolean;
@@ -129,6 +131,7 @@ export async function generateText({
         allowedTools,
         allowedToolPatterns,
         toolPolicy,
+        allowReadOnlyShell,
         abortController,
         usageContext,
       };
@@ -171,6 +174,7 @@ export async function generateText({
       allowedTools,
       allowedToolPatterns,
       toolPolicy,
+      allowReadOnlyShell,
       abortController,
       usageContext,
     });

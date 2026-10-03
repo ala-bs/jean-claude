@@ -124,6 +124,15 @@ export interface TextGenerationInput {
   allowedTools?: string[];
   allowedToolPatterns?: Record<string, string[]>;
   toolPolicy?: 'default' | 'none';
+  /**
+   * Opt in to read-only shell access inside the isolated Codex runner, so the
+   * model can read a file the caller prepared instead of having it inlined in
+   * the prompt. Codex has no scoped Read tool — reading a file *is* a shell
+   * command — so this necessarily grants filesystem-wide read, bounded only by
+   * the read-only sandbox. Only set it when the caller cannot inline the data
+   * (see `cwd`), and never for content that must not reach a shell.
+   */
+  allowReadOnlyShell?: boolean;
   abortController: AbortController;
   usageContext?: AiUsageContext;
 }

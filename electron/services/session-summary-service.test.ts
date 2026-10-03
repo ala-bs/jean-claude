@@ -11,6 +11,7 @@ import {
   prepareSummaryGenerationPrompt,
   summarizeNormalizedMessages,
 } from './session-summary-service';
+import { dirname } from 'node:path';
 
 const generateTextMock = vi.mocked(generateText);
 
@@ -89,7 +90,7 @@ describe('buildSummaryGenerationPrompt', () => {
     await expect(readFile(preparedPrompt.transcriptPath!, 'utf-8')).rejects.toThrow();
   });
 
-  it.each([false, true])('sends the complete Codex transcript without tools (failure=%s)', async (fail) => {
+  it.each([false, true])('has Codex read the spilled transcript instead of inlining it (failure=%s)', async (fail) => {
     const value = `${'a'.repeat(35_000)}IMPORTANT MIDDLE${'z'.repeat(35_000)}`;
     const preparedPrompt = await prepareSummaryGenerationPrompt([{
       id: 'long', date: '2026-06-13T00:00:00.000Z', type: 'assistant-message', value,
@@ -102,11 +103,37 @@ describe('buildSummaryGenerationPrompt', () => {
     if (fail) await expect(result).rejects.toThrow('generation failed');
     else await expect(result).resolves.toBe('Complete summary');
     expect(generateTextMock).toHaveBeenCalledWith(expect.objectContaining({
-      backend: 'codex', model: 'selected-model', prompt: expect.stringContaining(value),
+      backend: 'codex', model: 'selected-model', prompt: preparedPrompt.prompt,
       toolPolicy: 'none', allowedTools: [], allowRateLimitSwap: false,
+      allowReadOnlyShell: true, cwd: dirname(preparedPrompt.transcriptPath!),
     }));
+    // The transcript is read by the model, never inlined, so no history is lost
+    // and the prompt stays small no matter how large the step was.
+    const { prompt } = generateTextMock.mock.calls[0][0];
+    expect(prompt).not.toContain(value);
+    expect(prompt).toContain(preparedPrompt.transcriptPath!);
+    expect(prompt.length).toBeLessThan(2_000);
     expect(generateTextMock.mock.calls[0][0].allowedToolPatterns).toBeUndefined();
     await expect(readFile(preparedPrompt.transcriptPath!, 'utf-8')).rejects.toThrow();
+  });
+
+  it('keeps the prompt tiny even for a transcript far over the Codex input limit', async () => {
+    const value = `${'a'.repeat(600_000)}MIDDLE${'z'.repeat(600_000)}`;
+    const preparedPrompt = await prepareSummaryGenerationPrompt([{
+      id: 'huge', date: '2026-06-13T00:00:00.000Z', type: 'assistant-message', value,
+    }]);
+    generateTextMock.mockResolvedValueOnce({ summary: 'Full summary' });
+    await expect(
+      summarizeNormalizedMessages({
+        backend: 'codex', model: 'selected-model', messages: [], preparedPrompt,
+      }),
+    ).resolves.toBe('Full summary');
+    const { prompt } = generateTextMock.mock.calls[0][0];
+    // 1.2M chars of history, and the prompt never approaches the 1,048,576
+    // character ceiling because the transcript is read, not inlined.
+    expect(prompt.length).toBeLessThan(2_000);
+    expect(prompt).not.toContain('MIDDLE');
+    expect(prompt).not.toContain('...[truncated]...');
   });
 
   it('uses the isolated runner for short Codex histories too', async () => {

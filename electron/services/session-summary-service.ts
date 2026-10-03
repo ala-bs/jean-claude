@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -189,18 +189,27 @@ export async function summarizeNormalizedMessages({
 
   let result: unknown;
   try {
-    // Codex cannot enforce the scoped Read permission used for spilled
-    // transcripts. Supply that data ourselves to its isolated no-tools runner.
-    const generationPrompt = backend === 'codex' && transcriptPath
-      ? `${SESSION_SUMMARY_PROMPT}\n\nPrior step normalized message history:\n\n${await readFile(transcriptPath, 'utf-8')}`
-      : prompt;
     result = await generateText({
       backend,
       model,
       outputSchema: SESSION_SUMMARY_SCHEMA,
-      prompt: generationPrompt,
+      prompt,
       ...(backend === 'codex'
-        ? { toolPolicy: 'none' as const, allowedTools: [], allowRateLimitSwap: false }
+        ? {
+            // Codex has no scoped Read tool, so the isolated runner is given
+            // read-only shell instead and reads the spilled transcript itself.
+            // That avoids inlining it — the prompt stays small regardless of
+            // transcript size, so no history is dropped.
+            toolPolicy: 'none' as const,
+            allowedTools: [],
+            allowRateLimitSwap: false,
+            ...(transcriptPath
+              ? {
+                  allowReadOnlyShell: true,
+                  cwd: path.dirname(transcriptPath),
+                }
+              : {}),
+          }
         : transcriptPath
         ? {
             cwd: path.dirname(transcriptPath),

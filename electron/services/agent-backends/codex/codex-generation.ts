@@ -10,10 +10,13 @@ import { getChildProcessEnv } from '../../../lib/child-process-env';
 
 // Ignore user configuration as well: merely disabling shell tools on the shared
 // app-server would still leave configured MCP servers and hooks available.
+// Re-enabled only when the caller passes `allowReadOnlyShell`. Codex exposes no
+// scoped Read tool: reading a file *is* a shell command, so file access and
+// shell access are the same capability and cannot be separated.
+const SHELL_FEATURES = ['shell_tool', 'unified_exec', 'shell_snapshot'];
+
 const DISABLED_FEATURES = [
-  'shell_tool',
-  'unified_exec',
-  'shell_snapshot',
+  ...SHELL_FEATURES,
   'apps',
   'plugins',
   'hooks',
@@ -34,6 +37,16 @@ const DISABLED_FEATURES = [
   'remote_plugin',
 ];
 
+// The Codex app-server rejects turn/start with `input_too_large` above this.
+// Fail with an actionable message instead of a raw JSON-RPC error.
+// The limit is counted in CHARACTERS, not UTF-8 bytes — verified empirically
+// against codex-cli 0.155.0: a 400k-char / 1.2MB-UTF-8 CJK prompt is accepted,
+// while 1_048_600 ASCII chars is rejected with `actual_chars: 1048600`. So do
+// not "fix" this to Buffer.byteLength: that would reject multi-byte prompts the
+// server accepts. JS `.length` (UTF-16 units) is always >= Rust's
+// `chars().count()`, so this guard errs conservatively and never under-counts.
+const MAX_CODEX_PROMPT_CHARS = 1_048_576;
+
 export async function generateCodexWithoutTools({
   model,
   prompt,
@@ -41,18 +54,25 @@ export async function generateCodexWithoutTools({
   thinkingEffort,
   abortController,
   usageContext,
+  allowReadOnlyShell,
+  cwd,
 }: TextGenerationInput & {
   outputSchema?: Record<string, unknown>;
 }): Promise<unknown> {
   const signal = abortController.signal;
   signal.throwIfAborted();
+  if (prompt.length > MAX_CODEX_PROMPT_CHARS) {
+    throw new Error(
+      `Codex isolated generation prompt is too large: ${prompt.length} characters (max ${MAX_CODEX_PROMPT_CHARS})`,
+    );
+  }
   const directory = await mkdtemp(path.join(tmpdir(), 'jc-codex-generation-'));
   const startedAt = Date.now();
   try {
     const args = [
       'exec', '--ignore-user-config', '--ignore-rules', '--ephemeral',
       '--skip-git-repo-check', '--sandbox', 'read-only', '--json',
-      '--cd', directory,
+      '--cd', allowReadOnlyShell && cwd ? cwd : directory,
       '-c', 'approval_policy="never"',
       '-c', 'web_search="disabled"',
       '-c', 'mcp_servers={}',
@@ -60,8 +80,24 @@ export async function generateCodexWithoutTools({
       '-c', 'project_doc_max_bytes=0',
       '-c', 'features.skip_host_skill_discovery=true',
       '-c', 'tools.view_image=false',
-      ...DISABLED_FEATURES.flatMap((feature) => ['--disable', feature]),
+      ...(allowReadOnlyShell
+        ? DISABLED_FEATURES.filter(
+            (feature) => !SHELL_FEATURES.includes(feature),
+          )
+        : DISABLED_FEATURES
+      ).flatMap((feature) => ['--disable', feature]),
     ];
+    if (allowReadOnlyShell) {
+      // Keep PATH and friends so the granted shell can actually run `cat`, but
+      // strip credential-shaped variables so process env is not readable
+      // through it. The read-only sandbox still permits reading any file the
+      // user can read — that is the accepted tradeoff for file access, since
+      // Codex cannot scope reads to a single path.
+      args.push(
+        '-c', 'shell_environment_policy.inherit="core"',
+        '-c', 'shell_environment_policy.exclude=["*KEY*","*TOKEN*","*SECRET*","*PASSWORD*","*CREDENTIAL*","AWS_*","AZURE_*","GITHUB_*","OPENAI_*","ANTHROPIC_*"]',
+      );
+    }
     if (model !== 'default') args.push('--model', model);
     if (thinkingEffort && thinkingEffort !== 'default') {
       args.push('-c', `model_reasoning_effort=${JSON.stringify(thinkingEffort)}`);
