@@ -54,6 +54,11 @@ export async function discoverMobileBuildArtifact({
   ).flat();
   dbg.mobilePreview('Build Store discovery: platform=%s roots=%j candidates=%j startedAt=%d', platform, searchRoots, candidates, startedAt);
   const fresh = [];
+  // Per-candidate verdicts. "found: none" alone cannot distinguish "no artifact
+  // exists" from "the artifact is there but older than the build" -- the latter
+  // is what an incremental Xcode build that relinked nothing produces, and it
+  // was indistinguishable from a path-resolution failure in the logs.
+  const rejected: string[] = [];
   for (const candidate of [...new Set(candidates)]) {
     const metadata = await stat(candidate);
     const latestModifiedAt = metadata.isDirectory() ? await latestModifiedAtInTree(candidate) : metadata.mtimeMs;
@@ -63,16 +68,35 @@ export async function discoverMobileBuildArtifact({
         kind: platform === 'android' ? ('apk' as const) : ('ios-simulator-app' as const),
         sizeBytes: platform === 'android' ? metadata.size : 0,
       });
+    } else {
+      rejected.push(
+        `${candidate} (stale: newest file ${new Date(latestModifiedAt).toISOString()} < build start ${new Date(startedAt).toISOString()})`,
+      );
     }
   }
   const choices = platform === 'ios'
     ? fresh.filter((candidate) => candidate.path.includes('iphonesimulator'))
     : fresh;
+  if (platform === 'ios') {
+    for (const candidate of fresh) {
+      if (!candidate.path.includes('iphonesimulator')) {
+        rejected.push(`${candidate.path} (not a simulator build)`);
+      }
+    }
+  }
   if (choices.length !== 1) {
     const listed = choices.map((candidate) => candidate.path).join(', ') || 'none';
-    dbg.mobilePreview('Build Store discovery rejected candidates: fresh=%j choices=%j', fresh, choices);
+    dbg.mobilePreview(
+      'Build Store discovery rejected candidates: fresh=%j choices=%j rejected=%j',
+      fresh,
+      choices,
+      rejected,
+    );
     throw new Error(
       `Could not uniquely discover the ${platform} build artifact (found: ${listed}). ` +
+        (rejected.length > 0
+          ? `Rejected: ${rejected.join('; ')}. `
+          : `Searched: ${searchRoots.join(', ')}. `) +
         'Use a standard Expo/React Native output directory.',
     );
   }

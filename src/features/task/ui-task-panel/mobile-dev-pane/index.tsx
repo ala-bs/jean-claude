@@ -509,14 +509,52 @@ export function MobileDevPane({
 
   useEffect(() => {
     const capture = buildCaptureRef.current;
+    // Every gate that can silently drop a finished build, in one line. Without
+    // this the pane gave no way to tell "never captured" from "wrong command
+    // id" from "exited non-zero" when a build failed to reach the Build Store.
+    if (buildStatus?.status === 'stopped' || buildStatus?.status === 'errored') {
+      console.info(
+        'Mobile Build Store gate: status=%s hasCapture=%s commandIdMatch=%s cancelled=%s stored=%s packageId=%s',
+        buildStatus?.status,
+        Boolean(capture),
+        capture ? capture.commandId === buildCommandId : 'n/a',
+        capture?.cancelled,
+        capture?.stored,
+        capture?.packageId,
+      );
+    }
     if (
       !capture ||
       capture.commandId !== buildCommandId ||
       capture.cancelled ||
       capture.stored ||
-      buildStatus?.status !== 'stopped' ||
-      !capture.packageId
+      buildStatus?.status !== 'stopped'
     ) {
+      return;
+    }
+    // Without a package/bundle id the artifact cannot be installed later, so it
+    // is not storable -- but staying silent here is what made iOS builds look
+    // like they vanished. Say so instead.
+    if (!capture.packageId) {
+      capture.stored = true;
+      console.warn(
+        'Mobile Build Store skipped: no %s id resolved (platform=%s, command=%s)',
+        capture.platform === 'ios' ? 'iOS bundle' : 'Android package',
+        capture.platform,
+        capture.command,
+      );
+      queueMicrotask(() => {
+        // "stopped", not "finished": `run-command-service` maps a
+        // signal-terminated pty to 'stopped' (`exitCode === 0 ? 'stopped' :
+        // 'errored'` ignores `signal`), so a build cancelled from the run
+        // commands overlay or on app quit lands here too. The remediation
+        // advice is right either way; claiming it "finished" would not be.
+        setActionNotice(
+          capture.platform === 'ios'
+            ? 'Build stopped without being stored: no iOS bundle id. Set it in Project settings → Mobile preview.'
+            : 'Build stopped without being stored: no Android package name. Set it in Project settings → Mobile preview.',
+        );
+      });
       return;
     }
     capture.stored = true;
@@ -537,13 +575,24 @@ export function MobileDevPane({
       command: capture.command,
       fingerprintCommand: capture.fingerprintCommand,
       startedAt: capture.startedAt,
-    }).then(() => {
+    }).then((artifact) => {
+      console.info('Mobile Build Store stored artifact:', artifact);
       setBuildStoreRefreshToken((token) => token + 1);
       setActionNotice('Build stored for quick reinstall.');
     }).catch((cause) => {
-      setActionNotice(`Build finished, but could not be stored: ${cause instanceof Error ? cause.message : String(cause)}`);
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      console.warn('Mobile Build Store store() failed:', reason, capture);
+      setActionNotice(`Build finished, but could not be stored: ${reason}`);
+      // Discovery failures carry the searched roots and per-candidate rejection
+      // reasons, which is far too much text for this narrow pane's inline
+      // notice -- the pane's own convention sends dumps like that to a toast.
+      // Inline-only is why this reason went unread while builds "vanished".
+      addToast({
+        type: 'error',
+        message: `${capture.platform === 'ios' ? 'iOS' : 'Android'} build could not be stored: ${reason}`,
+      });
     });
-  }, [buildCommandId, buildStatus?.status, projectPath, taskName]);
+  }, [addToast, buildCommandId, buildStatus?.status, projectPath, taskName]);
 
   const stickyBuildCommandId =
     stickyBuild?.taskId === taskId ? stickyBuild.commandId : null;

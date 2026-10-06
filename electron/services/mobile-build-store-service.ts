@@ -188,11 +188,32 @@ export const mobileBuildStoreService = {
   },
 
   async store(params: MobileBuildStoreStoreParams): Promise<MobileBuildArtifact> {
+    // Logged before validation so the absence of this line proves the renderer
+    // never called `store()` at all -- the one stage of the pipeline that was
+    // previously invisible when a build failed to appear in the Build Store.
+    dbg.mobilePreview(
+      'Build Store store() called: platform=%s packageId=%s project=%s appPath=%s startedAt=%d (%s) command=%s',
+      params.platform,
+      params.packageId,
+      params.projectPath,
+      params.appPath,
+      params.startedAt,
+      Number.isFinite(params.startedAt) && params.startedAt > 0
+        ? new Date(params.startedAt).toISOString()
+        : 'invalid',
+      params.command,
+    );
     assertBuildParams(params);
     if (!Number.isFinite(params.startedAt) || params.startedAt <= 0) {
       throw new Error('Mobile build start time is required.');
     }
+    const fingerprintStartedAt = Date.now();
     const fingerprint = await fingerprintMobileBuildInputs(fingerprintParams(params));
+    dbg.mobilePreview(
+      'Build Store fingerprint done in %dms: %s',
+      Date.now() - fingerprintStartedAt,
+      fingerprint.slice(0, 12),
+    );
     const discovered = await discoverMobileBuildArtifact({ ...params, startedAt: params.startedAt });
     const repositoryPath = await resolveRepositoryPath(params.projectPath);
     const id = randomUUID();

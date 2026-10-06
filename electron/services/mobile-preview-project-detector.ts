@@ -67,7 +67,10 @@ async function readMobileAppIdentities(absolutePath: string) {
   const android = expo?.android;
   const ios = expo?.ios;
   const normalizeIdentity = (value: string | null) => {
-    const normalized = value?.trim() ?? '';
+    // Xcode writes the value quoted whenever it contains a `.`, so
+    // `PRODUCT_BUNDLE_IDENTIFIER = "com.example.app";` must not yield an id
+    // with literal quotes -- `simctl`/`adb` would never match it.
+    const normalized = (value?.trim() ?? '').replace(/^["']|["']$/g, '').trim();
     return normalized && !normalized.includes('$(') && !normalized.includes('${')
       ? normalized
       : null;
@@ -105,11 +108,33 @@ async function readMobileAppIdentities(absolutePath: string) {
         path.join(absolutePath, 'ios', entry, 'project.pbxproj'),
         'utf8',
       );
-      iosBundleId = normalizeIdentity(
-        project.match(/PRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;\n]+)\s*;/)?.[1] ??
-          iosBundleId,
+      // A pbxproj holds one `PRODUCT_BUNDLE_IDENTIFIER` per target *and*
+      // configuration, and the first occurrence is routinely the test target's
+      // or a `$(...)`-derived one. Scanning every occurrence and keeping the
+      // first usable, non-test id stops a single unusable match from winning.
+      const candidates = [
+        ...project.matchAll(/PRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;\n]+);/g),
+      ]
+        .map((match) => normalizeIdentity(match[1]))
+        .filter((candidate): candidate is string => Boolean(candidate));
+      // `\w*Tests` already covers `UITests` (with `\w*` = `UI`), so there is
+      // deliberately no second alternative here.
+      const nonTestCandidate = candidates.find(
+        (candidate) => !/\.\w*Tests$/i.test(candidate),
       );
-      if (iosBundleId) break;
+      // A test-looking id is accepted only when nothing else resolved one: an
+      // app id may legitimately end in "tests" (`com.acme.contests`), but it
+      // must never overwrite a real id already read from app.json.
+      const appCandidate =
+        nonTestCandidate ?? (iosBundleId ? undefined : candidates[0]);
+      // Break on an actual find, not on the accumulator. A templated-only
+      // sibling project (`Pods.xcodeproj` carries `org.cocoapods.${...}`, and
+      // `readdir` order is arbitrary) must not end the scan just because
+      // app.json already supplied a value.
+      if (appCandidate) {
+        iosBundleId = appCandidate;
+        break;
+      }
     }
   } catch {
     // Native project may be absent or incomplete.
