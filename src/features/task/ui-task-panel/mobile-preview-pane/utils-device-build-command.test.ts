@@ -178,13 +178,26 @@ describe('applyDeviceToBuildCommand', () => {
       ).toBe(`npx react-native run-ios --udid ${simulator.id}`);
     });
 
-    it('targets an Android emulator through expo using the adb serial', () => {
+    it('targets an Android emulator through expo using the AVD name', () => {
       expect(
         applyDeviceToBuildCommand({
           command: 'npx expo run:android',
           device: emulator,
         }).command,
-      ).toBe('npx expo run:android --device emulator-5554');
+      ).toBe('npx expo run:android --device Pixel_7_API_34');
+    });
+
+    it('reports a missing AVD name when the rail id is still an adb serial', () => {
+      const result = applyDeviceToBuildCommand({
+        command: 'npx expo run:android',
+        device: { ...emulator, id: 'emulator-5554' },
+      });
+      expect(result).toEqual({
+        command: 'npx expo run:android',
+        applied: false,
+        reason: 'missing-avd-name',
+      });
+      expect(getDeviceBuildCommandNotice(result)).toContain('AVD name');
     });
 
     it('targets an Android emulator through react-native using the adb serial', () => {
@@ -196,7 +209,7 @@ describe('applyDeviceToBuildCommand', () => {
       ).toBe('npx react-native run-android --deviceId emulator-5554');
     });
 
-    it('falls back to the rail id when there is no connectionId', () => {
+    it('uses the AVD name even without a connectionId', () => {
       expect(
         applyDeviceToBuildCommand({
           command: 'npx expo run:android',
@@ -358,7 +371,7 @@ describe('applyDeviceToBuildCommand', () => {
           device: emulator,
           stacks: ['expo'],
         }).command,
-      ).toBe('pnpm run android --device emulator-5554');
+      ).toBe('pnpm run android --device Pixel_7_API_34');
     });
 
     it.each([undefined, null, [], ['ios'], ['android']])(
