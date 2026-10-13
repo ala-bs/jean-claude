@@ -6,6 +6,8 @@ import Database from 'better-sqlite3';
 
 import { dbg } from '../lib/debug';
 
+import type { AppSettings } from '@shared/types';
+
 import { Database as DatabaseSchema } from './schema';
 import { migrationProvider } from './migrator';
 
@@ -85,6 +87,162 @@ export async function migrateDatabase() {
   if (promptPrefaceMigrationApplied) {
     await migrateProjectPromptPrefaces();
   }
+
+  const modelSettingsStore = createDbModelSettingsStore();
+  await migrateLegacyModelSettings(modelSettingsStore);
+  await migrateModelProfilesToRevision1(modelSettingsStore);
+}
+
+const LEGACY_MODEL_SETTINGS_KEYS = [
+  'backends',
+  'backendDefaultModels',
+  'thinkingSettings',
+  'summaryModels',
+  'prReviewAgent',
+  'agentMemory',
+  'rateLimitSwap',
+  'aiSkillSlots',
+] as const;
+
+const DERIVED_MODEL_SETTINGS_KEYS = [
+  // `backendModelPresets` is read only so the legacy migration can reuse the
+  // user's own preset names; Revision 1 no longer writes it.
+  'backendModelPresets',
+  'modelProfiles',
+  'activeModelProfileId',
+  'modelFallbackOrder',
+] as const;
+
+/**
+ * Minimal settings access used by the model-settings startup migration so it can
+ * be tested without booting Electron or touching a real database.
+ *
+ * `readRaw` returns `undefined` when the setting has never been written, which is
+ * how the migration distinguishes a fresh install (nothing to migrate) from an
+ * upgrade (legacy keys present).
+ */
+export type ModelSettingsMigrationStore = {
+  readRaw(key: string): Promise<unknown>;
+  write<K extends keyof AppSettings>(
+    key: K,
+    value: AppSettings[K],
+  ): Promise<void>;
+};
+
+function createDbModelSettingsStore(): ModelSettingsMigrationStore {
+  return {
+    async readRaw(key) {
+      const row = await db
+        .selectFrom('settings')
+        .where('key', '=', key)
+        .select('value')
+        .executeTakeFirst();
+      if (!row) return undefined;
+      try {
+        return JSON.parse(row.value);
+      } catch {
+        return undefined;
+      }
+    },
+    async write(key, value) {
+      const { SettingsRepository } = await import('./repositories/settings');
+      await SettingsRepository.set(key, value);
+    },
+  };
+}
+
+/**
+ * Derives `modelProfiles` / `activeModelProfileId` / `modelFallbackOrder` (and any
+ * new `backendModelPresets`) from the legacy model settings keys, once per install.
+ *
+ * Skipped when `modelProfiles` already holds at least one profile, so a user who
+ * edited their profiles is never overwritten, and when no legacy key was ever
+ * written (fresh install — the defaults already apply). The legacy keys are left
+ * in place; they are removed separately.
+ *
+ * Returns `true` when values were written.
+ */
+export async function migrateLegacyModelSettings(
+  store: ModelSettingsMigrationStore,
+): Promise<boolean> {
+  const existingProfiles = await store.readRaw('modelProfiles');
+  if (Array.isArray(existingProfiles) && existingProfiles.length > 0) {
+    return false;
+  }
+
+  const legacy: Record<string, unknown> = {};
+  let hasLegacyValue = false;
+
+  for (const key of LEGACY_MODEL_SETTINGS_KEYS) {
+    const value = await store.readRaw(key);
+    if (value === undefined) continue;
+    legacy[key] = value;
+    hasLegacyValue = true;
+  }
+
+  if (!hasLegacyValue) {
+    dbg.dbMigration('Model settings migration: no legacy settings, skipping');
+    return false;
+  }
+
+  for (const key of DERIVED_MODEL_SETTINGS_KEYS) {
+    const value = await store.readRaw(key);
+    if (value !== undefined) legacy[key] = value;
+  }
+
+  const { migrateLegacyModelSettingsToProfiles } = await import(
+    './repositories/settings'
+  );
+  const migrated = migrateLegacyModelSettingsToProfiles(legacy);
+
+  await store.write('modelProfiles', migrated.profiles);
+  await store.write('activeModelProfileId', migrated.activeModelProfileId);
+  await store.write('modelFallbackOrder', migrated.modelFallbackOrder);
+
+  dbg.dbMigration(
+    'Model settings migration: created %d profiles',
+    migrated.profiles.length,
+  );
+
+  return true;
+}
+
+/**
+ * Revision 0 → Revision 1 of the model-profiles storage, at startup.
+ *
+ * Stored profiles bound each role to the *id* of a preset in the global
+ * `backendModelPresets` list. Revision 1 inlines that preset's triple into the
+ * role and moves the preset list inside each profile (seeding
+ * `quickPresetIds` from `showInQuickSwitcher`). The global keys are only READ
+ * here; they are removed separately.
+ *
+ * Idempotent: profiles that already hold triples and own their presets are left
+ * exactly as they are and nothing is written.
+ *
+ * Returns `true` when `modelProfiles` was rewritten.
+ */
+export async function migrateModelProfilesToRevision1(
+  store: ModelSettingsMigrationStore,
+): Promise<boolean> {
+  const profiles = await store.readRaw('modelProfiles');
+  if (!Array.isArray(profiles) || profiles.length === 0) return false;
+
+  const { migrateProfilePresetIdBindings } = await import(
+    './repositories/settings'
+  );
+  const migrated = migrateProfilePresetIdBindings({
+    profiles,
+    presets: await store.readRaw('backendModelPresets'),
+  });
+
+  if (!migrated) return false;
+
+  await store.write('modelProfiles', migrated);
+  dbg.dbMigration(
+    'Model profiles revision 1: inlined role triples in %d profiles',
+    migrated.length,
+  );
+  return true;
 }
 
 async function getTableColumnNames(tableName: string): Promise<Set<string>> {

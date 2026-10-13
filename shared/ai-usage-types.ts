@@ -127,6 +127,21 @@ export interface AiUsageDashboard {
     providerApiCostUsd: number;
     requests: number;
   }>;
+  byProject: Array<{
+    /** null = usage not attributed to any project (e.g. inline autocomplete). */
+    projectId: string | null;
+    projectName: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+    totalTokens: number;
+    estimatedCostUsd: number;
+    providerCostUsd: number;
+    providerApiCostUsd: number;
+    requests: number;
+    taskCount: number;
+  }>;
   topTasks: Array<{
     taskId: string;
     projectId: string;

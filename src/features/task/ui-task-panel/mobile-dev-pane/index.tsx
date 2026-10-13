@@ -1,6 +1,7 @@
 import {
-  ChevronRight,
+  Camera,
   Hammer,
+  MoreHorizontal,
   Play,
   RefreshCw,
   RotateCcw,
@@ -8,7 +9,6 @@ import {
   Smartphone,
   Square,
   Star,
-  Trash2,
   X,
 } from 'lucide-react';
 import {
@@ -25,6 +25,7 @@ import {
   DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
   type MobilePreviewProjectConfig,
 } from '@shared/types';
+import type { MobilePlatform } from '@shared/mobile-simulator-types';
 import {
   makeMobileDevDeviceKey,
   useMobileDevPaneFavorites,
@@ -34,20 +35,22 @@ import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { cleanIpcError } from '@/lib/ipc-error';
 import { Combobox } from '@/common/ui/combobox';
+import { CommandLogsSection } from '../command-logs-pane/command-logs-section';
 import { createMobileDevServerCommandId } from '@/lib/mobile-preview-runtime';
 import { DeeplinkButton } from './ui-deeplink-button';
+import { focusOnNonInteractiveMouseDown } from '../command-logs-pane/utils-log-pane-focus';
 import { IconButton } from '@/common/ui/icon-button';
-import { InteractiveLog } from '@/features/common/interactive-log';
 import { Separator } from '@/common/ui/separator';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useMobileDevPaneWidth } from '@/stores/navigation';
 import { useMobilePreviewDevices } from '@/hooks/use-mobile-preview';
+import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
 import { useRunCommands } from '@/hooks/use-run-commands';
-import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useToastStore } from '@/stores/toasts';
 
 import {
   buildDeviceOptions,
+  getDeviceChips,
   getFavoriteDevices,
   isFavoriteDevice,
   PLATFORM_LABELS,
@@ -56,6 +59,7 @@ import {
   createStartLaunchRequestId,
   resolveStartLaunchDecision,
 } from './utils-start-launch';
+import { buildMobileDevVirtualTabs } from './utils-log-tabs';
 import { reloadAppOnMetro } from './utils-reload-app';
 import { resolveActiveDevice } from './utils-active-device';
 import { resolveAndroidProjectPath } from './utils-android-project-path';
@@ -66,7 +70,9 @@ import { resolveMobileDevDetectedApp } from './utils-detected-app';
 import { resolveRestartReattach } from './utils-restart-reattach';
 import { restartAppOnDevice } from './utils-restart-app';
 import { summarizeDeviceActionError } from './utils-action-error';
+import { verifyDeeplinkOnDevice } from './utils-verify-deeplink';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from '../constants';
+import { BuildStore } from './ui-build-store';
 
 function StatusDot({
   tone,
@@ -99,12 +105,14 @@ function StatusDot({
  */
 export function MobileDevPane({
   taskId,
+  taskName,
   projectId,
   projectPath,
   mobilePreviewConfig,
   onClose,
 }: {
   taskId: string;
+  taskName?: string;
   projectId: string;
   projectPath: string;
   mobilePreviewConfig: MobilePreviewProjectConfig | null | undefined;
@@ -120,12 +128,14 @@ export function MobileDevPane({
     onWidthChange: setWidth,
   });
 
-  const { selectedDevice, logsExpanded, selectDevice, setLogsExpanded } =
+  const { selectedDevice, selectedLogTab, selectDevice, setSelectedLogTab } =
     useMobileDevPaneTaskState(taskId);
   const { favoriteDevices, toggleFavoriteDevice } = useMobileDevPaneFavorites();
 
   const [bootingDeviceKey, setBootingDeviceKey] = useState<string | null>(null);
   const [isReloading, setIsReloading] = useState(false);
+  const [isCapturingScreenshot, setIsCapturingScreenshot] = useState(false);
+  const [isVerifyingDeeplink, setIsVerifyingDeeplink] = useState(false);
   const [restartingDeviceKey, setRestartingDeviceKey] = useState<string | null>(
     null,
   );
@@ -135,7 +145,8 @@ export function MobileDevPane({
   // inside an effect body is exactly the cascading-render pattern the React
   // compiler rejects. The effect already re-runs on the value it waits for
   // (`hasLiveDevServerPort`), so no render is needed to re-check it.
-  const isStartLaunchPendingRef = useRef(false);
+  const startLaunchDeviceKeyRef = useRef<string | null>(null);
+  const startOperationActiveRef = useRef(false);
   // The device whose app Start is currently deeplinking. Reload and Restart
   // gate on this for the same reason they gate on each other: killing or
   // re-pointing an app while another deeplink is in flight is the documented
@@ -146,26 +157,33 @@ export function MobileDevPane({
   // Only success/progress copy lives inline; failures go to a toast because
   // device errors (devicectl dumps) are far too long for this narrow pane.
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [buildStoreRefreshToken, setBuildStoreRefreshToken] = useState(0);
   const addToast = useToastStore((state) => state.addToast);
   const activeDeviceKeyRef = useRef('');
   const paneRef = useRef<HTMLDivElement>(null);
   const [bootError, setBootError] = useState<string | null>(null);
-  // The pane has two log streams (Metro and the build); one box shows the
-  // selected one. Starting a build switches here so its output is not silently
-  // written to a stream nobody is looking at.
-  //
-  // Holds the *command id* being watched rather than a bare 'build' flag,
-  // because build ids are device-scoped: with a flag, switching device (or
-  // stopping Metro, which clears the selection) silently re-points the box at a
-  // never-started stream and makes Clear act on it, while the running build's
-  // output keeps accumulating out of reach.
+  // The last build this pane put on screen. Build command ids are
+  // device-scoped, so without this, switching device (or stopping Metro, which
+  // clears the selection) would drop a running build's tab while its output
+  // kept accumulating out of reach.
   //
   // Tagged with its task (logs are task-keyed) and compared during render
   // rather than reset in an effect, which would cascade renders -- the same
   // shape as `useRunCommands`'s own `statusTaskId` guard.
-  const [watchedBuild, setWatchedBuild] = useState<{
+  const [stickyBuild, setStickyBuild] = useState<{
     taskId: string;
     commandId: string;
+  } | null>(null);
+  const buildCaptureRef = useRef<{
+    commandId: string;
+    startedAt: number;
+    cancelled: boolean;
+    stored: boolean;
+    command: string;
+    fingerprintCommand: string;
+    platform: MobilePlatform;
+    packageId: string | null;
+    appPath: string;
   } | null>(null);
 
   const appPath = useMemo(
@@ -195,6 +213,7 @@ export function MobileDevPane({
     8081;
 
   const runCommands = useRunCommands({ taskId, projectId, workingDir });
+  const commandAvailability = useProjectCommandAvailability(projectId);
   const devServerStatus = runCommands.statusByCommandId[devServerCommandId];
   const devServerStarting = runCommands.isCommandStarting(devServerCommandId);
   const devServerStopping = runCommands.isCommandStopping(devServerCommandId);
@@ -259,6 +278,14 @@ export function MobileDevPane({
   );
   const isActiveDeviceBooted = activeDevice?.state === 'booted';
   const isDeviceUnavailable = Boolean(activeDevice?.unavailableReason);
+  const isScreenshotSupported =
+    activeDevice?.platform === 'android' ||
+    (activeDevice?.kind !== 'physical' && activeDevice?.platform === 'ios');
+  const canCaptureScreenshot =
+    Boolean(activeDevice) &&
+    isScreenshotSupported &&
+    !isDeviceUnavailable &&
+    (isActiveDeviceBooted || activeDevice?.connection === 'connected');
   // `isBooting` guards re-entrancy; the per-device flags drive the UI, so
   // switching device mid-boot does not show a spinner on the new selection.
   const isBooting = bootingDeviceKey !== null;
@@ -307,6 +334,13 @@ export function MobileDevPane({
   const favorites = useMemo(
     () => getFavoriteDevices({ devices, favoriteDevices }),
     [devices, favoriteDevices],
+  );
+  // What the chip row renders: favorites, plus the selected device when it is
+  // not starred (see `getDeviceChips`). Layout still keys off `favorites`, so a
+  // user with no favorites keeps the full combobox row.
+  const deviceChips = useMemo(
+    () => getDeviceChips({ devices, favoriteDevices, activeDeviceKey }),
+    [activeDeviceKey, devices, favoriteDevices],
   );
   const isActiveDeviceFavorite = activeDevice
     ? isFavoriteDevice({
@@ -400,6 +434,14 @@ export function MobileDevPane({
       }),
     [activeDevice, appPath, mobilePreviewConfig],
   );
+  const detectedApp = mobilePreviewConfig?.detectedApps?.find(
+    (app) => app.path === appPath,
+  );
+  const packageId = activeDevice
+    ? activeDevice.platform === 'android'
+      ? mobilePreviewConfig?.androidPackageName ?? detectedApp?.detectedAndroidPackageName ?? null
+      : mobilePreviewConfig?.iosBundleId ?? detectedApp?.detectedIosBundleId ?? null
+    : null;
   const buildCommandId = build.commandId;
   const buildStatus = buildCommandId
     ? runCommands.statusByCommandId[buildCommandId]
@@ -411,41 +453,47 @@ export function MobileDevPane({
     ? runCommands.isCommandStopping(buildCommandId)
     : false;
   const buildRunning = buildStatus?.status === 'running';
-  // The runner only reports 'running' | 'stopped' | 'errored', and exit 0 maps
-  // to 'stopped' -- the same value as a command that never ran (which has no
-  // entry at all). Without this, a finished build and an unbuilt device render
-  // the identical grey dot, so the outcome has to be spelled out.
-  const buildOutcome: 'building' | 'built' | 'failed' | 'none' = buildStarting
-    ? 'building'
-    : buildRunning
-      ? 'building'
-      : buildStatus?.status === 'errored'
-        ? 'failed'
-        : buildStatus
-          ? 'built'
-          : 'none';
 
   const handleToggleBuild = useCallback(() => {
     // A build always targets exactly one device; with none selected there is
     // nothing to build onto and no command id to scope the run to.
     if (!activeDevice || !buildCommandId) return;
     if (buildRunning) {
-      setWatchedBuild({ taskId, commandId: buildCommandId });
-      setLogsExpanded(true);
+      if (buildCaptureRef.current?.commandId === buildCommandId) {
+        buildCaptureRef.current.cancelled = true;
+      }
+      setStickyBuild({ taskId, commandId: buildCommandId });
+      setSelectedLogTab(buildCommandId);
       void runCommands.stopCommand(buildCommandId);
       return;
     }
     // Guards run before any UI state changes, so a click that cannot start a
     // build does not yank the log box onto an empty stream.
     if (!build.command || !activeDevice) return;
-    setWatchedBuild({ taskId, commandId: buildCommandId });
-    setLogsExpanded(true);
+    const command = build.command;
+    const device = activeDevice;
+    const startedAt = Date.now();
+    setStickyBuild({ taskId, commandId: buildCommandId });
+    setSelectedLogTab(buildCommandId);
     void runCommands.startAdHocCommand({
       runCommandId: buildCommandId,
       // Matches the preview pane's labels for the same command id.
-      name: activeDevice.platform === 'ios' ? 'iOS build' : 'Android build',
-      command: build.command,
+      name: device.platform === 'ios' ? 'iOS build' : 'Android build',
+      command,
       ports: [],
+    }).then((result) => {
+      if (result?.started === false) return;
+      buildCaptureRef.current = {
+        commandId: buildCommandId,
+        startedAt,
+        cancelled: false,
+        stored: false,
+        command,
+        fingerprintCommand: command.replaceAll(device.id, '{{device}}'),
+        platform: device.platform,
+        packageId,
+        appPath,
+      };
     });
   }, [
     activeDevice,
@@ -453,82 +501,144 @@ export function MobileDevPane({
     buildCommandId,
     buildRunning,
     runCommands,
-    setLogsExpanded,
+    appPath,
+    packageId,
+    setSelectedLogTab,
     taskId,
   ]);
 
-  // Sticky to the build actually being watched: switching device (or stopping
-  // Metro, which clears the selection) must not silently re-point the box at a
-  // different -- possibly never-started -- stream.
-  const watchedBuildCommandId =
-    watchedBuild?.taskId === taskId ? watchedBuild.commandId : null;
-  const showingBuildLog = watchedBuildCommandId !== null;
-  const logCommandId = watchedBuildCommandId ?? devServerCommandId;
-  const watchedBuildRunning =
-    watchedBuildCommandId !== null &&
-    runCommands.statusByCommandId[watchedBuildCommandId]?.status === 'running';
-
-  // Subscribing only while the log section is expanded keeps Metro's very
-  // chatty output from re-rendering a collapsed pane.
-  const activeLog =
-    useTaskMessagesStore((state) =>
-      logsExpanded ? state.runCommandLogs[taskId]?.[logCommandId] : undefined,
-    ) ?? null;
-
-  // Bump the generation before the IPC call so late chunks from the old
-  // generation are dropped instead of repopulating the box after the clear.
-  const resetRunCommandLogs = useTaskMessagesStore(
-    (state) => state.resetRunCommandLogs,
-  );
-  const handleClearLogs = useCallback(() => {
-    const generation = resetRunCommandLogs(taskId, logCommandId);
-    void api.runCommands.resetLogs({
-      taskId,
-      runCommandId: logCommandId,
-      generation,
-    });
-  }, [logCommandId, resetRunCommandLogs, taskId]);
-
-  // Scoped to the pane: ⌘K is already bound elsewhere (command logs pane, run
-  // commands overlay), so this must only fire while focus is inside here.
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
-        return;
-      }
-      if (event.key.toLowerCase() !== 'k') return;
-
-      const target = event.target;
-      if (!(target instanceof Node) || !paneRef.current?.contains(target)) {
-        return;
-      }
-
-      event.preventDefault();
-      handleClearLogs();
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleClearLogs]);
-
-  // Without this the pane never holds focus (clicks land on body, and the only
-  // focusable child is the log box, which exists only while expanded), so the
-  // containment gate above would reject every ⌘K. Interactive targets are left
-  // alone so the device combobox keeps managing its own focus.
-  const focusPane = useCallback((event: ReactMouseEvent) => {
-    const target = event.target;
+    const capture = buildCaptureRef.current;
+    // Every gate that can silently drop a finished build, in one line. Without
+    // this the pane gave no way to tell "never captured" from "wrong command
+    // id" from "exited non-zero" when a build failed to reach the Build Store.
+    if (buildStatus?.status === 'stopped' || buildStatus?.status === 'errored') {
+      console.info(
+        'Mobile Build Store gate: status=%s hasCapture=%s commandIdMatch=%s cancelled=%s stored=%s packageId=%s',
+        buildStatus?.status,
+        Boolean(capture),
+        capture ? capture.commandId === buildCommandId : 'n/a',
+        capture?.cancelled,
+        capture?.stored,
+        capture?.packageId,
+      );
+    }
     if (
-      target instanceof HTMLElement &&
-      target.closest('input, textarea, select, button, [contenteditable]')
+      !capture ||
+      capture.commandId !== buildCommandId ||
+      capture.cancelled ||
+      capture.stored ||
+      buildStatus?.status !== 'stopped'
     ) {
       return;
     }
-    paneRef.current?.focus();
-  }, []);
+    // Without a package/bundle id the artifact cannot be installed later, so it
+    // is not storable -- but staying silent here is what made iOS builds look
+    // like they vanished. Say so instead.
+    if (!capture.packageId) {
+      capture.stored = true;
+      console.warn(
+        'Mobile Build Store skipped: no %s id resolved (platform=%s, command=%s)',
+        capture.platform === 'ios' ? 'iOS bundle' : 'Android package',
+        capture.platform,
+        capture.command,
+      );
+      queueMicrotask(() => {
+        // "stopped", not "finished": `run-command-service` maps a
+        // signal-terminated pty to 'stopped' (`exitCode === 0 ? 'stopped' :
+        // 'errored'` ignores `signal`), so a build cancelled from the run
+        // commands overlay or on app quit lands here too. The remediation
+        // advice is right either way; claiming it "finished" would not be.
+        setActionNotice(
+          capture.platform === 'ios'
+            ? 'Build stopped without being stored: no iOS bundle id. Set it in Project settings → Mobile preview.'
+            : 'Build stopped without being stored: no Android package name. Set it in Project settings → Mobile preview.',
+        );
+      });
+      return;
+    }
+    capture.stored = true;
+    const storeBuild = api.mobileBuildStore.store;
+    if (typeof storeBuild !== 'function') {
+      console.warn('Mobile Build Store IPC is unavailable. Restart Jean-Claude to reload the preload bridge.');
+      queueMicrotask(() => {
+        setActionNotice('Build finished, but Build Store is unavailable. Restart Jean-Claude and try again.');
+      });
+      return;
+    }
+    void storeBuild({
+      projectPath,
+      taskName,
+      appPath: capture.appPath,
+      platform: capture.platform,
+      packageId: capture.packageId,
+      command: capture.command,
+      fingerprintCommand: capture.fingerprintCommand,
+      startedAt: capture.startedAt,
+    }).then((artifact) => {
+      console.info('Mobile Build Store stored artifact:', artifact);
+      setBuildStoreRefreshToken((token) => token + 1);
+      setActionNotice('Build stored for quick reinstall.');
+    }).catch((cause) => {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      console.warn('Mobile Build Store store() failed:', reason, capture);
+      setActionNotice(`Build finished, but could not be stored: ${reason}`);
+      // Discovery failures carry the searched roots and per-candidate rejection
+      // reasons, which is far too much text for this narrow pane's inline
+      // notice -- the pane's own convention sends dumps like that to a toast.
+      // Inline-only is why this reason went unread while builds "vanished".
+      addToast({
+        type: 'error',
+        message: `${capture.platform === 'ios' ? 'iOS' : 'Android'} build could not be stored: ${reason}`,
+      });
+    });
+  }, [addToast, buildCommandId, buildStatus?.status, projectPath, taskName]);
+
+  const stickyBuildCommandId =
+    stickyBuild?.taskId === taskId ? stickyBuild.commandId : null;
+  const virtualTabs = useMemo(
+    () =>
+      buildMobileDevVirtualTabs({
+        projectId,
+        devServerCommandId,
+        buildCommandId,
+        stickyBuildCommandId,
+        activeDevice,
+        // Build tabs are device-scoped; without the list two simulators on one
+        // platform would both render as plain "iOS build".
+        devices,
+      }),
+    [
+      activeDevice,
+      buildCommandId,
+      devServerCommandId,
+      devices,
+      projectId,
+      stickyBuildCommandId,
+    ],
+  );
+
+  // Tabs are only visible while their command is running or still holds output,
+  // so *any* of these ids -- including Metro's -- can be absent: a fresh task has
+  // no tabs at all, and clearing a stopped command's logs retires its tab.
+  // `CommandLogsSection` falls back to the first visible tab and, with none,
+  // shows `emptyText` instead of an empty log box. So a stale or retired
+  // selection degrades rather than blanking the pane.
+  const selectedCommandId = selectedLogTab ?? devServerCommandId;
+
+  // Without this the pane never holds focus (clicks land on body), so the
+  // containment gate on the logs section's shortcuts would reject every ⌘K.
+  // Interactive targets are left alone so the device combobox and the log
+  // search box keep managing their own focus.
+  const focusPane = useCallback(
+    (event: ReactMouseEvent) => focusOnNonInteractiveMouseDown(paneRef)(event),
+    [],
+  );
 
   const handleSelectDevice = useCallback(
     (deviceKey: string) => {
+      startLaunchDeviceKeyRef.current = null;
+      startOperationActiveRef.current = false;
       setBootError(null);
       setActionNotice(null);
       const device = findDeviceByKey(deviceKey);
@@ -578,27 +688,46 @@ export function MobileDevPane({
     refetchDevices,
   ]);
 
-  const handleToggleDevServer = useCallback(() => {
+  const handleToggleDevServer = useCallback(async () => {
     if (devServerRunning) {
-      // The feed list badge reads `deviceByTaskId` directly, so a selection that
-      // outlives Metro would keep advertising a device this task no longer runs
-      // on. Clearing here is what makes the badge disappear -- but only once the
-      // stop actually succeeded. `stopCommand` rethrows, and the status stays
-      // 'running' on failure, so clearing up front would drop the selection
-      // (disabling Boot/Restart) while Metro is still very much alive.
+      // Stopping Metro does not change the device the user is working on. Keep
+      // the selection so the user can start Metro again without re-selecting a
+      // device, and so Boot/Restart remain scoped to that device.
       // A stop cancels any deeplink the previous Start was still waiting to
       // fire, otherwise it would land on the next run's port.
-      isStartLaunchPendingRef.current = false;
-      void runCommands
-        .stopCommand(devServerCommandId)
-        .then(() => selectDevice(null));
+      startLaunchDeviceKeyRef.current = null;
+      void runCommands.stopCommand(devServerCommandId);
       return;
     }
     // Start means "run the app", not just "run Metro": the deeplink is what
     // points the dev client at this server.
-    isStartLaunchPendingRef.current = true;
-    void runCommands
-      .startAdHocCommand({
+    if (devServerStarting || isBooting || startOperationActiveRef.current) return;
+    startOperationActiveRef.current = true;
+    const startDeviceKey = activeDeviceKey;
+    startLaunchDeviceKeyRef.current = startDeviceKey || null;
+    setBootError(null);
+    try {
+      if (
+        activeDevice &&
+        activeDevice.state !== 'booted' &&
+        activeDevice.kind !== 'physical' &&
+        !isDeviceUnavailable
+      ) {
+        setBootError(null);
+        setBootingDeviceKey(startDeviceKey);
+        await api.mobilePreview.bootDevice({
+          platform: activeDevice.platform,
+          deviceId: activeDevice.id,
+        });
+        await refetchDevices();
+        if (activeDeviceKeyRef.current !== startDeviceKey) {
+          startLaunchDeviceKeyRef.current = null;
+          startOperationActiveRef.current = false;
+          return;
+        }
+      }
+
+      await runCommands.startAdHocCommand({
         runCommandId: devServerCommandId,
         // Must match the preview pane, which starts this same runCommandId --
         // otherwise the shared command's label flips depending on who started it.
@@ -606,27 +735,40 @@ export function MobileDevPane({
         command: devServerCommand,
         ports: [configuredDevServerPort],
         availablePort: { provider: 'args' },
-      })
-      .then(({ started }) => {
+      }).then(({ started }) => {
         // `runStart` RESOLVES with `started: false` on a ports-in-use conflict
         // and when a newer operation supersedes this one -- it only rejects on
         // a hard error. Leaving the flag set there would arm a deeplink that
         // fires much later, when this shared run command (the preview pane
         // starts the same `devServerCommandId`) next reports a live port.
-        if (!started) isStartLaunchPendingRef.current = false;
-      })
-      .catch(() => {
-        // Metro never came up, so there is nothing to attach to. The run
-        // command surfaces its own failure.
-        isStartLaunchPendingRef.current = false;
+        if (!started) {
+          startLaunchDeviceKeyRef.current = null;
+          startOperationActiveRef.current = false;
+        }
       });
+    } catch (error) {
+      startLaunchDeviceKeyRef.current = null;
+      startOperationActiveRef.current = false;
+      if (activeDeviceKeyRef.current === startDeviceKey || !startDeviceKey) {
+        setBootError(cleanIpcError(error));
+      }
+    } finally {
+      setBootingDeviceKey((current) =>
+        current === startDeviceKey ? null : current,
+      );
+    }
   }, [
+    activeDevice,
+    activeDeviceKey,
     configuredDevServerPort,
     devServerCommand,
     devServerCommandId,
     devServerRunning,
+    devServerStarting,
+    isBooting,
+    isDeviceUnavailable,
+    refetchDevices,
     runCommands,
-    selectDevice,
   ]);
 
   // Reload = swap the JS bundle in the already-running app, via Metro's own
@@ -764,6 +906,87 @@ export function MobileDevPane({
     [activeDevice, isReloading, restartingDeviceKey],
   );
 
+  const handleVerifyDeeplink = useCallback(async () => {
+    if (!activeDevice || !isActiveDeviceBooted || isVerifyingDeeplink) return;
+    const verificationDeviceKey = activeDeviceKey;
+    setActionNotice(null);
+    setIsVerifyingDeeplink(true);
+    try {
+      const result = await verifyDeeplinkOnDevice({
+        api: api.mobilePreview,
+        device: activeDevice,
+        projectId,
+        taskId,
+        appPath,
+        androidProjectPath,
+      });
+      // Status probes can be slow on iOS physical devices. Do not report an
+      // old device's result after the user has selected another device (or
+      // cleared the selection while the probe was in flight).
+      if (activeDeviceKeyRef.current !== verificationDeviceKey) return;
+      const platformLabel = PLATFORM_LABELS[result.platform];
+      setActionNotice(
+        result.appInstalled === true
+          ? `${platformLabel} deeplink verified (${result.appId ?? 'installed app'}).`
+          : result.appInstalled === false
+            ? `${platformLabel} app is not installed on ${activeDevice.name}.`
+            : `${platformLabel} app installation could not be determined.`,
+      );
+    } catch (error) {
+      if (activeDeviceKeyRef.current !== verificationDeviceKey) return;
+      addToast({
+        message: `Deeplink verification failed: ${summarizeDeviceActionError(error)}`,
+        type: 'error',
+      });
+    } finally {
+      setIsVerifyingDeeplink(false);
+    }
+  }, [
+    activeDevice,
+    activeDeviceKey,
+    addToast,
+    androidProjectPath,
+    appPath,
+    isActiveDeviceBooted,
+    isVerifyingDeeplink,
+    projectId,
+    taskId,
+  ]);
+
+  const handleCaptureScreenshot = useCallback(async () => {
+    if (!activeDevice || !canCaptureScreenshot || isCapturingScreenshot) {
+      return;
+    }
+    const deviceName = activeDevice.name;
+    setActionNotice(null);
+    setIsCapturingScreenshot(true);
+    try {
+      const result = await api.mobilePreview.captureScreenshot({
+        platform: activeDevice.platform,
+        deviceId: activeDevice.id,
+      });
+      const timestamp = new Date().toISOString().replaceAll(':', '-');
+      await api.dialog.saveFile({
+        defaultPath: `mobile-screenshot-${timestamp}.${result.extension}`,
+        filters: [{ name: 'PNG image', extensions: ['png'] }],
+        content: result.content,
+      });
+      setActionNotice(`Screenshot captured from ${deviceName}.`);
+    } catch (error) {
+      addToast({
+        message: `Screenshot failed: ${summarizeDeviceActionError(error)}`,
+        type: 'error',
+      });
+    } finally {
+      setIsCapturingScreenshot(false);
+    }
+  }, [
+    activeDevice,
+    addToast,
+    canCaptureScreenshot,
+    isCapturingScreenshot,
+  ]);
+
   const handleRestartApp = useCallback(async () => {
     // Mirrors `handleBootDevice`'s re-entrancy guard: the button disables
     // itself, but switching device mid-restart re-enables it and would start a
@@ -841,7 +1064,8 @@ export function MobileDevPane({
   // reports it (see `resolveStartLaunchDecision`).
   useEffect(() => {
     const decision = resolveStartLaunchDecision({
-      isPending: isStartLaunchPendingRef.current,
+      isPending:
+        startLaunchDeviceKeyRef.current === (activeDeviceKey || null),
       hasLiveDevServerPort,
       isLoadingDevices,
       device: activeDevice,
@@ -853,7 +1077,8 @@ export function MobileDevPane({
     if (decision.status === 'idle' || decision.status === 'waiting') return;
     // Cleared before the await so a slow deeplink cannot be fired twice by a
     // re-render, and so Stop is not needed to escape a stuck pending state.
-    isStartLaunchPendingRef.current = false;
+    startLaunchDeviceKeyRef.current = null;
+    startOperationActiveRef.current = false;
     // `activeDevice` is non-null for a 'launch' decision; re-checked for the
     // type narrowing.
     if (decision.status === 'skip' || !activeDevice) return;
@@ -935,6 +1160,8 @@ export function MobileDevPane({
       onMouseDown={focusPane}
       style={{ width }}
       data-mobile-dev-pane
+      // The project panel defers ⌘F to whichever pane owns a command log.
+      data-command-logs-pane
       className="panel-edge-shadow bg-bg-0 relative flex h-full flex-col"
     >
       <div
@@ -959,10 +1186,10 @@ export function MobileDevPane({
       </div>
       <Separator />
 
-      {/* Scrollable rather than shrink-0 so a short window clips nothing: the
-          controls keep their natural height and scroll internally instead of
-          pushing the logs (or the Start/Stop buttons) out of the pane. */}
-      <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-4 py-3">
+      {/* Fixed on top and capped: the controls keep their natural height and
+          scroll internally rather than either being clipped by a short window
+          or growing until they eat the log below. */}
+      <div className="flex max-h-[55%] shrink-0 flex-col gap-3 overflow-y-auto px-4 py-3">
         {/* Device */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
@@ -995,66 +1222,50 @@ export function MobileDevPane({
             </p>
           ) : (
             <>
-              <div className="flex items-center gap-2">
-                <Combobox
-                  value={activeDeviceKey}
-                  options={deviceOptions}
-                  onChange={handleSelectDevice}
-                  renderOptionTrailing={renderOptionTrailing}
-                  onOpenChange={handlePickerOpenChange}
-                  size="sm"
-                  className="min-w-0 flex-1"
-                  label="Select a device"
-                  placeholder="Select a device…"
-                  searchPlaceholder="Search devices…"
-                  emptyLabel="No matching devices"
-                />
-                <IconButton
-                  onClick={handleToggleFavorite}
-                  size="sm"
-                  disabled={!activeDevice}
-                  icon={
-                    <Star
-                      className={clsx(
-                        isActiveDeviceFavorite &&
-                          'fill-current text-amber-400',
-                      )}
-                    />
-                  }
-                  tooltip={
-                    isActiveDeviceFavorite
-                      ? 'Remove from favorites'
-                      : 'Add to favorites'
-                  }
-                />
-                <Button
-                  onClick={handleBootDevice}
-                  size="sm"
-                  variant="secondary"
-                  loading={isActiveDeviceBooting}
-                  disabled={
-                    !activeDeviceKey ||
-                    isActiveDeviceBooted ||
-                    isDeviceUnavailable
-                  }
-                  title={
-                    isDeviceUnavailable
-                      ? (activeDevice?.unavailableReason ??
-                        'Device is unavailable')
-                      : isActiveDeviceBooted
-                        ? 'Device is already booted'
-                        : 'Boot this device'
-                  }
-                >
-                  {isActiveDeviceBooted ? 'Booted' : 'Boot'}
-                </Button>
-              </div>
+              {/* With favorites the chips ARE the picker: the full-width
+                  combobox collapses into a "…" chip, which buys back a row of
+                  vertical space in a pane that is mostly logs. */}
+              {favorites.length === 0 && (
+                <div className="flex items-center gap-2">
+                  <Combobox
+                    value={activeDeviceKey}
+                    options={deviceOptions}
+                    onChange={handleSelectDevice}
+                    renderOptionTrailing={renderOptionTrailing}
+                    onOpenChange={handlePickerOpenChange}
+                    size="sm"
+                    className="min-w-0 flex-1"
+                    label="Select a device"
+                    placeholder="Select a device…"
+                    searchPlaceholder="Search devices…"
+                    emptyLabel="No matching devices"
+                  />
+                  <IconButton
+                    onClick={handleToggleFavorite}
+                    size="sm"
+                    disabled={!activeDevice}
+                    icon={
+                      <Star
+                        className={clsx(
+                          isActiveDeviceFavorite &&
+                            'fill-current text-amber-400',
+                        )}
+                      />
+                    }
+                    tooltip={
+                      isActiveDeviceFavorite
+                        ? 'Remove from favorites'
+                        : 'Add to favorites'
+                    }
+                  />
+                </div>
+              )}
 
               {/* One-click row for starred devices, so the common case skips
                   the dropdown entirely. */}
               {favorites.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {favorites.map((device) => {
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {deviceChips.map((device) => {
                     const deviceKey = makeMobileDevDeviceKey({
                       platform: device.platform,
                       deviceId: device.id,
@@ -1097,6 +1308,23 @@ export function MobileDevPane({
                       </button>
                     );
                   })}
+                  <Combobox
+                    value={activeDeviceKey}
+                    options={deviceOptions}
+                    onChange={handleSelectDevice}
+                    renderOptionTrailing={renderOptionTrailing}
+                    onOpenChange={handlePickerOpenChange}
+                    size="sm"
+                    // Matches the chips beside it (same pill, same border,
+                    // same height) so the row reads as one control strip.
+                    className="border-line text-ink-2 hover:bg-bg-1 !h-auto shrink-0 !rounded-full border !bg-transparent !px-2 !py-0.5 !text-xs"
+                    label="Select a device"
+                    searchPlaceholder="Search devices…"
+                    emptyLabel="No matching devices"
+                    triggerContent={
+                      <MoreHorizontal className="size-3.5" aria-hidden />
+                    }
+                  />
                 </div>
               )}
             </>
@@ -1114,74 +1342,6 @@ export function MobileDevPane({
             <p className="text-xs break-words text-red-500">{bootError}</p>
           )}
 
-          {/* Build & run onto the selected device. The command comes from
-              project settings (or detection) and, where the CLI is recognized,
-              is pointed at this exact device rather than the tool's own default
-              simulator. When it cannot be targeted, `build.notice` says so. */}
-          <div className="flex items-center gap-2">
-            <StatusDot
-              tone={
-                buildOutcome === 'failed'
-                  ? 'errored'
-                  : buildOutcome === 'building'
-                    ? 'running'
-                    : 'stopped'
-              }
-              pulse={buildStarting || buildStopping}
-            />
-            <span className="text-ink-1 text-xs font-medium">Build</span>
-            {buildOutcome !== 'none' && (
-              <span
-                className={clsx(
-                  'text-[11px]',
-                  buildOutcome === 'failed' ? 'text-red-500' : 'text-ink-3',
-                )}
-              >
-                {buildOutcome === 'building'
-                  ? 'Building…'
-                  : buildOutcome === 'failed'
-                    ? 'Failed'
-                    : 'Built'}
-              </span>
-            )}
-            <Button
-              onClick={handleToggleBuild}
-              size="sm"
-              variant="secondary"
-              className="ml-auto"
-              loading={buildStarting || buildStopping}
-              // No device selected means no build, full stop -- a build always
-              // targets one device, and the command id is keyed by it. Stated
-              // ahead of the `buildRunning` escape hatch so it cannot be
-              // reached: without a device there is no command id to be running.
-              disabled={
-                !activeDeviceKey || (!buildRunning && !build.command)
-              }
-              icon={buildRunning ? <Square /> : <Hammer />}
-              title={
-                buildRunning
-                  ? 'Stop the running build'
-                  : (build.unavailableReason ??
-                    `Build and run on ${activeDevice?.name ?? 'the selected device'}`)
-              }
-            >
-              {buildRunning ? 'Stop' : 'Build'}
-            </Button>
-          </div>
-          {build.command ? (
-            <p className="text-ink-3 truncate font-mono text-[11px]">
-              {build.command}
-            </p>
-          ) : (
-            build.unavailableReason && (
-              <p className="text-ink-3 text-xs break-words">
-                {build.unavailableReason}
-              </p>
-            )
-          )}
-          {build.notice && (
-            <p className="text-ink-3 text-xs break-words">{build.notice}</p>
-          )}
         </div>
 
         <Separator />
@@ -1201,15 +1361,72 @@ export function MobileDevPane({
                 :{effectiveDevServerPort}
               </span>
             </span>
-            <Button
-              onClick={handleToggleDevServer}
-              size="sm"
-              variant="secondary"
-              loading={devServerStarting || devServerStopping}
-              icon={devServerRunning ? <Square /> : <Play />}
-            >
-              {devServerRunning ? 'Stop' : 'Start'}
-            </Button>
+            <div className="flex items-center gap-2">
+              {/* Boots the selected device. Lives on this row (not under the
+                  device picker) so the device section stays one line tall. */}
+              <Button
+                onClick={handleBootDevice}
+                size="sm"
+                variant="secondary"
+                loading={isActiveDeviceBooting}
+                disabled={
+                  !activeDeviceKey || isActiveDeviceBooted || isDeviceUnavailable
+                }
+                title={
+                  isDeviceUnavailable
+                    ? (activeDevice?.unavailableReason ??
+                      'Device is unavailable')
+                    : isActiveDeviceBooted
+                      ? 'Device is already booted'
+                      : 'Boot this device'
+                }
+              >
+                {isActiveDeviceBooted ? 'Booted' : 'Boot'}
+              </Button>
+              {/* Build & run onto the selected device. The command comes from
+                  project settings (or detection) and, where the CLI is
+                  recognized, is pointed at this exact device rather than the
+                  tool's own default simulator. */}
+              <div className="flex items-stretch">
+                <Button
+                  onClick={handleToggleBuild}
+                  size="sm"
+                  variant="secondary"
+                  className="!rounded-r-none"
+                  loading={buildStarting || buildStopping}
+                // No device selected means no build, full stop -- a build
+                // always targets one device, and the command id is keyed by
+                // it. Stated ahead of the `buildRunning` escape hatch so it
+                // cannot be reached: without a device there is no command id
+                // to be running.
+                disabled={!activeDeviceKey || (!buildRunning && !build.command)}
+                icon={buildRunning ? <Square /> : <Hammer />}
+                title={
+                  buildRunning
+                    ? 'Stop the running build'
+                    : (build.unavailableReason ??
+                      `Build and run on ${activeDevice?.name ?? 'the selected device'}`)
+                }
+                >
+                  {buildRunning ? 'Stop' : 'Build'}
+                </Button>
+                <BuildStore
+                  projectPath={projectPath}
+                  platform={activeDevice?.platform ?? 'android'}
+                  device={activeDevice}
+                  refreshToken={buildStoreRefreshToken}
+                />
+              </div>
+              <Button
+                onClick={handleToggleDevServer}
+                size="sm"
+                variant="secondary"
+                loading={devServerStarting || devServerStopping}
+                icon={devServerRunning ? <Square /> : <Play />}
+              >
+                {devServerRunning ? 'Stop' : 'Start'}
+              </Button>
+            </div>
           </div>
           <p className="text-ink-3 truncate font-mono text-[11px]">
             {devServerCommand}
@@ -1274,6 +1491,27 @@ export function MobileDevPane({
             >
               Restart
             </Button>
+            <Button
+              onClick={() => void handleCaptureScreenshot()}
+              size="sm"
+              variant="secondary"
+              className="flex-1"
+              loading={isCapturingScreenshot}
+              disabled={!canCaptureScreenshot || isCapturingScreenshot}
+              icon={<Camera />}
+              title={
+                !activeDevice
+                  ? 'Select a device to capture a screenshot'
+                  : !isScreenshotSupported
+                    ? 'Screenshots are currently supported for iOS simulators and Android devices'
+                    : !isActiveDeviceBooted &&
+                        activeDevice.connection !== 'connected'
+                      ? 'Boot or connect the device to capture a screenshot'
+                      : 'Capture a PNG screenshot of the device screen'
+              }
+            >
+              Screenshot
+            </Button>
             <DeeplinkButton
               // Same hazard as Reload: a restart in flight means the app is
               // mid-relaunch, and deeplinking into a still-booting dev client
@@ -1297,6 +1535,26 @@ export function MobileDevPane({
               }
               onOpenDeeplink={handleOpenDeeplink}
             />
+            <IconButton
+              onClick={() => void handleVerifyDeeplink()}
+              size="sm"
+              disabled={
+                !activeDevice || !isActiveDeviceBooted || isVerifyingDeeplink
+              }
+              icon={
+                <RefreshCw
+                  className={clsx(isVerifyingDeeplink && 'animate-spin')}
+                />
+              }
+              tooltip={
+                !activeDevice
+                  ? 'Select a device to verify its deeplink app'
+                  : !isActiveDeviceBooted
+                    ? 'Boot the device to verify its deeplink app'
+                    : 'Refresh deeplink verification'
+              }
+              aria-label="Refresh deeplink verification"
+            />
           </div>
 
           {actionNotice && (
@@ -1307,91 +1565,21 @@ export function MobileDevPane({
 
       <Separator />
 
-      {/* Logs */}
-      <div className="flex shrink-0 items-center justify-between pr-2">
-        <button
-          type="button"
-          onClick={() => setLogsExpanded(!logsExpanded)}
-          className="text-ink-2 hover:bg-bg-1 flex flex-1 items-center gap-1.5 px-4 py-2 text-xs font-medium"
-          aria-expanded={logsExpanded}
-        >
-          <ChevronRight
-            aria-hidden
-            className={clsx(
-              'size-3.5 transition-transform',
-              logsExpanded && 'rotate-90',
-            )}
-          />
-          Logs
-        </button>
-        {/* Two streams share one box; the tabs say which one is shown. The
-            Build tab stays available while a watched build has output, even
-            after the device selection moved on. */}
-        <div className="flex items-center gap-1 pr-1">
-          <button
-            type="button"
-            onClick={() => {
-              setWatchedBuild(null);
-              setLogsExpanded(true);
-            }}
-            aria-pressed={!showingBuildLog}
-            className={clsx(
-              'rounded px-1.5 py-0.5 text-[11px] transition-colors',
-              !showingBuildLog
-                ? 'bg-acc/15 text-ink-1'
-                : 'text-ink-3 hover:bg-bg-1',
-            )}
-          >
-            Metro
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              // Falls back to the selected device's build when nothing is being
-              // watched yet; disabled when there is neither.
-              const commandId = watchedBuildCommandId ?? buildCommandId;
-              if (commandId) setWatchedBuild({ taskId, commandId });
-              setLogsExpanded(true);
-            }}
-            aria-pressed={showingBuildLog}
-            disabled={!watchedBuildCommandId && !buildCommandId}
-            className={clsx(
-              'rounded px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-40',
-              showingBuildLog
-                ? 'bg-acc/15 text-ink-1'
-                : 'text-ink-3 hover:bg-bg-1',
-            )}
-          >
-            Build
-          </button>
-        </div>
-        <IconButton
-          onClick={handleClearLogs}
-          size="sm"
-          icon={<Trash2 />}
-          tooltip="Clear logs (⌘K)"
-        />
-      </div>
-
-      {logsExpanded && (
-        <InteractiveLog
-          log={activeLog}
-          taskId={taskId}
-          runCommandId={logCommandId}
-          isRunning={showingBuildLog ? watchedBuildRunning : devServerRunning}
-          workingDir={workingDir}
-          ignoreBrowserShortcuts
-          emptyText={
-            showingBuildLog
-              ? 'Run Build to see output.'
-              : 'Start Metro to see output.'
-          }
-          // The floor matters because the logs box has flex-basis 0: without it
-          // flexbox hands every pixel of a squeeze to the controls block above
-          // and the log silently renders at zero height.
-          className="min-h-[120px] overflow-hidden"
-        />
-      )}
+      <CommandLogsSection
+        className="flex-1"
+        keyScopeRef={paneRef}
+        virtualTabs={virtualTabs}
+        emptyText="No logs yet. Start Metro or run a build to see output here."
+        selectedCommandId={selectedCommandId}
+        onSelectCommand={(id) => {
+          if (id) setSelectedLogTab(id);
+        }}
+        runCommands={runCommands}
+        commandAvailability={commandAvailability}
+        taskId={taskId}
+        projectId={projectId}
+        workingDir={workingDir}
+      />
     </div>
   );
 }

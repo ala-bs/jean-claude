@@ -48,6 +48,15 @@ function isOptimisticQueued(evaluation: EvaluationWithOptimistic) {
   return evaluation._optimisticQueued;
 }
 
+/**
+ * An optional check that failed. It cannot block the merge, so it must not be
+ * rendered in the same red as a required failure — both the icon and the label
+ * go muted.
+ */
+function isOptionalFailure(evaluation: EvaluationWithOptimistic) {
+  return !evaluation.configuration.isBlocking && evaluation.status === 'rejected';
+}
+
 function getStatusIcon(
   evaluation: EvaluationWithOptimistic,
   isIgnored?: boolean,
@@ -75,7 +84,14 @@ function getStatusIcon(
     case 'approved':
       return <CheckCircle2 className={clsx(cls, 'text-status-done')} />;
     case 'rejected':
-      return <XCircle className={clsx(cls, 'text-status-fail')} />;
+      return (
+        <XCircle
+          className={clsx(
+            cls,
+            isOptionalFailure(evaluation) ? 'text-ink-3' : 'text-status-fail',
+          )}
+        />
+      );
     case 'running':
       return <Loader2 className={clsx(cls, 'animate-spin text-blue-400')} />;
     case 'queued':
@@ -108,6 +124,7 @@ function getStatusLabel(evaluation: EvaluationWithOptimistic) {
 }
 
 function getStatusColor(evaluation: EvaluationWithOptimistic) {
+  if (isOptionalFailure(evaluation)) return 'text-ink-3';
   if (isOptimisticQueued(evaluation)) return 'text-yellow-400';
   if (isExpired(evaluation)) return 'text-orange-400';
   if (isPending(evaluation)) return 'text-ink-3';
@@ -531,8 +548,10 @@ function CheckRow({
           {name}
         </span>
 
-        {/* Optional badge */}
-        {isOptional && !canSetPolicyIgnored && (
+        {/* Optional badge — shown for every non-blocking policy, including the
+            ones that carry the make-optional toggle. A failing optional check
+            reads as a hard failure without it. */}
+        {isOptional && (
           <span className="border-glass-border text-ink-4 shrink-0 rounded border px-1.5 py-0.5 text-[10px] tracking-wider uppercase">
             Optional
           </span>

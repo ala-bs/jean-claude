@@ -9,6 +9,7 @@ import {
   copyExistingProjectFeatureMapToTemp,
   parseProjectFeatureMapContent,
   saveProjectFeatureMapFromTemp,
+  validateProjectFeatureMapDraft,
 } from './project-feature-map-generation-service';
 
 describe('buildProjectFeatureMapPrompt', () => {
@@ -186,5 +187,88 @@ describe('saveProjectFeatureMapFromTemp', () => {
     );
     expect(savedContent).toContain('id: project-summary-feature-map');
     expect(savedContent).toContain('id: feature-map-save-action');
+  });
+
+  it('rejects a draft that becomes invalid before saving', async () => {
+    await mkdir(tmpdir(), { recursive: true });
+    const tempDir = await mkdtemp(path.join(tmpdir(), 'feature-map-'));
+    const tempFilePath = path.join(tempDir, 'draft.yaml');
+    const savedFilePath = path.join(tempDir, 'feature-map.yaml');
+
+    await writeFile(
+      tempFilePath,
+      `features:
+  - name: Incomplete
+    summary: Missing children.
+    key_files: []
+`,
+    );
+
+    await expect(
+      saveProjectFeatureMapFromTemp({ tempFilePath, savedFilePath }),
+    ).rejects.toThrow('children must be an array');
+    await expect(readFile(savedFilePath, 'utf8')).rejects.toThrow();
+  });
+});
+
+describe('validateProjectFeatureMapDraft', () => {
+  it('returns valid with the top-level feature count', async () => {
+    await mkdir(tmpdir(), { recursive: true });
+    const tempDir = await mkdtemp(path.join(tmpdir(), 'feature-map-'));
+    const tempFilePath = path.join(tempDir, 'feature-map.yaml');
+    await writeFile(
+      tempFilePath,
+      `features:
+  - id: dashboard
+    name: Dashboard
+    summary: Project dashboard.
+    key_files: []
+    children: []
+`,
+    );
+
+    await expect(validateProjectFeatureMapDraft({ tempFilePath })).resolves.toEqual(
+      expect.objectContaining({ status: 'valid', featureCount: 1 }),
+    );
+  });
+
+  it('reports missing files without throwing', async () => {
+    await mkdir(tmpdir(), { recursive: true });
+    const tempFilePath = path.join(
+      await mkdtemp(path.join(tmpdir(), 'feature-map-')),
+      'missing.yaml',
+    );
+
+    await expect(validateProjectFeatureMapDraft({ tempFilePath })).resolves.toEqual(
+      expect.objectContaining({
+        status: 'invalid',
+        error: 'output file not found',
+      }),
+    );
+  });
+
+  it('rejects malformed nested nodes instead of dropping them', async () => {
+    await mkdir(tmpdir(), { recursive: true });
+    const tempDir = await mkdtemp(path.join(tmpdir(), 'feature-map-'));
+    const tempFilePath = path.join(tempDir, 'feature-map.yaml');
+    await writeFile(
+      tempFilePath,
+      `features:
+  - name: Dashboard
+    summary: Project dashboard.
+    key_files: []
+    children:
+      - name: Broken child
+        summary: Missing children array.
+        key_files: []
+`,
+    );
+
+    await expect(validateProjectFeatureMapDraft({ tempFilePath })).resolves.toEqual(
+      expect.objectContaining({
+        status: 'invalid',
+        error: expect.stringContaining('children must be an array'),
+      }),
+    );
   });
 });

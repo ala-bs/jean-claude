@@ -9,6 +9,36 @@ import { getMobileBuildCommandId } from '../mobile-preview-pane/utils-setup-oper
 
 const PLATFORM_LABEL = { ios: 'iOS', android: 'Android' } as const;
 
+function disableBundler({
+  command,
+  stacks,
+}: {
+  command: string;
+  stacks: readonly string[] | null | undefined;
+}) {
+  const trimmed = command.trim();
+  // Do not mutate wrappers or compound shell commands. Their arguments may
+  // not reach the native CLI, and custom scripts are not guaranteed to accept
+  // framework-specific flags.
+  if (!trimmed || /[;&|]/.test(trimmed)) return command;
+  if (/\s--no-(bundler|packager)(?:\s|$)/.test(command)) return command;
+
+  const isExpoCommand = /^(?:(?:npx|pnpm\s+exec|yarn\s+dlx|bunx)\s+)?expo\s+run:/.test(trimmed);
+  const isReactNativeCommand = /^(?:(?:npx|pnpm\s+exec|yarn\s+dlx|bunx)\s+)?react-native\s+run-/.test(trimmed);
+  const isScriptRunner = /^(?:npm\s+(?:run|run-script)\s+\S+|(?:pnpm|yarn)\s+(?:run\s+)?\S+|bun\s+run\s+\S+)/.test(trimmed);
+  const flag = isExpoCommand || (isScriptRunner && stacks?.includes('expo'))
+    ? '--no-bundler'
+    : isReactNativeCommand || (isScriptRunner && stacks?.includes('react-native'))
+      ? '--no-packager'
+      : null;
+  if (!flag) return command;
+
+  // npm forwards script arguments only after a literal `--`.
+  const needsSeparator = /^npm\s+(?:run|run-script)\s/.test(command);
+  const separator = needsSeparator && !/(^|\s)--(\s|$)/.test(command) ? ' --' : '';
+  return `${command.trimEnd()}${separator} ${flag}`;
+}
+
 /** First candidate that is more than whitespace, in precedence order. */
 function firstUsableCommand(
   candidates: ReadonlyArray<string | null | undefined>,
@@ -94,7 +124,10 @@ export function resolveMobileDevBuildCommand({
 
   return {
     commandId,
-    command: applied.command,
+    command: disableBundler({
+      command: applied.command,
+      stacks: detectedApp?.stacks,
+    }),
     unavailableReason: null,
     notice: getDeviceBuildCommandNotice(applied),
   };

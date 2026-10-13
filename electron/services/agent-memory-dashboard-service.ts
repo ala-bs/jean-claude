@@ -13,7 +13,14 @@ import {
   agentMemoryItemSchema,
   type AgentMemoryPage,
 } from '@shared/agent-memory-types';
-import type { AgentMemorySetting, Project } from '@shared/types';
+import type {
+  AgentMemorySetting,
+  ModelPreference,
+  Project,
+  ThinkingEffort,
+} from '@shared/types';
+import type { AgentBackendType } from '@shared/agent-backend-types';
+import type { ResolvedModel } from '@shared/model-profiles';
 
 import {
   assertSafeAgentMemoryPath,
@@ -42,24 +49,32 @@ type DashboardDependencies = {
     encoding: 'utf8',
   ) => Promise<string | Buffer>;
   getSetting?: () => Promise<AgentMemorySetting>;
+  /**
+   * Resolves the model for the `memory` role (real impl:
+   * `getModelProfileService().resolveForRole`). `projectId` is `null` for the
+   * global merge.
+   */
+  resolveMemoryModel?: (params: {
+    projectId: string | null;
+  }) => Promise<ResolvedModel>;
   findProjectById?: (id: string) => Promise<ProjectIdentity | undefined>;
   findProjects?: () => Promise<ProjectIdentity[]>;
   extractProjectMemory?: (params: {
     project: ProjectIdentity;
     recheckProjectExists?: () => Promise<boolean>;
     config: {
-      backend: AgentMemorySetting['extractionBackend'];
-      model: string;
-      thinkingEffort?: AgentMemorySetting['extractionThinkingEffort'];
+      backend: AgentBackendType;
+      model: ModelPreference;
+      thinkingEffort?: ThinkingEffort;
       trigger: 'manual';
     };
   }) => ExtractionResult;
   mergeGlobalMemory?: (params: {
     projectIds: readonly string[];
     config: {
-      backend: AgentMemorySetting['extractionBackend'];
-      model: string;
-      thinkingEffort?: AgentMemorySetting['extractionThinkingEffort'];
+      backend: AgentBackendType;
+      model: ModelPreference;
+      thinkingEffort?: ThinkingEffort;
       trigger: 'manual';
     };
   }) => ExtractionResult;
@@ -140,6 +155,10 @@ export function createAgentMemoryDashboardService({
     (await import('../database/repositories/settings')).SettingsRepository.get(
       'agentMemory',
     ),
+  resolveMemoryModel = async ({ projectId }) =>
+    (await import('./model-profile-service'))
+      .getModelProfileService()
+      .resolveForRole({ role: 'memory', projectId }),
   findProjectById = async (id) =>
     (await import('../database/repositories/projects')).ProjectRepository.findById(
       id,
@@ -241,11 +260,18 @@ export function createAgentMemoryDashboardService({
     return { items, page, pageSize, total: entries.length };
   }
 
-  function extractionConfig(setting: AgentMemorySetting) {
+  /**
+   * Manual-run config for the `memory` role, or `null` when the active profile
+   * disabled the role (or a policy blocked it) — the caller then skips the run
+   * instead of falling back to some other model.
+   */
+  async function extractionConfig(projectId: string | null) {
+    const resolved = await resolveMemoryModel({ projectId });
+    if (resolved.off || resolved.blocked) return null;
     return {
-      backend: setting.extractionBackend,
-      model: setting.extractionModel,
-      thinkingEffort: setting.extractionThinkingEffort,
+      backend: resolved.backend,
+      model: resolved.model,
+      thinkingEffort: resolved.thinkingEffort,
       trigger: 'manual' as const,
     };
   }
@@ -337,18 +363,23 @@ export function createAgentMemoryDashboardService({
       await requireEnabledSetting();
       const project = await findProjectById(projectId);
       if (!project) throw new Error(`Project not found: ${projectId}`);
-      const extractionSetting = await requireEnabledSetting();
+      await requireEnabledSetting();
+      const config = await extractionConfig(projectId);
+      if (!config) return { processed: false, run: null };
       const result = await extractProject({
         project,
         recheckProjectExists: async () => Boolean(await findProjectById(projectId)),
-        config: extractionConfig(extractionSetting),
+        config,
       });
       const projects = await findProjects();
-      const mergeSetting = await requireEnabledSetting();
-      await mergeGlobal({
-        projectIds: projects.map(({ id }) => id),
-        config: extractionConfig(mergeSetting),
-      });
+      await requireEnabledSetting();
+      const mergeConfig = await extractionConfig(null);
+      if (mergeConfig) {
+        await mergeGlobal({
+          projectIds: projects.map(({ id }) => id),
+          config: mergeConfig,
+        });
+      }
       return result;
     },
 
@@ -390,19 +421,23 @@ export function createAgentMemoryDashboardService({
       }
       if (scope === 'global') {
         const projects = await findProjects();
-        const setting = await requireEnabledSetting();
+        await requireEnabledSetting();
+        const config = await extractionConfig(null);
+        if (!config) return { processed: false, run: null };
         return mergeGlobal({
           projectIds: projects.map(({ id }) => id),
-          config: extractionConfig(setting),
+          config,
         });
       }
       const project = await findProjectById(projectId!);
       if (!project) throw new Error(`Project not found: ${projectId}`);
-      const setting = await requireEnabledSetting();
+      await requireEnabledSetting();
+      const config = await extractionConfig(projectId!);
+      if (!config) return { processed: false, run: null };
       return extractProject({
         project,
         recheckProjectExists: async () => Boolean(await findProjectById(projectId!)),
-        config: extractionConfig(setting),
+        config,
       });
     },
   };

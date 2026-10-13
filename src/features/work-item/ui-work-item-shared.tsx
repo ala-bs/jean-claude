@@ -28,6 +28,7 @@ export function WorkItemPriorityBadge({ priority }: { priority?: number }) {
 const ICON_SIZE = {
   sm: 'h-3 w-3',
   md: 'h-3.5 w-3.5',
+  lg: 'h-6 w-6',
 } as const;
 
 const CHECKBOX_SIZE = {
@@ -41,7 +42,7 @@ export function WorkItemTypeIcon({
   variant = 'default',
 }: {
   type: string;
-  size?: 'sm' | 'md';
+  size?: 'sm' | 'md' | 'lg';
   variant?: 'default' | 'editorial';
 }) {
   const s = ICON_SIZE[size];

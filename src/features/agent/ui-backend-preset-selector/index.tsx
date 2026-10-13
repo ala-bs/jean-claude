@@ -1,20 +1,14 @@
 import { forwardRef, useMemo } from 'react';
 
-import type {
-  BackendModelPreset,
-  ModelPreference,
-  ThinkingEffort,
-} from '@shared/types';
+import type { ModelPreference, ThinkingEffort } from '@shared/types';
 import { Select, type SelectOption, type SelectRef } from '@/common/ui/select';
-import {
-  useBackendModelPresetsSetting,
-  useBackendsSetting,
-} from '@/hooks/use-settings';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import { AVAILABLE_BACKENDS } from '@/features/agent/ui-backend-selector';
 import type { BindingKey } from '@/common/context/keyboard-bindings/types';
 import type { ComponentSize } from '@/common/ui/styles';
 import type { KeyboardLayer } from '@/common/context/keyboard-bindings';
+import type { ProfilePreset } from '@shared/model-profiles';
+import { useBackendsSetting } from '@/hooks/use-settings';
 
 
 
@@ -37,7 +31,8 @@ export function findMatchingBackendModelPresetId({
   model,
   thinkingEffort,
 }: {
-  presets: BackendModelPreset[];
+  /** Presets of the effective profile (`profile.presets`). */
+  presets: ProfilePreset[];
   backend: AgentBackendType | null | undefined;
   model: ModelPreference | null | undefined;
   thinkingEffort?: ThinkingEffort | null;
@@ -52,7 +47,7 @@ export function findMatchingBackendModelPresetId({
         preset.backend === backend &&
         preset.model === model &&
         (thinkingEffort === undefined ||
-          (preset.thinkingEffort ?? 'default') === thinkingEffort),
+          preset.thinkingEffort === thinkingEffort),
     )?.id ?? null
   );
 }
@@ -62,6 +57,11 @@ export const BackendPresetSelector = forwardRef<
   {
     backend: AgentBackendType;
     selectedPresetId?: string | null;
+    /**
+     * Presets of the profile in effect, passed in by the owner (the picker)
+     * so this component never becomes a second, project-blind source of truth.
+     */
+    presets: ProfilePreset[];
     enabledBackends?: AgentBackendType[];
     onChange: (selection: {
       backend: AgentBackendType;
@@ -81,6 +81,7 @@ export const BackendPresetSelector = forwardRef<
   {
     backend,
     selectedPresetId,
+    presets,
     enabledBackends: enabledBackendsOverride,
     onChange,
     disabled,
@@ -94,7 +95,6 @@ export const BackendPresetSelector = forwardRef<
   ref,
 ) {
   const { data: backendsSetting } = useBackendsSetting();
-  const { data: presets = [] } = useBackendModelPresetsSetting();
 
   const enabledBackends = useMemo(
     () =>
@@ -127,7 +127,7 @@ export const BackendPresetSelector = forwardRef<
         return {
           value: toPresetValue(preset.id),
           label: preset.name.trim() || 'Untitled preset',
-          description: `${backendOption?.label ?? preset.backend} - ${preset.model} - ${preset.thinkingEffort ?? 'default'} thinking`,
+          description: `${backendOption?.label ?? preset.backend} - ${preset.model} - ${preset.thinkingEffort} thinking`,
           group: 'Presets',
         };
       },
@@ -172,7 +172,7 @@ export const BackendPresetSelector = forwardRef<
             backend: preset.backend,
             presetId: preset.id,
             modelPreference: preset.model,
-            thinkingEffort: preset.thinkingEffort ?? 'default',
+            thinkingEffort: preset.thinkingEffort,
           });
           return;
         }

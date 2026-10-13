@@ -10,6 +10,10 @@
 
 import { createOpencode } from '@opencode-ai/sdk/v2';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+// eslint-disable-next-line sort-imports
+import { ElicitResultSchema } from '@modelcontextprotocol/sdk/types.js';
+// eslint-disable-next-line sort-imports
+import type { ElicitRequestFormParams } from '@modelcontextprotocol/sdk/types.js';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -24,6 +28,10 @@ import type { ThinkingEffort } from '@shared/types';
 
 const MAX_DEPTH = 3;
 const BACKEND_ENUM = z.enum(['claude-code', 'opencode']);
+// The MCP SDK defaults related requests to 60 seconds. Elicitation lifetime is
+// controlled by the Jean-Claude UI, so use the largest safe Node timer value;
+// the request is still cancelled through extra.signal when the session closes.
+const ELICITATION_REQUEST_TIMEOUT_MS = 2_147_000_000;
 const THINKING_EFFORT_ENUM = z.enum([
   'default',
   'none',
@@ -40,6 +48,51 @@ function isAgentToolEnabled(): boolean {
 
 function isReviewToolEnabled(): boolean {
   return process.env.JC_MCP_ENABLE_REVIEW_TOOL === '1';
+}
+
+function isCodexElicitationEnabled(): boolean {
+  return process.env.JC_MCP_USE_CODEX_ELICITATION === '1';
+}
+
+function buildElicitationSchema(input: {
+  questions: Array<{
+    id: string;
+    label: string;
+    type: 'single_choice' | 'multi_choice' | 'text';
+    options?: Array<{ label: string }>;
+    required?: boolean;
+  }>;
+}): ElicitRequestFormParams['requestedSchema'] {
+  const properties = Object.fromEntries(
+    input.questions.map((question) => {
+      const options = question.options ?? [];
+      if (question.type === 'multi_choice') {
+        return [question.id, {
+          type: 'array',
+          title: question.label,
+          items: { type: 'string', enum: options.map((option) => option.label) },
+        }];
+      }
+      return [question.id, {
+        type: 'string',
+        title: question.label,
+        ...(options.length > 0 ? { enum: options.map((option) => option.label) } : {}),
+      }];
+    }),
+  );
+  return {
+    type: 'object',
+    properties,
+    required: input.questions
+      .filter((question) => question.required !== false)
+      .map((question) => question.id),
+  } as ElicitRequestFormParams['requestedSchema'];
+}
+
+function formatElicitationResult(content: Record<string, unknown>): string {
+  return Object.entries(content)
+    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`)
+    .join('\n');
 }
 
 function getMcpWorkingDirectory(): string {
@@ -434,11 +487,41 @@ async function main(): Promise<void> {
     'ask_question',
     'Ask the user one or more questions through the Jean-Claude task UI and return their answers as plain text. Before calling, put all context the user needs in contextReminder: goal, relevant findings, constraints, tradeoffs, and what decision is needed. Do not rely on a preceding assistant message because prompt grouping may hide it. contextReminder is shown directly to the user and MUST be well-formatted Markdown. Keep it concise and do not repeat the questions. stepId is optional when Jean-Claude can infer a single active route.',
     ASK_QUESTION_TOOL_SCHEMA,
-    async (input) => {
+    async (input, extra) => {
       try {
         console.error(
           `[jean-claude-mcp] ask_question: questions=${input.questions.length}`,
         );
+
+        if (isCodexElicitationEnabled()) {
+          console.error('[jean-claude-mcp] elicitation request started');
+          const result = await extra.sendRequest(
+            {
+              method: 'elicitation/create',
+              params: {
+                mode: 'form',
+                message: input.contextReminder ?? 'Please answer the following questions.',
+                requestedSchema: buildElicitationSchema(input),
+              },
+            },
+            ElicitResultSchema,
+            { signal: extra.signal, timeout: ELICITATION_REQUEST_TIMEOUT_MS },
+          );
+          console.error(
+            `[jean-claude-mcp] elicitation request resolved action=${result.action}`,
+          );
+          if (result.action !== 'accept' || !result.content) {
+            const actionLabel = result.action === 'cancel' ? 'cancelled' : 'declined';
+            return {
+              content: [{ type: 'text' as const, text: `User ${actionLabel} the questions.` }],
+              isError: true,
+            };
+          }
+          return {
+            content: [{ type: 'text' as const, text: formatElicitationResult(result.content) }],
+          };
+        }
+
         const summary = await askQuestionViaBridge({ input });
         console.error('[jean-claude-mcp] ask_question completed');
 

@@ -1,9 +1,23 @@
 /* eslint-disable sort-imports */
 import { Bug, Sparkles } from 'lucide-react';
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import clsx from 'clsx';
-import type { MouseEvent } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
+import type { WorkItemDisplayConfig } from '@shared/work-item-display-config-types';
+import { resolveBoardRows } from '@shared/work-item-display-config-types';
+import {
+  FIELD_ASSIGNED_TO,
+  FIELD_ITERATION_PATH,
+  FIELD_PRIORITY,
+  FIELD_TAGS,
+  getAssignee,
+  getIterationPath,
+  getPriority,
+  getStringField,
+  getTitle,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
 
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import type { BoardColorSettings } from '@/features/work-item/utils-board-colors';
@@ -44,6 +58,7 @@ export const WorkItemBoardCard = memo(function WorkItemBoardCard({
   onHighlight,
   onModifiedClick,
   onOpenChildBugs,
+  displayConfig = null,
 }: {
   workItem: AzureDevOpsWorkItem;
   search: string;
@@ -65,10 +80,52 @@ export const WorkItemBoardCard = memo(function WorkItemBoardCard({
   onHighlight: (workItem: AzureDevOpsWorkItem) => void;
   onModifiedClick?: (workItem: AzureDevOpsWorkItem) => void;
   onOpenChildBugs?: (workItem: AzureDevOpsWorkItem) => void;
+  /**
+   * Per-project work item display config. `null` (the default) means "render
+   * today's card", so an unconfigured project is byte-identical.
+   */
+  displayConfig?: WorkItemDisplayConfig | null;
 }) {
   const isEditorial = variant === 'editorial';
   const isOutOfSprint = isAzureWorkItemOutOfSprint(workItem, currentIterationPath);
+  const title = getTitle(workItem);
+  const workItemType = getWorkItemType(workItem);
+  const iterationPath = getIterationPath(workItem);
+  const assigneeName = getAssignee(workItem)?.displayName;
+  const tags = getStringField(workItem, FIELD_TAGS);
   const hasBugProgress = bugClosedCount !== null && bugTotalCount !== null;
+  // Board cards are chrome (avatar / badges / chips), not label-value rows, so
+  // the config only decides which of those elements show and in what order
+  // (design decision 25). `resolveBoardRows` hands back a module-level
+  // singleton for a null config — never mutate it.
+  const visibleBoardRefNames = useMemo(() => {
+    const seen = new Set<string>();
+    for (const row of resolveBoardRows(displayConfig)) {
+      if (row.visible) seen.add(row.refName);
+    }
+    return seen;
+  }, [displayConfig]);
+  // Order matters only between the two badges that live in the same metadata
+  // strip; the avatar and the tag block have fixed slots in the layout.
+  const orderedBadgeRefNames = useMemo(
+    () => [
+      ...new Set(
+        resolveBoardRows(displayConfig)
+          .filter(
+            (row) =>
+              row.visible &&
+              (row.refName === FIELD_PRIORITY ||
+                row.refName === FIELD_ITERATION_PATH),
+          )
+          .map((row) => row.refName),
+      ),
+    ],
+    [displayConfig],
+  );
+  const showAssignee = visibleBoardRefNames.has(FIELD_ASSIGNED_TO);
+  const showTags = visibleBoardRefNames.has(FIELD_TAGS);
+  const showOutOfSprintBadge =
+    isOutOfSprint && visibleBoardRefNames.has(FIELD_ITERATION_PATH);
 
   const openWorkItem = useCallback(
     (modified: boolean) => {
@@ -107,51 +164,68 @@ export const WorkItemBoardCard = memo(function WorkItemBoardCard({
         <SelectionCheckbox checked={isSelected} size="sm" />
       </button>
     ) : undefined;
-  const avatar = workItem.fields.assignedTo ? (
+  const avatar = showAssignee && assigneeName ? (
     <UserAvatar
-      name={workItem.fields.assignedTo}
-      color={getOwnerColor(workItem.fields.assignedTo)}
+      name={assigneeName}
+      color={getOwnerColor(assigneeName)}
       title={
-        currentUserDisplayName &&
-        workItem.fields.assignedTo === currentUserDisplayName
-          ? `${workItem.fields.assignedTo} (you)`
-          : workItem.fields.assignedTo
+        currentUserDisplayName && assigneeName === currentUserDisplayName
+          ? `${assigneeName} (you)`
+          : assigneeName
       }
       highlight={
-        !!currentUserDisplayName &&
-        workItem.fields.assignedTo === currentUserDisplayName
+        !!currentUserDisplayName && assigneeName === currentUserDisplayName
       }
     />
   ) : null;
+  const exactBadge = isExactMatch ? (
+    <span
+      key="exact"
+      className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase"
+    >
+      Exact
+    </span>
+  ) : null;
+  const badges: ReactNode[] = [];
+  // The "Exact" badge is not a configurable field: today it sits immediately
+  // after the priority badge's slot, so it stays anchored there — and when
+  // priority has no slot at all it leads, exactly as it does today when
+  // `showPriority` is off.
+  if (!orderedBadgeRefNames.includes(FIELD_PRIORITY) && exactBadge) {
+    badges.push(exactBadge);
+  }
+  for (const refName of orderedBadgeRefNames) {
+    if (refName === FIELD_PRIORITY) {
+      if (colorSettings.showPriority) {
+        badges.push(
+          <WorkItemPriorityBadge key="priority" priority={getPriority(workItem)} />,
+        );
+      }
+      if (exactBadge) badges.push(exactBadge);
+      continue;
+    }
+    if (showOutOfSprintBadge) {
+      badges.push(
+        <span
+          key="iteration"
+          className="max-w-28 truncate rounded border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase"
+          title={`Iteration: ${iterationPath}`}
+        >
+          {iterationPath?.split(/[\\/]/).at(-1)}
+        </span>,
+      );
+    }
+  }
   const metadataContent = (
     <>
-      <WorkItemTypeIcon
-        type={workItem.fields.workItemType}
-        size="sm"
-        variant={variant}
-      />
+      <WorkItemTypeIcon type={workItemType} size="sm" variant={variant} />
       <span className="text-ink-3 font-mono text-[10px]">
         <HighlightedSearchText text={`#${workItem.id}`} search={search} />
       </span>
-      {colorSettings.showPriority && (
-        <WorkItemPriorityBadge priority={workItem.fields.priority} />
-      )}
-      {isExactMatch && (
-        <span className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">
-          Exact
-        </span>
-      )}
-      {isOutOfSprint && (
-        <span
-          className="max-w-28 truncate rounded border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase"
-          title={`Iteration: ${workItem.fields.iterationPath}`}
-        >
-          {workItem.fields.iterationPath?.split(/[\\/]/).at(-1)}
-        </span>
-      )}
+      {badges}
       {!isEditorial && (
         <span className="text-ink-2 max-w-[80px] truncate text-[10px]">
-          {workItem.fields.workItemType}
+          {workItemType}
         </span>
       )}
     </>
@@ -170,12 +244,12 @@ export const WorkItemBoardCard = memo(function WorkItemBoardCard({
         isEditorial ? 'text-xs' : 'text-[12.5px]',
       )}
     >
-      <HighlightedSearchText text={workItem.fields.title} search={search} />
+      <HighlightedSearchText text={title} search={search} />
     </span>
   );
   const cardHeading = parserSetting ? (
     <ParsedWorkItemTitle
-      title={workItem.fields.title}
+      title={title}
       parserSetting={parserSetting}
       compact
       search={search}
@@ -237,6 +311,7 @@ export const WorkItemBoardCard = memo(function WorkItemBoardCard({
         <WorkItemBoardReadableCard
           workItem={workItem}
           colorSettings={colorSettings}
+          displayConfig={displayConfig}
           search={search}
           parserSetting={parserSetting}
           avatar={avatar}
@@ -249,8 +324,8 @@ export const WorkItemBoardCard = memo(function WorkItemBoardCard({
               : undefined
           }
           outOfSprintLabel={
-            isOutOfSprint
-              ? (workItem.fields.iterationPath?.split(/[\\/]/).at(-1) ?? null)
+            showOutOfSprintBadge
+              ? (iterationPath?.split(/[\\/]/).at(-1) ?? null)
               : null
           }
           isExactMatch={isExactMatch}
@@ -304,12 +379,12 @@ export const WorkItemBoardCard = memo(function WorkItemBoardCard({
                 {bugClosedCount}/{bugTotalCount} closed
               </span>
             ))}
-          {workItem.fields.tags && (
+          {showTags && tags && (
             <div
               className="flex max-h-8 flex-wrap gap-1 overflow-hidden"
               aria-label="Tags"
             >
-              {parseAzureWorkItemTags(workItem.fields.tags).map((tag) => (
+              {parseAzureWorkItemTags(tags).map((tag) => (
                 <span
                   key={tag}
                   className="bg-bg-3 text-ink-3 max-w-full truncate rounded px-1.5 py-0.5 font-mono text-[9px] leading-3"

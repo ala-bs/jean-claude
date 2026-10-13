@@ -455,13 +455,37 @@ async function generateWithCodex({
   cwd,
   allowedTools,
   allowedToolPatterns,
+  toolPolicy,
   abortController,
   usageContext,
+  allowReadOnlyShell,
 }: Parameters<TextGenerationCapability['generate']>[0] & {
   outputSchema?: Record<string, unknown>;
 }): Promise<unknown | null> {
+  if (
+    toolPolicy === 'none' &&
+    !skillName &&
+    !allowedTools?.length &&
+    !Object.keys(allowedToolPatterns ?? {}).length
+  ) {
+    const { generateCodexWithoutTools } = await import(
+      './codex/codex-generation'
+    );
+    return generateCodexWithoutTools({
+      model,
+      prompt,
+      outputSchema,
+      thinkingEffort,
+      abortController,
+      usageContext,
+      allowReadOnlyShell,
+      cwd,
+    });
+  }
   const hasRestrictions =
-    allowedTools !== undefined || allowedToolPatterns !== undefined;
+    allowedTools !== undefined ||
+    allowedToolPatterns !== undefined ||
+    toolPolicy === 'none';
 
   if (hasRestrictions) {
     throw new Error(
@@ -618,8 +642,13 @@ async function generateWithCodex({
 function rejectRestrictedCopilotGeneration({
   allowedTools,
   allowedToolPatterns,
+  toolPolicy,
 }: Parameters<TextGenerationCapability['generate']>[0]): void {
-  if (allowedTools !== undefined || allowedToolPatterns !== undefined) {
+  if (
+    allowedTools !== undefined ||
+    allowedToolPatterns !== undefined ||
+    toolPolicy === 'none'
+  ) {
     throw new Error(
       'Copilot restricted generation is unsupported; refusing generation because Copilot does not have an isolated restricted adapter',
     );

@@ -29,6 +29,12 @@ import type {
   AzureDevOpsIteration,
   AzureDevOpsWorkItem,
 } from '@/lib/api';
+import {
+  getDescriptionHtml,
+  getReproStepsHtml,
+  getState,
+  getTitle,
+} from '@shared/work-item-field-types';
 import { formatRelativeTime } from '@/lib/time';
 import { Tooltip } from '@/common/ui/tooltip';
 import {
@@ -194,7 +200,8 @@ function MultiFilterDropdown({
 }
 
 function workItemSummary(workItem: AzureDevOpsWorkItem) {
-  const value = workItem.fields.description || workItem.fields.reproSteps;
+  const value =
+    getDescriptionHtml(workItem) || getReproStepsHtml(workItem);
   if (!value) return 'No summary available.';
   if (!value.includes('<')) return value.trim();
   const element = document.createElement('div');
@@ -238,7 +245,7 @@ function RelatedBugsPanel({
          <div className="min-w-0 flex-1">
           <div className="text-ink-3 mb-0.5 font-mono text-[10px]">#{story.id} · related bugs</div>
           <ParsedWorkItemTitle
-            title={story.fields.title}
+            title={getTitle(story)}
             parserSetting={parserSetting}
             compact
             titleClassName="text-ink-0 truncate text-sm font-semibold"
@@ -253,7 +260,7 @@ function RelatedBugsPanel({
        </div>
       <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-3.5">
         {bugs.map((bug) => {
-          const isClosed = isWorkItemClosedState(bug.fields.state);
+          const isClosed = isWorkItemClosedState(getState(bug));
           return (
             <div
               key={bug.id}
@@ -263,7 +270,7 @@ function RelatedBugsPanel({
                 : 'border-line bg-bg-2 hover:bg-bg-3 border-l-status-fail flex w-full flex-col rounded-lg border border-l-[3px] px-3 py-2.5 text-left transition-colors'}
             >
               <ParsedWorkItemTitle
-                title={bug.fields.title}
+                title={getTitle(bug)}
                 parserSetting={parserSetting}
                 compact
                 className="mb-1 w-full"
@@ -280,7 +287,7 @@ function RelatedBugsPanel({
                     <Bug className={isClosed ? 'text-status-done h-3 w-3' : 'text-status-fail h-3 w-3'} />
                     <span className="text-ink-3 font-mono text-[10px]">#{bug.id}</span>
                     <span className={isClosed ? 'bg-status-done/15 text-status-done ml-auto px-1.5 py-0.5 font-mono text-[9px]' : 'bg-status-fail/15 text-status-fail ml-auto px-1.5 py-0.5 font-mono text-[9px]'}>
-                      {bug.fields.state}
+                      {getState(bug)}
                     </span>
                     <ChevronRight className="text-ink-3 h-3 w-3" />
                   </span>
@@ -607,7 +614,10 @@ export function WorkItemWorkspace({
       return visibleItems;
     }
     const fuse = new Fuse(visibleItems, {
-      keys: ['fields.title', 'id'],
+      keys: [
+        { name: 'title', getFn: (item: AzureDevOpsWorkItem) => getTitle(item) },
+        'id',
+      ],
       threshold: 0.4,
       ignoreLocation: true,
     });
@@ -1041,6 +1051,7 @@ export function WorkItemWorkspace({
                     variant="editorial"
                     parserSetting={project.workItemTitleParser}
                     colorSettings={colorSettings}
+                    displayConfig={project.workItemDisplayConfig}
                   />
                 )
               }
@@ -1083,10 +1094,10 @@ export function WorkItemWorkspace({
                       workItemProjectId={params.projectId}
                       projectName={params.projectName}
                         editableMetadata
-                        assigneeOptions={assignees}
                         iterationOptions={iterations.map((iteration) => ({
                           value: iteration.path,
                           label: iteration.name,
+                          isCurrent: iteration.isCurrent,
                         }))}
                         boardColumns={columns}
                         tagOptions={tagOptions}

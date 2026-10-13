@@ -17,19 +17,22 @@ import { Button } from '@/common/ui/button';
 import type { ManagedSkill } from '@shared/skill-types';
 import { SkillDetails } from '@/features/settings/ui-skills-settings/skill-details';
 import { SkillEditor } from '@/features/settings/ui-skills-settings/skill-editor';
-import { useBackendsSetting } from '@/hooks/use-settings';
 import { useProject } from '@/hooks/use-projects';
+import { useResolvedModelForRole } from '@/hooks/use-model-profiles';
 
 
 
 export function ProjectSkillsSettings({ projectId }: { projectId: string }) {
   const { data: project } = useProject(projectId);
-  const { data: backendsSetting } = useBackendsSetting();
+  // Which backend's skills to show comes from the profile's `agent` role for
+  // this project (project policy / pinned profile applied by the resolver).
+  const { data: resolvedAgentModel } = useResolvedModelForRole(
+    'agent',
+    projectId,
+  );
 
   const backendType: AgentBackendType =
-    project?.defaultAgentBackend ??
-    backendsSetting?.defaultBackend ??
-    'claude-code';
+    resolvedAgentModel?.backend ?? 'claude-code';
 
   const { data: skills, isLoading } = useManagedSkills(
     backendType,

@@ -54,6 +54,7 @@ import {
 } from '@shared/types';
 import {
   type InteractionMode,
+  isFeatureMapStepMeta,
   isPrReviewChatStepMeta,
   isSkillCreationStepMeta,
   type ReviewStepMeta,
@@ -82,6 +83,11 @@ import {
   RawMessageRepository,
   TaskRepository,
 } from '../database/repositories';
+import {
+  assertModelPolicyAllowed,
+  buildSessionIdStepUpdate,
+  resolveRunModelSettings,
+} from './agent-session-update';
 import {
   buildAgentPromptMarkdown,
   getPromptDisplayText,
@@ -117,12 +123,12 @@ import { applyConfiguredPromptPreface } from './prompt-preface-service';
 import { assertValidWorkspacePath } from './system-project-service';
 import { buildJcMcpServersConfigForCwd } from './jc-mcp-config';
 import { buildReadOnlyPrReviewSessionRules } from './pr-review-agent-service';
-import { buildSessionIdStepUpdate } from './agent-session-update';
 import { ClaudeCodeBackend } from './agent-backends/claude/claude-code-backend';
 import { CopilotBackend } from './agent-backends/copilot/copilot-backend';
 import { dbg } from '../lib/debug';
 import { generateTaskName } from './name-generation-service';
 import { getAgentBackendProvider } from './agent-backends/providers';
+import { getModelProfileService } from './model-profile-service';
 import { JcMcpBridgeService } from './jc-mcp-bridge-service';
 import { mergeConflictTracker } from './merge-conflict-tracker';
 import { normalizeThinkingEffortForModel } from '../../shared/thinking-settings';
@@ -138,6 +144,7 @@ import { stepPermissionService } from './step-permission-service';
 import { StepService } from './step-service';
 import { stripPromptImagePlaceholders } from '@shared/prompt-image-placeholders';
 import { TaskStepRepository } from '../database/repositories/task-steps';
+import { validateProjectFeatureMapDraft } from './project-feature-map-generation-service';
 
 /** In-memory store for queued prompt parts, keyed by QueuedPrompt.id.
  *  Keeps full PromptPart[] (with image base64) out of the QueuedPrompt.content
@@ -149,6 +156,31 @@ const MAX_QUEUED_PROMPT_TOMBSTONES = 2_048;
 /** Upper bound on normalized entries returned to the renderer for one step. */
 const MAX_STEP_MESSAGES_PER_FETCH = 10_000;
 const queuedPromptSubmissionTombstones = new Map<string, string>();
+
+async function validateFeatureMapDraftForStep(stepId: string): Promise<void> {
+  const step = await TaskStepRepository.findById(stepId);
+  if (!step || step.type !== 'feature-map' || !isFeatureMapStepMeta(step.meta)) {
+    return;
+  }
+
+  const validation = await validateProjectFeatureMapDraft({
+    tempFilePath: step.meta.tempFilePath,
+  });
+  dbg.agent(
+    'Feature-map draft validation step=%s path=%s status=%s detail=%s',
+    stepId,
+    step.meta.tempFilePath,
+    validation.status,
+    validation.status === 'valid'
+      ? `features=${validation.featureCount}`
+      : validation.error,
+  );
+
+  const updatedStep = await TaskStepRepository.update(stepId, {
+    meta: { ...step.meta, draftValidation: validation },
+  });
+  emitStepUpsert(updatedStep);
+}
 
 type CanonicalQuestionMemoryDetail = AgentMemoryQuestionResponseDetail & {
   question: string;
@@ -503,39 +535,11 @@ type FollowUpCaptureContext = {
   previousResultSnapshot?: Promise<string | null>;
 };
 
-/**
- * Model and thinking effort a run should use, given the session's swap
- * overrides and the step's stored preferences.
- *
- * Shared by `runBackend` (which applies them at `query()` time) and
- * `tryContinueRunWithPrompt` (which compares them against what the live run was
- * actually started with). These MUST stay in lockstep: if the comparison
- * recomputed this differently, a false mismatch would silently refuse every
- * injection and fall back to killing the background jobs.
- */
-function resolveRunModelSettings(
-  session: Pick<
-    ActiveSession,
-    'backendType' | 'requestedBackendType' | 'swapModel' | 'swapThinkingEffort'
-  >,
-  step: {
-    modelPreference?: string | null;
-    thinkingEffort?: ThinkingEffort | null;
-  },
-): {
-  modelPreference: string | undefined;
-  thinkingEffort: ThinkingEffort | undefined;
-} {
-  const backendChanged = session.backendType !== session.requestedBackendType;
-  return {
-    modelPreference:
-      session.swapModel ??
-      (backendChanged ? undefined : (step.modelPreference ?? undefined)),
-    thinkingEffort:
-      session.swapThinkingEffort ??
-      (backendChanged ? undefined : (step.thinkingEffort ?? undefined)),
-  };
-}
+// The model/effort a run should use — shared by `runBackend` (which applies
+// them at `query()` time) and `tryContinueRunWithPrompt` (which compares them
+// against what the live run was started with) — now resolves the `agent` role.
+// It lives in `./agent-session-update` so it stays importable without the
+// Electron/native-SQLite chain.
 
 // --- Active session tracking ---
 
@@ -551,6 +555,8 @@ interface ActiveSession {
   currentModel: string | null;
   /** Thinking effort the live run was started with (see `runBackend`). */
   currentThinkingEffort: ThinkingEffort | null;
+  /** Interaction mode the live run was started with. */
+  currentInteractionMode: InteractionMode | null;
   requestedBackendType: AgentBackendType;
   swapModel?: string;
   swapThinkingEffort?: ThinkingEffort;
@@ -1457,6 +1463,22 @@ class AgentService {
     const requestedBackend: AgentBackendType = (step.agentBackend ??
       'claude-code') as AgentBackendType;
 
+    // Policy boundary (design §2): a stale step row or a global profile switch
+    // must never leak a disallowed backend/preset into an `enforce` project.
+    // The picker filter is only ergonomics; this is the real check, so a
+    // blocked resolution throws a visible error instead of silently spawning.
+    assertModelPolicyAllowed(
+      await getModelProfileService().resolveForRole({
+        role: 'agent',
+        projectId: task.projectId,
+        override: {
+          backend: requestedBackend,
+          model: step.modelPreference ?? null,
+          thinkingEffort: step.thinkingEffort ?? null,
+        },
+      }),
+    );
+
     const backendType = requestedBackend;
     const swapModel: string | undefined = undefined;
     const swapThinkingEffort: ThinkingEffort | undefined = undefined;
@@ -1499,6 +1521,7 @@ class AgentService {
       usageFeature: getUsageFeatureForStep(step.type),
       currentModel: swapModel ?? step.modelPreference,
       currentThinkingEffort: swapThinkingEffort ?? step.thinkingEffort ?? null,
+      currentInteractionMode: null,
       requestedBackendType: requestedBackend,
       swapModel,
       swapThinkingEffort,
@@ -1696,18 +1719,14 @@ class AgentService {
   /**
    * Try to continue the live run with `parts` instead of stopping it.
    *
-   * A run that spawned background tasks keeps its CLI process (and therefore
-   * those tasks) alive past the turn's `result`. During that window the step
-   * reads as `completed`, so the composer offers Send rather than Queue — and
-   * the old stop-then-restart path would abort the process and silently orphan
-   * every background job. Feeding the prompt into the run's still-open input
-   * stream keeps them running and lets the new turn stream into a fresh prompt
-   * group on the same session.
+   * A backend with a streaming input can accept a prompt while its turn is
+   * active. A run that spawned background tasks can also accept one after the
+   * turn's `result`, while its process remains alive. Both cases feed the
+   * prompt into the existing run instead of queuing or restarting it.
    *
-   * Deliberately narrow: only when the previous turn is finalized (nothing is
-   * mid-turn) AND background work is still live AND the run's own settings
-   * still match the step's. Anything else keeps the long-standing restart
-   * semantics, because the backend only applies those settings at run start.
+   * The run's model, effort, and interaction mode must still match the step's
+   * settings. A changed mode falls back to a new turn so the next turn gets
+   * the new sandbox/approval configuration.
    *
    * Returns true only once the prompt is in the run's input stream — at which
    * point it can no longer be un-sent.
@@ -1720,15 +1739,22 @@ class AgentService {
     // though `turnFinalized` has not been set yet.
     { turnIsOver = session.turnFinalized }: { turnIsOver?: boolean } = {},
   ): Promise<boolean> {
+    dbg.agentSession(
+      'Attempting live prompt delivery for step %s backend=%s running=%s mode=%s',
+      stepId,
+      session.backendType,
+      !session.stopRequested && !session.hasTerminalError,
+      session.currentInteractionMode,
+    );
     if (session.stopRequested || session.hasTerminalError) return false;
-    if (!turnIsOver) return false;
-    if (session.backgroundTasks.length === 0) return false;
-
     const runHandle = session.runHandle;
     if (!runHandle) return false;
 
-    const capability = session.provider.capabilities.agent.followUpPrompt;
+    const capability = session.provider.capabilities.agent.promptSteering;
     if (!capability?.supported) return false;
+    // A supported backend can steer an active turn. Once the turn has ended,
+    // only keep the live process when background work still needs it.
+    if (turnIsOver && session.backgroundTasks.length === 0) return false;
 
     const step = await TaskStepRepository.findById(stepId);
     if (!step) return false;
@@ -1738,7 +1764,7 @@ class AgentService {
     // either since this run started, restart so the change takes effect.
     // Resolved through the SAME helper `runBackend` uses, so this can only
     // report a real change and never a spurious one.
-    const wanted = resolveRunModelSettings(session, step);
+    const wanted = await resolveRunModelSettings({ session, step });
     const wantedModel = wanted.modelPreference ?? null;
     const wantedEffort = wanted.thinkingEffort ?? null;
     if (
@@ -1752,6 +1778,26 @@ class AgentService {
         session.currentThinkingEffort,
         wantedModel,
         wantedEffort,
+      );
+      return false;
+    }
+
+    const wantedInteractionMode = normalizeInteractionModeForBackend({
+      backend: session.backendType,
+      mode: (step.interactionMode ??
+        getDefaultInteractionModeForBackend({
+          backend: session.backendType,
+        })) as InteractionMode,
+    });
+    if (
+      session.currentInteractionMode !== null &&
+      wantedInteractionMode !== session.currentInteractionMode
+    ) {
+      dbg.agentSession(
+        'Interaction mode changed for step %s since its run started (%s -> %s) — restarting instead of steering',
+        stepId,
+        session.currentInteractionMode,
+        wantedInteractionMode,
       );
       return false;
     }
@@ -2003,10 +2049,10 @@ class AgentService {
       autoAccept: this.autoAcceptSteps.has(stepId),
     });
 
-    const { modelPreference, thinkingEffort } = resolveRunModelSettings(
+    const { modelPreference, thinkingEffort } = await resolveRunModelSettings({
       session,
       step,
-    );
+    });
     const normalizedThinkingEffort = normalizeThinkingEffortForModel({
       backend: session.backendType,
       model: modelPreference ?? 'default',
@@ -2025,35 +2071,34 @@ class AgentService {
     let resourceMonitorOwner: symbol | undefined;
     try {
       let mcpServers: AgentBackendConfig['mcpServers'];
-      if (session.backendType !== 'codex') {
-        const questionBridge = await this.jcMcpBridgeService.registerStep({
-          taskId,
-          stepId,
-          onQuestionRequest: async (request) => {
-            await this.enqueueQuestionRequest(
-              stepId,
-              session,
-              request,
-              'jc-mcp',
-            );
-          },
-          onQuestionCancelled: async (requestId) => {
-            await this.cancelPendingQuestionRequest(
-              stepId,
-              session,
-              requestId,
-            );
-          },
-        });
-        jcMcpRegistrationId = questionBridge.registrationId;
-        mcpServers = buildJcMcpServersConfigForCwd({
-          cwd: workingDir,
-          questionBridge,
-          enableAgentTool: step?.type === 'feature-map',
-          enableReviewTool: step?.type === 'review',
-          environmentMode: session.backendType === 'opencode' ? 'argv' : 'env',
-        });
-      }
+      const questionBridge = await this.jcMcpBridgeService.registerStep({
+        taskId,
+        stepId,
+        onQuestionRequest: async (request) => {
+          await this.enqueueQuestionRequest(
+            stepId,
+            session,
+            request,
+            'jc-mcp',
+          );
+        },
+        onQuestionCancelled: async (requestId) => {
+          await this.cancelPendingQuestionRequest(
+            stepId,
+            session,
+            requestId,
+          );
+        },
+      });
+      jcMcpRegistrationId = questionBridge.registrationId;
+      mcpServers = buildJcMcpServersConfigForCwd({
+        cwd: workingDir,
+        questionBridge,
+        enableAgentTool: step?.type === 'feature-map',
+        enableReviewTool: step?.type === 'review',
+        useCodexElicitation: session.backendType === 'codex',
+        environmentMode: session.backendType === 'opencode' ? 'argv' : 'env',
+      });
 
       // Start the backend
       dbg.agentSession('Starting backend for step %s', stepId);
@@ -2104,16 +2149,19 @@ class AgentService {
         );
       }
 
+      const interactionMode = normalizeInteractionModeForBackend({
+        backend: session.backendType,
+        mode: (step?.interactionMode ??
+          getDefaultInteractionModeForBackend({
+            backend: session.backendType,
+          })) as InteractionMode,
+      });
+      session.currentInteractionMode = interactionMode;
+
       const config = {
         type: session.backendType,
         cwd: workingDir,
-        interactionMode: normalizeInteractionModeForBackend({
-          backend: session.backendType,
-          mode: (step?.interactionMode ??
-            getDefaultInteractionModeForBackend({
-              backend: session.backendType,
-            })) as InteractionMode,
-        }),
+        interactionMode,
         model:
           modelPreference && modelPreference !== 'default'
             ? modelPreference
@@ -2218,6 +2266,16 @@ class AgentService {
     source: 'backend' | 'jc-mcp',
   ): Promise<void> {
     const { taskId } = session;
+
+    dbg.agentPermission(
+      'Enqueueing agent question step=%s backend=%s mode=%s source=%s request=%s questions=%d',
+      stepId,
+      session.backendType,
+      session.currentInteractionMode,
+      source,
+      request.requestId,
+      request.questions.length,
+    );
 
     session.pendingRequests.push({
       requestId: request.requestId,
@@ -2740,9 +2798,10 @@ class AgentService {
             // block), so `lastTerminalStatus` would stay null — and that is the
             // ONLY fallback `closeReactivatedStep` has for closing the step if
             // the injected prompt is never answered. Without this the step is
-            // stuck `running` forever with no live session.
-            // Assigned, not `??=`: a stale 'errored' from an earlier turn would
-            // otherwise survive and close this successful step as failed.
+          // stuck `running` forever with no live session.
+          // Assigned, not `??=`: a stale 'errored' from an earlier turn would
+          // otherwise survive and close this successful step as failed.
+            await validateFeatureMapDraftForStep(stepId);
             session.lastTerminalStatus = 'completed';
             return;
           }
@@ -2751,6 +2810,7 @@ class AgentService {
 
         // No more queued prompts - finalize
         if (await this.shouldAbortTerminalHandling(stepId, session)) break;
+        await validateFeatureMapDraftForStep(stepId);
         let autoStartStepIds: string[] = [];
         if (result.isError) {
           await StepService.errorStep(stepId);
@@ -2997,6 +3057,25 @@ class AgentService {
         step: runningStep,
         provider: preflightProvider,
       });
+
+      // Check the model policy HERE, not only inside `createSession`. The
+      // catch below starts with `if (!session) throw error`, so anything
+      // thrown by `createSession` bypasses `errorStep()` and the synthetic
+      // timeline entry, and `startAgentForStep(...).catch()` only writes a
+      // debug line. A policy violation raised there left the step stuck on
+      // `running` forever with nothing shown to the user. This is the same
+      // reason the two checks above are preflights.
+      assertModelPolicyAllowed(
+        await getModelProfileService().resolveForRole({
+          role: 'agent',
+          projectId: preflightTask.projectId,
+          override: {
+            backend: preflightBackend,
+            model: runningStep.modelPreference ?? null,
+            thinkingEffort: runningStep.thinkingEffort ?? null,
+          },
+        }),
+      );
 
       // Surface work immediately while continue-summary synthesis runs.
       await StepService.update(stepId, { status: 'running' });

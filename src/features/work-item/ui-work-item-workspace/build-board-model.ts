@@ -1,14 +1,36 @@
 import type { AzureDevOpsIteration, AzureDevOpsWorkItem } from '@/lib/api';
 import {
+  getAssignee,
+  getState,
+  getTags,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
+import {
   getLinkedBugCandidateIds,
   isAzureBacklogItemType,
   isWorkItemClosedState,
   matchesAnyAzureWorkItemAssignee,
-  matchesAnyAzureWorkItemTag,
-  parseAzureWorkItemTags,
 } from '@/features/work-item/ui-work-item-board/utils';
 import type { AzureBoardFilters } from '@/stores/azure-board';
 import { normalizeOwnerName } from '@/features/work-item/utils-owner-color';
+
+/**
+ * Exact tag membership: the item must carry the selected tag as a whole tag,
+ * compared case-insensitively after trimming. `backend` does not match an item
+ * tagged only `backend-infra`.
+ */
+function matchesAnySelectedTag(
+  item: AzureDevOpsWorkItem,
+  selectedTags: string[],
+) {
+  if (selectedTags.length === 0) return true;
+  const itemTags = new Set(
+    getTags(item).map((tag) => tag.toLocaleLowerCase()),
+  );
+  return selectedTags.some((tag) =>
+    itemTags.has(tag.trim().toLocaleLowerCase()),
+  );
+}
 
 type BaseModelParams = {
   metadataItems: AzureDevOpsWorkItem[];
@@ -98,7 +120,9 @@ export function buildAzureBoardBaseModel({
   });
 
   const types = [
-    ...new Set(metadataItems.map((item) => item.fields.workItemType)),
+    ...new Set(
+      metadataItems.map((item) => getWorkItemType(item)).filter((type) => !!type),
+    ),
   ].sort();
   for (const persistedType of filters.workItemTypes) {
     if (
@@ -114,7 +138,7 @@ export function buildAzureBoardBaseModel({
 
   const assigneesByKey = new Map<string, string>();
   for (const assignee of metadataItems
-    .map((item) => item.fields.assignedTo?.trim())
+    .map((item) => getAssignee(item)?.displayName.trim())
     .filter((value): value is string => !!value)) {
     const key = normalizeOwnerName(assignee);
     if (!assigneesByKey.has(key)) assigneesByKey.set(key, assignee);
@@ -129,7 +153,7 @@ export function buildAzureBoardBaseModel({
 
   const tagsByKey = new Map<string, string>();
   for (const item of metadataItems) {
-    for (const tag of parseAzureWorkItemTags(item.fields.tags)) {
+    for (const tag of getTags(item)) {
       const key = tag.toLocaleLowerCase();
       if (!tagsByKey.has(key)) tagsByKey.set(key, tag);
     }
@@ -145,12 +169,12 @@ export function buildAzureBoardBaseModel({
   const visibleItems = items.filter(
     (item) =>
       matchesAnyAzureWorkItemAssignee(
-        item.fields.assignedTo,
+        getAssignee(item)?.displayName,
         filters.assignees,
-      ) && matchesAnyAzureWorkItemTag(item.fields.tags, filters.tags),
+      ) && matchesAnySelectedTag(item, filters.tags),
   );
-  const stories = visibleItems.filter(
-    (item) => isAzureBacklogItemType(item.fields.workItemType),
+  const stories = visibleItems.filter((item) =>
+    isAzureBacklogItemType(getWorkItemType(item)),
   );
   const storyLinkedWorkItemIds = [
     ...new Set(stories.flatMap(getLinkedBugCandidateIds)),
@@ -220,16 +244,16 @@ export function buildAzureBoardRelationshipModel({
   > = {};
 
   for (const story of visibleItems) {
-    if (!isAzureBacklogItemType(story.fields.workItemType)) continue;
+    if (!isAzureBacklogItemType(getWorkItemType(story))) continue;
     const bugs = getLinkedBugCandidateIds(story)
       .map((id) => childById.get(id))
       .filter(
         (item): item is AzureDevOpsWorkItem =>
-          item?.fields.workItemType.toLocaleLowerCase() === 'bug',
+          !!item && getWorkItemType(item).toLocaleLowerCase() === 'bug',
       );
     if (bugs.length > 0) {
       childBugProgressByWorkItemId[story.id] = {
-        closed: bugs.filter((bug) => isWorkItemClosedState(bug.fields.state))
+        closed: bugs.filter((bug) => isWorkItemClosedState(getState(bug)))
           .length,
         total: bugs.length,
       };
@@ -239,7 +263,7 @@ export function buildAzureBoardRelationshipModel({
   const selectedWorkItem =
     visibleItems.find((item) => item.id === bugsForWorkItemId) ?? null;
   const bugsForWorkItem =
-    selectedWorkItem && isAzureBacklogItemType(selectedWorkItem.fields.workItemType)
+    selectedWorkItem && isAzureBacklogItemType(getWorkItemType(selectedWorkItem))
       ? selectedWorkItem
       : null;
   const relatedIds = new Set(
@@ -249,7 +273,7 @@ export function buildAzureBoardRelationshipModel({
   const relatedBugs = childWorkItems.filter(
     (item) =>
       relatedIds.has(item.id) &&
-      item.fields.workItemType.toLocaleLowerCase() === 'bug',
+      getWorkItemType(item).toLocaleLowerCase() === 'bug',
   );
 
   return { childBugProgressByWorkItemId, bugsForWorkItem, relatedBugs };

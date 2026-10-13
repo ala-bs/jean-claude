@@ -35,6 +35,7 @@ import type {
   MobilePreviewAndroidInstallSystemImageParams,
   MobilePreviewAttachSessionParams,
   MobilePreviewBootDeviceParams,
+  MobilePreviewCaptureScreenshotParams,
   MobilePreviewDetachSessionParams,
   MobilePreviewExpoLaunchParams,
   MobilePreviewForwardPortParams,
@@ -149,6 +150,10 @@ contextBridge.exposeInMainWorld('api', {
     isSecretStorageAvailable: () =>
       ipcRenderer.invoke('projects:isSecretStorageAvailable'),
     findById: (id: string) => ipcRenderer.invoke('projects:findById', id),
+    getEffectivePolicy: (projectId: string) =>
+      ipcRenderer.invoke('projects:getEffectivePolicy', projectId),
+    setModelPolicy: (projectId: string, policy: unknown) =>
+      ipcRenderer.invoke('projects:setModelPolicy', projectId, policy),
     create: (data: unknown) => ipcRenderer.invoke('projects:create', data),
     update: (id: string, data: unknown) =>
       ipcRenderer.invoke('projects:update', id, data),
@@ -517,18 +522,27 @@ contextBridge.exposeInMainWorld('api', {
         iterationPaths?: string[];
         assignedTo?: string;
       };
+      extraFieldRefNames?: string[];
     }) => ipcRenderer.invoke('azureDevOps:queryWorkItems', params),
     queryWorkItemOwners: (params: {
       providerId: string;
       projectName: string;
     }) => ipcRenderer.invoke('azureDevOps:queryWorkItemOwners', params),
-    getWorkItemById: (params: { providerId: string; workItemId: number }) =>
-      ipcRenderer.invoke('azureDevOps:getWorkItemById', params),
+    getWorkItemById: (params: {
+      providerId: string;
+      workItemId: number;
+      extraFieldRefNames?: string[];
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemById', params),
     getWorkItemsByIds: (params: {
       providerId: string;
       projectName: string;
       workItemIds: number[];
+      extraFieldRefNames?: string[];
     }) => ipcRenderer.invoke('azureDevOps:getWorkItemsByIds', params),
+    getWorkItemTypeFields: (params: {
+      providerId: string;
+      azureProjectId: string;
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemTypeFields', params),
     getPullRequestStatuses: (params: {
       providerId: string;
       linkedPrs: Array<{ prId: number; projectId: string; repoId: string }>;
@@ -618,6 +632,7 @@ contextBridge.exposeInMainWorld('api', {
     uploadWorkItemAttachment: (params: {
       providerId: string;
       projectName: string;
+      workItemId?: number;
       filename: string;
       mimeType: string;
       base64: string;
@@ -900,6 +915,15 @@ contextBridge.exposeInMainWorld('api', {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: unknown) =>
       ipcRenderer.invoke('settings:set', key, value),
+  },
+  modelProfiles: {
+    resolve: (params: {
+      role: import('@shared/model-profiles').ModelRole;
+      projectId?: string | null;
+      override?: import('@shared/model-profiles').ModelOverride | null;
+    }) => ipcRenderer.invoke('modelProfiles:resolve', params),
+    activate: (profileId: string) =>
+      ipcRenderer.invoke('modelProfiles:activate', profileId),
   },
   backendConfig: {
     getUserConfig: (
@@ -1211,6 +1235,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('mobilePreview:listMetroPeers', params),
     bootDevice: (params: MobilePreviewBootDeviceParams) =>
       ipcRenderer.invoke('mobilePreview:bootDevice', params),
+    captureScreenshot: (params: MobilePreviewCaptureScreenshotParams) =>
+      ipcRenderer.invoke('mobilePreview:captureScreenshot', params),
     forwardPort: (params: MobilePreviewForwardPortParams) =>
       ipcRenderer.invoke('mobilePreview:forwardPort', params),
     ensureMetroReverse: (params: { deviceId: string; metroPort: number }) =>
@@ -1296,6 +1322,14 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('mobilePreview:session', handler);
       return () => ipcRenderer.removeListener('mobilePreview:session', handler);
     },
+  },
+  mobileBuildStore: {
+    list: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:list', params),
+    build: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:build', params),
+    store: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:store', params),
+    install: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:install', params),
+    delete: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:delete', params),
+    rename: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:rename', params),
   },
   debug: {
     log: (params: { scope: string; message: string; data?: unknown }) =>
@@ -1388,6 +1422,29 @@ contextBridge.exposeInMainWorld('api', {
         model?: string;
         thinkingEffort?: import('@shared/types').ThinkingEffort;
         swapped: boolean;
+        skippedDueToRateLimit?: boolean;
+      }>,
+    /**
+     * React to a real rate-limit event by activating the fallback profile.
+     * Distinct from `resolve`, which is a side-effect-free probe.
+     */
+    react: (params: {
+      backend: import('@shared/agent-backend-types').AgentBackendType;
+      projectId?: string | null;
+    }) =>
+      ipcRenderer.invoke('rate-limit-swap:react', params) as Promise<{
+        backend: import('@shared/agent-backend-types').AgentBackendType;
+        model?: string;
+        thinkingEffort?: import('@shared/types').ThinkingEffort;
+        swapped: boolean;
+        skippedDueToRateLimit?: boolean;
+        profileId?: string;
+        blocked?: {
+          reason: 'backend-not-allowed' | 'profile-not-allowed';
+          message: string;
+          allowedBackends?: import('@shared/agent-backend-types').AgentBackendType[];
+          allowedProfileIds?: string[];
+        };
       }>,
   },
   usageDisplay: {

@@ -2595,6 +2595,20 @@ export function createAndroidMobilePreviewAdapter({
       );
     },
 
+    async captureScreenshot(deviceId: string): Promise<Buffer> {
+      await assertAdbInstalled();
+      assertDeviceId(deviceId);
+      const adbSerial = await resolveAndroidAdbSerial(deviceId);
+      const { stdout } = await runAdbBinaryCommand(
+        buildAdbScreenshotArgs(adbSerial),
+        { timeoutMs: ANDROID_SCREENSHOT_TIMEOUT_MS },
+      );
+      if (stdout.length === 0) {
+        throw new Error('Android screenshot command returned no image data.');
+      }
+      return stdout;
+    },
+
     async openDevMenu(deviceId: string): Promise<void> {
       await assertAdbInstalled();
       assertDeviceId(deviceId);

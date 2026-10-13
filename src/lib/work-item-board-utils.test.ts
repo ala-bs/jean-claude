@@ -22,7 +22,12 @@ const columns: AzureDevOpsBoardColumn[] = [
 const item = (id: number, fields: Partial<AzureDevOpsWorkItem['fields']>) => ({
   id,
   url: '',
-  fields: { title: 'Fix', workItemType: 'Bug', state: 'Active', ...fields },
+  fields: {
+    'System.Title': 'Fix',
+    'System.WorkItemType': 'Bug',
+    'System.State': 'Active',
+    ...fields,
+  },
 }) satisfies AzureDevOpsWorkItem;
 
 describe('isAzureBacklogItemType', () => {
@@ -48,7 +53,7 @@ describe('isAzureWorkItemOutOfSprint', () => {
   it('marks work items from another iteration', () => {
     expect(
       isAzureWorkItemOutOfSprint(
-        item(1, { iterationPath: 'Project\\Sprint 4' }),
+        item(1, { 'System.IterationPath': 'Project\\Sprint 4' }),
         'Project\\Sprint 5',
       ),
     ).toBe(true);
@@ -57,12 +62,12 @@ describe('isAzureWorkItemOutOfSprint', () => {
   it('matches iteration paths case-insensitively and ignores missing paths', () => {
     expect(
       isAzureWorkItemOutOfSprint(
-        item(1, { iterationPath: 'project\\sprint 5' }),
+        item(1, { 'System.IterationPath': 'project\\sprint 5' }),
         'Project\\Sprint 5',
       ),
     ).toBe(false);
     expect(isAzureWorkItemOutOfSprint(item(1, {}), 'Project\\Sprint 5')).toBe(false);
-    expect(isAzureWorkItemOutOfSprint(item(1, { iterationPath: 'Other' }), undefined)).toBe(false);
+    expect(isAzureWorkItemOutOfSprint(item(1, { 'System.IterationPath': 'Other' }), undefined)).toBe(false);
   });
 });
 
@@ -71,9 +76,9 @@ describe('groupWorkItemsByBoardColumns', () => {
     const groups = groupWorkItemsByBoardColumns({
       boardColumns: columns,
       workItems: [
-        item(1, { boardColumn: 'New' }),
+        item(1, { 'System.BoardColumn': 'New' }),
         item(2, {}),
-        item(3, { state: 'Removed' }),
+        item(3, { 'System.State': 'Removed' }),
       ],
     });
 
@@ -132,7 +137,7 @@ describe('calculateLinkedBugProgress', () => {
     expect(
       calculateLinkedBugProgress(
         { ...item(100, {}), relatedWorkItemIds: [1] },
-        [item(1, { workItemType: 'Bug', state: 'Closed' })],
+        [item(1, { 'System.WorkItemType': 'Bug', 'System.State': 'Closed' })],
       ),
     ).toEqual({ closed: 1, total: 1 });
   });
@@ -146,10 +151,10 @@ describe('calculateLinkedBugProgress', () => {
     expect(getLinkedBugCandidateIds(story)).toEqual([1, 2, 3]);
     expect(
       calculateLinkedBugProgress(story, [
-        item(1, { workItemType: 'Bug', state: 'Closed' }),
-        item(2, { workItemType: 'bug', state: 'closed' }),
-        item(3, { workItemType: 'Task', state: 'Closed' }),
-        item(99, { workItemType: 'Bug', state: 'Closed' }),
+        item(1, { 'System.WorkItemType': 'Bug', 'System.State': 'Closed' }),
+        item(2, { 'System.WorkItemType': 'bug', 'System.State': 'closed' }),
+        item(3, { 'System.WorkItemType': 'Task', 'System.State': 'Closed' }),
+        item(99, { 'System.WorkItemType': 'Bug', 'System.State': 'Closed' }),
       ]),
     ).toEqual({ closed: 2, total: 2 });
   });
@@ -159,9 +164,9 @@ describe('calculateLinkedBugProgress', () => {
       calculateLinkedBugProgress(
         { ...item(100, {}), relatedWorkItemIds: [1, 2, 3] },
         [
-          item(1, { workItemType: 'Task', state: 'Closed' }),
-          item(2, { workItemType: 'Bug', state: 'Resolved' }),
-          item(3, { workItemType: 'Bug', state: 'Done' }),
+          item(1, { 'System.WorkItemType': 'Task', 'System.State': 'Closed' }),
+          item(2, { 'System.WorkItemType': 'Bug', 'System.State': 'Resolved' }),
+          item(3, { 'System.WorkItemType': 'Bug', 'System.State': 'Done' }),
         ],
       ),
     ).toEqual({ closed: 1, total: 2 });
@@ -169,10 +174,18 @@ describe('calculateLinkedBugProgress', () => {
 
   it('counts Azure Done bugs as closed', () => {
     const story = {
-      ...item(1, { workItemType: 'User Story', title: 'Story', state: 'Active' }),
+      ...item(1, {
+        'System.WorkItemType': 'User Story',
+        'System.Title': 'Story',
+        'System.State': 'Active',
+      }),
       childIds: [2],
     };
-    const doneBug = item(2, { workItemType: 'Bug', title: 'Bug', state: 'Done' });
+    const doneBug = item(2, {
+      'System.WorkItemType': 'Bug',
+      'System.Title': 'Bug',
+      'System.State': 'Done',
+    });
 
     expect(calculateLinkedBugProgress(story, [doneBug])).toEqual({ closed: 1, total: 1 });
   });

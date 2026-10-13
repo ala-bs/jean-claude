@@ -1,3 +1,5 @@
+export { parseMobileBuildCommandId } from '@shared/mobile-build-command';
+
 export type PreviewSetupOperation = Readonly<{
   id: number;
   deviceKey: string;

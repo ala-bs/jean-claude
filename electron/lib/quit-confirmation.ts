@@ -25,12 +25,22 @@ let decisionForCurrentEvent: boolean | null = null;
  */
 export function quitWithoutConfirmation(): void {
   skipNextConfirmation = true;
+  // A programmatic quit can arrive in the same tick as a cancelled user quit.
+  // Override the stale cached cancellation so the internal quit reaches the
+  // cleanup path instead of consuming the skip flag on a vetoed attempt.
+  decisionForCurrentEvent = true;
+  setTimeout(() => {
+    decisionForCurrentEvent = null;
+  }, 0);
   app.quit();
 }
 
 /** Returns true when the quit should proceed. */
 export function confirmQuit(): boolean {
-  if (decisionForCurrentEvent !== null) return decisionForCurrentEvent;
+  if (decisionForCurrentEvent !== null) {
+    if (decisionForCurrentEvent) skipNextConfirmation = false;
+    return decisionForCurrentEvent;
+  }
 
   const decision = computeDecision();
   decisionForCurrentEvent = decision;

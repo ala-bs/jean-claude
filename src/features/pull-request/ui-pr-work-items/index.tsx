@@ -26,6 +26,13 @@ import { api, type AzureDevOpsWorkItem } from '@/lib/api';
 import { useWorkItemModalStore } from '@/stores/work-item-modal';
 
 
+import {
+  getAssignee,
+  getState,
+  getTitle,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
+
 import { WorkItemTypeIcon } from '../../work-item/ui-work-item-shared';
 
 function getStatusColor(status: string): string {
@@ -247,20 +254,20 @@ function WorkItemSearchInput({
                 key={wi.id}
                 className="hover:bg-bg-2 group flex w-full items-center gap-2 px-3 py-1.5"
               >
-                <WorkItemTypeIcon type={wi.fields.workItemType} size="sm" />
+                <WorkItemTypeIcon type={getWorkItemType(wi)} size="sm" />
                 <span className="text-acc-ink text-xs font-medium">
                   #{wi.id}
                 </span>
                 <span className="text-ink-1 min-w-0 flex-1 truncate text-xs">
-                  {wi.fields.title}
+                  {getTitle(wi)}
                 </span>
                 <span
                   className={clsx(
                     'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium',
-                    getStatusColor(wi.fields.state),
+                    getStatusColor(getState(wi)),
                   )}
                 >
-                  {wi.fields.state}
+                  {getState(wi)}
                 </span>
                 <span className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100">
                   <button
@@ -426,7 +433,7 @@ export function PrWorkItems({
                   className="hover:bg-bg-2 group flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 transition-colors"
                 >
                   <span className="mt-0.5 shrink-0">
-                    <WorkItemTypeIcon type={wi.fields.workItemType} size="sm" />
+                    <WorkItemTypeIcon type={getWorkItemType(wi)} size="sm" />
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-2">
@@ -434,21 +441,21 @@ export function PrWorkItems({
                         #{wi.id}
                       </span>
                       <span className="text-ink-1 min-w-0 flex-1 truncate text-xs">
-                        {wi.fields.title}
+                        {getTitle(wi)}
                       </span>
                     </div>
                     <div className="mt-0.5 flex min-w-0 items-center gap-2">
                       <span
                         className={clsx(
                           'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium',
-                          getStatusColor(wi.fields.state),
+                          getStatusColor(getState(wi)),
                         )}
                       >
-                        {wi.fields.state}
+                        {getState(wi)}
                       </span>
-                      {wi.fields.assignedTo && (
+                      {getAssignee(wi) && (
                         <span className="text-ink-3 max-w-28 min-w-0 truncate text-[10px]">
-                          {wi.fields.assignedTo}
+                          {getAssignee(wi)?.displayName}
                         </span>
                       )}
                     </div>

@@ -11,6 +11,7 @@ export function buildJcMcpServersConfigForCwd({
   questionBridge,
   enableAgentTool = false,
   enableReviewTool = false,
+  useCodexElicitation = false,
   environmentMode = 'env',
 }: {
   cwd: string;
@@ -23,10 +24,16 @@ export function buildJcMcpServersConfigForCwd({
   };
   enableAgentTool?: boolean;
   enableReviewTool?: boolean;
+  useCodexElicitation?: boolean;
   environmentMode?: 'env' | 'argv';
 }): Record<
   string,
-  { command: string; args: string[]; env?: Record<string, string> }
+  {
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+    tools?: Record<string, { approval_mode?: 'auto' | 'prompt' | 'approve' }>;
+  }
 > {
   const serverPath = getJcMcpServerPath();
   const env = {
@@ -41,6 +48,7 @@ export function buildJcMcpServersConfigForCwd({
     JC_MCP_AUTH_TOKEN: questionBridge.token,
     ...(enableAgentTool ? { JC_MCP_ENABLE_AGENT_TOOL: '1' } : {}),
     ...(enableReviewTool ? { JC_MCP_ENABLE_REVIEW_TOOL: '1' } : {}),
+    ...(useCodexElicitation ? { JC_MCP_USE_CODEX_ELICITATION: '1' } : {}),
   };
 
   if (environmentMode === 'env') {
@@ -49,6 +57,9 @@ export function buildJcMcpServersConfigForCwd({
         command: 'node',
         args: [serverPath, '--workdir', cwd],
         env,
+        ...(useCodexElicitation
+          ? { tools: { ask_question: { approval_mode: 'auto' as const } } }
+          : {}),
       },
     };
   }
@@ -63,6 +74,9 @@ export function buildJcMcpServersConfigForCwd({
         '--workdir',
         cwd,
       ],
+      ...(useCodexElicitation
+        ? { tools: { ask_question: { approval_mode: 'auto' as const } } }
+        : {}),
     },
   };
 }

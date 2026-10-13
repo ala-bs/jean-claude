@@ -8,9 +8,8 @@ import {
   Loader2,
   PackageOpen,
 } from 'lucide-react';
-import { codeToTokens, type ThemedToken } from 'shiki';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
-import { memo, startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import clsx from 'clsx';
 
 
@@ -29,8 +28,12 @@ import {
   computeDiff,
   parseUnifiedPatchToStrings,
 } from '../../ui-diff-view/diff-utils';
+import {
+  DEFAULT_LANGUAGE,
+  getLanguageFromPath,
+  tokenizeLines,
+} from '@/lib/syntax-highlight';
 import { CommentableTextEntry } from '../ui-commentable-text-entry';
-import { getLanguageFromPath } from '../../ui-diff-view/language-utils';
 import { MarkdownContent } from '../../ui-markdown-content';
 import { MergeResolutionEntry } from '../ui-merge-resolution-entry';
 import { TodoListEntry } from '../ui-todo-list-entry';
@@ -48,8 +51,6 @@ function LineNumberedContent({
   content: string;
   filePath?: string;
 }) {
-  const [tokens, setTokens] = useState<ThemedToken[][] | null>(null);
-
   // Check if content has line numbers (format: spaces + number + arrow)
   const lineNumberPattern = /^(\s*\d+)\u2192(.*)$/;
   const lines = content.split('\n');
@@ -72,25 +73,15 @@ function LineNumberedContent({
     : content;
 
   // Get language from file path for syntax highlighting
-  const language = filePath ? getLanguageFromPath(filePath) : 'text';
+  const language = filePath ? getLanguageFromPath(filePath) : DEFAULT_LANGUAGE;
 
-  // Load syntax tokens asynchronously
-  useEffect(() => {
-    if (language === 'text') {
-      startTransition(() => setTokens(null));
-      return;
-    }
-
-    codeToTokens(rawCode || ' ', {
-      lang: language,
-      theme: 'github-dark',
-    })
-      .then((result) => setTokens(result.tokens))
-      .catch(() => {
-        // Fallback to no highlighting
-        setTokens(null);
-      });
-  }, [rawCode, language]);
+  // Skip highlighting entirely for plain text so we render raw content.
+  // No useMemo needed: the React Compiler hoists this call into a cache guard
+  // keyed on `content` and `filePath` (verified in the compiler output), which
+  // is equivalent. Don't rely on tokenizeLines' own cache for this — it skips
+  // inputs over MAX_CACHEABLE_ENTRY_CHARS.
+  const tokens =
+    language === DEFAULT_LANGUAGE ? null : tokenizeLines(rawCode, language);
 
   // Render content without line numbers
   if (!hasLineNumbers || !parsedLines) {
@@ -471,42 +462,19 @@ function CompactDiffPreview({
   newString: string;
   onClick?: (filePath: string, oldString: string, newString: string) => void;
 }) {
-  const [oldTokens, setOldTokens] = useState<ThemedToken[][]>([]);
-  const [newTokens, setNewTokens] = useState<ThemedToken[][]>([]);
   const language = getLanguageFromPath(filePath);
 
-  useEffect(() => {
-    let isCancelled = false;
-
-    Promise.all([
-      codeToTokens(oldString || ' ', {
-        lang: language,
-        theme: 'github-dark',
-      }).catch(() =>
-        codeToTokens(oldString || ' ', { lang: 'text', theme: 'github-dark' }),
-      ),
-      codeToTokens(newString || ' ', {
-        lang: language,
-        theme: 'github-dark',
-      }).catch(() =>
-        codeToTokens(newString || ' ', { lang: 'text', theme: 'github-dark' }),
-      ),
-    ])
-      .then(([oldResult, newResult]) => {
-        if (isCancelled) return;
-        setOldTokens(oldResult.tokens);
-        setNewTokens(newResult.tokens);
-      })
-      .catch(() => {
-        if (isCancelled) return;
-        setOldTokens([]);
-        setNewTokens([]);
-      });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [language, oldString, newString]);
+  // Tokens stay indexed by absolute file line, since the preview slices diff
+  // lines that carry original line numbers. Cached, so opening the full diff
+  // view for this same file reuses this work.
+  const oldTokens = useMemo(
+    () => tokenizeLines(oldString, language),
+    [oldString, language],
+  );
+  const newTokens = useMemo(
+    () => tokenizeLines(newString, language),
+    [newString, language],
+  );
 
   const preview = useMemo(() => {
     const lines = computeDiff(oldString, newString);
@@ -654,6 +622,9 @@ function CompactDiffPreview({
 
 function getPermissionMetadata(toolUse: NormalizedToolUse): string | undefined {
   if (!toolUse.permission) return undefined;
+  if (toolUse.permission.source === 'sandbox') {
+    return 'allowed by Codex sandbox';
+  }
   if (toolUse.permission.allowedBy === 'agent') return 'allowed by agent';
 
   const rule = toolUse.permission.rule;

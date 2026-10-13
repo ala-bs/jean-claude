@@ -3,7 +3,10 @@ import path from 'node:path';
 
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
-import type { ProjectFeatureMap } from '@shared/types';
+import type {
+  FeatureMapDraftValidation,
+  ProjectFeatureMap,
+} from '@shared/types';
 
 export const FEATURE_MAP_GIT_PATH = '.jean-claude/feature-map.yaml';
 const FEATURE_MAP_RELATIVE_PATH = path.join('.jean-claude', 'feature-map.yaml');
@@ -92,14 +95,61 @@ export async function saveProjectFeatureMapFromTemp({
   tempFilePath: string;
   savedFilePath: string;
 }) {
+  const validation = await validateProjectFeatureMapDraft({ tempFilePath });
+  if (validation.status === 'invalid') {
+    throw new Error(
+      `Temp file is not a valid feature map YAML: ${validation.error}`,
+    );
+  }
+
   const content = await readFile(tempFilePath, 'utf8');
   const featureMap = parseProjectFeatureMapContent(content);
-  if (!featureMap) throw new Error('Temp file is not a valid feature map YAML');
+  if (!featureMap) {
+    throw new Error('Temp file is not a valid feature map YAML');
+  }
 
   const yamlPath = savedFilePath.replace(/\.json$/i, '.yaml');
   await mkdir(path.dirname(yamlPath), { recursive: true });
   await writeFile(yamlPath, stringifyFeatureMap(featureMap));
   return featureMap;
+}
+
+export async function validateProjectFeatureMapDraft({
+  tempFilePath,
+}: {
+  tempFilePath: string;
+}): Promise<FeatureMapDraftValidation> {
+  const validatedAt = new Date().toISOString();
+
+  let content: string;
+  try {
+    content = await readFile(tempFilePath, 'utf8');
+  } catch (error) {
+    const reason =
+      error instanceof Error && 'code' in error && error.code === 'ENOENT'
+        ? 'output file not found'
+        : 'could not read output file';
+    return { status: 'invalid', validatedAt, error: reason };
+  }
+
+  let value: unknown;
+  try {
+    value = parseYaml(content);
+  } catch {
+    return { status: 'invalid', validatedAt, error: 'invalid YAML' };
+  }
+
+  const validationError = validateFeatureMapShape(value);
+  if (validationError) {
+    return { status: 'invalid', validatedAt, error: validationError };
+  }
+
+  const features = (value as { features: unknown[] }).features;
+  return {
+    status: 'valid',
+    validatedAt,
+    featureCount: features.length,
+  };
 }
 
 export async function getProjectFeatureMapDraftDiff({
@@ -230,6 +280,59 @@ function normalizeFeatureMap(value: unknown): ProjectFeatureMap | null {
 
   if (normalized.length === 0) return null;
   return { features: normalized, generatedAt: new Date().toISOString() };
+}
+
+function validateFeatureMapShape(value: unknown): string | null {
+  if (!value || typeof value !== 'object') {
+    return 'root must be an object';
+  }
+
+  const features = (value as { features?: unknown }).features;
+  if (!Array.isArray(features)) return 'features must be an array';
+  if (features.length === 0) return 'features must contain at least one item';
+
+  for (const [index, feature] of features.entries()) {
+    const error = validateFeatureNodeShape(feature, `features[${index}]`);
+    if (error) return error;
+  }
+  return null;
+}
+
+function validateFeatureNodeShape(value: unknown, location: string): string | null {
+  if (!value || typeof value !== 'object') {
+    return `${location} must be an object`;
+  }
+
+  const item = value as {
+    name?: unknown;
+    summary?: unknown;
+    key_files?: unknown;
+    files?: unknown;
+    children?: unknown;
+  };
+  if (typeof item.name !== 'string' || !item.name.trim()) {
+    return `${location}.name must be a non-empty string`;
+  }
+  if (typeof item.summary !== 'string' || !item.summary.trim()) {
+    return `${location}.summary must be a non-empty string`;
+  }
+
+  const keyFiles = item.key_files ?? item.files;
+  if (!Array.isArray(keyFiles)) {
+    return `${location}.key_files must be an array`;
+  }
+  if (!Array.isArray(item.children)) {
+    return `${location}.children must be an array`;
+  }
+
+  for (const [index, child] of item.children.entries()) {
+    const error = validateFeatureNodeShape(
+      child,
+      `${location}.children[${index}]`,
+    );
+    if (error) return error;
+  }
+  return null;
 }
 
 function normalizeFeature(

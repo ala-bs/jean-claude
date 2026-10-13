@@ -66,6 +66,7 @@ export interface Database {
   work_activity_events: WorkActivityEventTable;
   work_item_summaries: WorkItemSummaryTable;
   mobile_preview_device_usage: MobilePreviewDeviceUsageTable;
+  mobile_build_artifacts: MobileBuildArtifactTable;
   project_env_vars: ProjectEnvVarTable;
 }
 
@@ -132,9 +133,19 @@ export interface ProjectTable {
   workItemProjectId: string | null;
   workItemProjectName: string | null;
   workItemTitleParser: string | null; // JSON text
+  workItemDisplayConfig: string | null; // JSON text
   // Agent backend (null = use global default)
+  /**
+   * @deprecated Replaced by `modelPolicy` + model profiles. Still present
+   * because `ipc/handlers.ts`, `step-service.ts`, `pr-review-agent-service.ts`
+   * and the project settings UI still read/write it; the column is dropped
+   * together with those consumers (T16).
+   */
   defaultAgentBackend: string | null;
+  /** @deprecated See `defaultAgentBackend`. */
   defaultAgentModelPreference: string | null;
+  // Model policy (JSON text of ProjectModelPolicy; null = { mode: 'inherit' })
+  modelPolicy: string | null;
   completionContext: string | null;
   summary: string | null;
   aiSkillSlots: string | null; // JSON text
@@ -596,3 +607,22 @@ export type NewMobilePreviewDeviceUsageRow =
   Insertable<MobilePreviewDeviceUsageTable>;
 export type UpdateMobilePreviewDeviceUsageRow =
   Updateable<MobilePreviewDeviceUsageTable>;
+
+export interface MobileBuildArtifactTable {
+  id: string;
+  name: string | null;
+  repositoryPath: string | null;
+  platform: string;
+  packageId: string;
+  appPath: string;
+  fingerprint: string;
+  buildCommand: string;
+  artifactKind: string;
+  artifactPath: string;
+  sizeBytes: number;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+export type MobileBuildArtifactRow = Selectable<MobileBuildArtifactTable>;
+export type NewMobileBuildArtifactRow = Insertable<MobileBuildArtifactTable>;

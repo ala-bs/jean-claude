@@ -160,9 +160,28 @@ export async function captureSimulatorScreenshot(
   deviceId: string,
   signal?: AbortSignal,
 ): Promise<Buffer> {
+  return captureSimulatorScreenshotOfType({ deviceId, type: 'jpeg', signal });
+}
+
+export async function captureSimulatorScreenshotPng(
+  deviceId: string,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  return captureSimulatorScreenshotOfType({ deviceId, type: 'png', signal });
+}
+
+async function captureSimulatorScreenshotOfType({
+  deviceId,
+  type,
+  signal,
+}: {
+  deviceId: string;
+  type: 'jpeg' | 'png';
+  signal?: AbortSignal;
+}): Promise<Buffer> {
   const outputPath = join(
     tmpdir(),
-    `jean-claude-ios-preview-${randomUUID()}.jpg`,
+    `jean-claude-ios-preview-${randomUUID()}.${type}`,
   );
   try {
     await runCommand(
@@ -172,7 +191,7 @@ export async function captureSimulatorScreenshot(
         'io',
         deviceId,
         'screenshot',
-        '--type=jpeg',
+        `--type=${type}`,
         outputPath,
       ],
       { timeoutMs: IOS_SCREENSHOT_TIMEOUT_MS, signal },

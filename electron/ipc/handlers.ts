@@ -79,6 +79,7 @@ import type {
   MobilePreviewAndroidInstallSystemImageParams,
   MobilePreviewAttachSessionParams,
   MobilePreviewBootDeviceParams,
+  MobilePreviewCaptureScreenshotParams,
   MobilePreviewDetachSessionParams,
   MobilePreviewExpoLaunchParams,
   MobilePreviewForwardPortParams,
@@ -106,6 +107,12 @@ import type {
   ReactNativeDevToolsOpenParams,
   ReactNativeDevToolsResolveParams,
 } from '@shared/mobile-simulator-types';
+import type {
+  ModelOverride,
+  ModelProfile,
+  ModelRole,
+  ProjectModelPolicy,
+} from '@shared/model-profiles';
 import type {
   NewMcpServerTemplate,
   NewProjectMcpOverride,
@@ -296,6 +303,7 @@ import {
   getProjectFeatureMap,
   getProjectFeatureMapDraftDiff,
   saveProjectFeatureMapFromTemp,
+  validateProjectFeatureMapDraft,
 } from '../services/project-feature-map-generation-service';
 import {
   buildPromptActivityText,
@@ -517,6 +525,7 @@ import { McpTemplateRepository } from '../database/repositories/mcp-templates';
 import { mobilePreviewExpoLaunchService } from '../services/mobile-preview-expo-launch-service';
 import { mobilePreviewIosAppService } from '../services/mobile-preview-ios-app-service';
 import { mobilePreviewService } from '../services/mobile-preview-service';
+import { mobileBuildStoreService } from '../services/mobile-build-store-service';
 import { NotificationRepository } from '../database/repositories/notifications';
 import { notificationService } from '../services/notification-service';
 import { orchestrateReloadedPreview } from '../services/reload-preview-service';
@@ -578,6 +587,7 @@ import {
   validateTaskSourceBranchChange,
 } from './task-source-branch-validation';
 import { cloneFromUrl } from '../services/git-clone-service';
+import { getModelProfileService } from '../services/model-profile-service';
 import { registerPrWorkspaceIpcHandlers } from './pr-workspace-ipc';
 
 function redactAiGenerationSetting(
@@ -1190,6 +1200,39 @@ function emitProjectUpsert(project: unknown) {
   emitCacheEvent({ type: 'project.upsert', project: project as Project });
 }
 
+/**
+ * The effective project policy is cached per project inside the model profile
+ * service, so every write path that can change it (project create/update and
+ * the dedicated policy write) has to drop the entry. Without this an `enforce`
+ * change would only take effect after a restart.
+ */
+function invalidateProjectPolicy(projectId: string) {
+  getModelProfileService().invalidateProjectPolicyCache({ projectId });
+}
+
+/** Tells every renderer that the globally active model profile changed. */
+function broadcastActiveModelProfile(profile: ModelProfile) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('modelProfiles:activated', { profile });
+  }
+}
+
+/**
+ * Backend to use for a project when nothing more specific (a step row, an AI
+ * skill slot) says otherwise. Replaces the old `project.defaultAgentBackend`
+ * column: the `agent` role of the pinned or active profile is now the single
+ * source of truth.
+ */
+async function resolveProjectAgentBackend(
+  projectId: string | null | undefined,
+): Promise<AgentBackendType> {
+  const resolved = await getModelProfileService().resolveForRole({
+    role: 'agent',
+    projectId: projectId ?? null,
+  });
+  return resolved.backend;
+}
+
 function emitProjectPatch(projectId: string, patch: Partial<Project>) {
   emitCacheEvent({ type: 'project.patch', projectId, patch });
 }
@@ -1326,6 +1369,7 @@ export function registerIpcHandlers() {
       ...data,
       ...(mobilePreviewConfig && { mobilePreviewConfig }),
     });
+    invalidateProjectPolicy(project.id);
     emitProjectUpsert(project);
     await seedDefaultProjectPermissions(project.path).catch((error) => {
       dbg.ipc('projects:create default permissions seeding failed: %O', error);
@@ -1425,6 +1469,24 @@ export function registerIpcHandlers() {
       ) {
         invalidatePrCache();
       }
+      // The project row feeds the effective policy (and the repo path it is
+      // read from), so any update can invalidate it.
+      invalidateProjectPolicy(id);
+      emitProjectUpsert(result);
+      return result;
+    },
+  );
+  ipcMain.handle(
+    'projects:getEffectivePolicy',
+    async (_, projectId: string) =>
+      getModelProfileService().getEffectivePolicy({ projectId }),
+  );
+  ipcMain.handle(
+    'projects:setModelPolicy',
+    async (_, projectId: string, policy: ProjectModelPolicy) => {
+      dbg.ipc('projects:setModelPolicy %s %s', projectId, policy?.mode);
+      const result = await ProjectRepository.setModelPolicy(projectId, policy);
+      invalidateProjectPolicy(projectId);
       emitProjectUpsert(result);
       return result;
     },
@@ -1552,9 +1614,7 @@ export function registerIpcHandlers() {
           thinkingEffort: slotConfig?.thinkingEffort ?? null,
           agentBackend:
             slotConfig?.backend ??
-            (VALID_BACKENDS.has(project.defaultAgentBackend ?? '')
-              ? (project.defaultAgentBackend as AgentBackendType)
-              : 'claude-code'),
+            (await resolveProjectAgentBackend(project.id)),
           meta,
         });
 
@@ -1597,12 +1657,22 @@ export function registerIpcHandlers() {
         throw new Error('Feature map project metadata is stale');
       }
 
+      const validation = await validateProjectFeatureMapDraft({
+        tempFilePath: meta.tempFilePath,
+      });
+      if (validation.status === 'invalid') {
+        await updateStepAndEmit(stepId, {
+          meta: { ...meta, draftValidation: validation },
+        });
+        throw new Error(`Feature map not ready: ${validation.error}`);
+      }
+
       const featureMap = await saveProjectFeatureMapFromTemp({
         tempFilePath: meta.tempFilePath,
         savedFilePath: meta.savedFilePath,
       });
       await updateStepAndEmit(stepId, {
-        meta: { ...meta, saved: true },
+        meta: { ...meta, draftValidation: validation, saved: true },
       });
       await cleanupFeatureMapTempDir(meta.tempDir).catch((err) => {
         dbg.ipc(
@@ -1841,8 +1911,7 @@ export function registerIpcHandlers() {
       projectId,
       project.path,
     );
-    const backendType =
-      (project.defaultAgentBackend as AgentBackendType | null) ?? 'claude-code';
+    const backendType = await resolveProjectAgentBackend(project.id);
     if (backendType === 'vibe') {
       return [];
     }
@@ -3435,8 +3504,11 @@ export function registerIpcHandlers() {
         findTaskById: TaskRepository.findById,
         findProjectById: ProjectRepository.findById,
         getPullRequest,
-        getPrReviewAgentSetting: () => SettingsRepository.get('prReviewAgent'),
-        getBackendsSetting: () => SettingsRepository.get('backends'),
+        resolvePrReviewModel: ({ projectId }) =>
+          getModelProfileService().resolveForRole({
+            role: 'pr-review',
+            projectId,
+          }),
         createStep: StepService.create,
         startAgent: startAgentForStep,
         onStartError: (step, error) => {
@@ -3584,8 +3656,21 @@ export function registerIpcHandlers() {
           iterationPaths?: string[];
           assignedTo?: string;
         };
+        extraFieldRefNames?: string[];
       },
     ) => queryWorkItems(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:getWorkItemTypeFields',
+    async (
+      _event,
+      params: { providerId: string; azureProjectId: string },
+    ) => {
+      const { getWorkItemTypeFields } =
+        await import('../services/azure-devops-service');
+      return getWorkItemTypeFields(params);
+    },
   );
 
   ipcMain.handle(
@@ -3601,7 +3686,14 @@ export function registerIpcHandlers() {
 
   ipcMain.handle(
     'azureDevOps:getWorkItemById',
-    async (_event, params: { providerId: string; workItemId: number }) => {
+    async (
+      _event,
+      params: {
+        providerId: string;
+        workItemId: number;
+        extraFieldRefNames?: string[];
+      },
+    ) => {
       const { getWorkItemById } =
         await import('../services/azure-devops-service');
       return getWorkItemById(params);
@@ -3616,6 +3708,7 @@ export function registerIpcHandlers() {
         providerId: string;
         projectName: string;
         workItemIds: number[];
+        extraFieldRefNames?: string[];
       },
     ) => {
       const { getWorkItemsByIds } =
@@ -5049,6 +5142,34 @@ export function registerIpcHandlers() {
     },
   );
 
+  // Model profiles (design §2/§3)
+  ipcMain.handle(
+    'modelProfiles:resolve',
+    async (
+      _,
+      params: {
+        role: ModelRole;
+        projectId?: string | null;
+        override?: ModelOverride | null;
+      },
+    ) =>
+      getModelProfileService().resolveForRole({
+        role: params.role,
+        projectId: params.projectId ?? null,
+        override: params.override ?? null,
+      }),
+  );
+  ipcMain.handle('modelProfiles:activate', async (_, profileId: string) => {
+    dbg.ipc('modelProfiles:activate %s', profileId);
+    // Throws on an unknown profile; the broadcast only happens once the switch
+    // is persisted, so renderers never show a profile that is not active.
+    const profile = await getModelProfileService().activateProfile({
+      profileId,
+    });
+    broadcastActiveModelProfile(profile);
+    return profile;
+  });
+
   // Settings
   ipcMain.handle(
     'settings:get',
@@ -5445,9 +5566,9 @@ export function registerIpcHandlers() {
       await import('../services/rate-limit-swap-service');
     const { SettingsRepository } =
       await import('../database/repositories/settings');
-    const settings = await SettingsRepository.get('rateLimitSwap');
-    if (!settings?.enabled || !settings.chain?.length)
-      return { active: false, swaps: [] };
+    // The chain is gone: the fallback is an ordered list of profile ids.
+    const fallbackOrder = await getModelProfileService().getFallbackOrder();
+    if (!fallbackOrder.length) return { active: false, swaps: [] };
 
     const backends = await SettingsRepository.get('backends');
     const enabledBackends = backends?.enabledBackends ?? ['claude-code'];
@@ -5573,6 +5694,36 @@ export function registerIpcHandlers() {
       const { rateLimitSwapService } =
         await import('../services/rate-limit-swap-service');
       return rateLimitSwapService.resolveBackend(backend, { notify: false });
+    },
+  );
+
+  /**
+   * React to a REAL rate-limit event by activating the fallback profile.
+   *
+   * Deliberately a separate channel from `rate-limit-swap:resolve`: that one is
+   * a probe (`rate-limit-swap:status` loops it over every enabled backend, and
+   * `ai-generation-service` uses it to peek), and activating the fallback as a
+   * side effect of a probe would silently flip the user's active profile. Only
+   * this channel passes `activate: true`.
+   *
+   * `projectId` is required for the design §8 rule: a project in `enforce` mode
+   * whose permitted backend is limited must be blocked, not silently swapped to
+   * a forbidden backend. The full `SwapResult` (including `blocked`) is
+   * returned so the renderer can surface that error.
+   */
+  ipcMain.handle(
+    'rate-limit-swap:react',
+    async (
+      _,
+      params: { backend: AgentBackendType; projectId?: string | null },
+    ) => {
+      const { rateLimitSwapService } =
+        await import('../services/rate-limit-swap-service');
+      return rateLimitSwapService.resolveBackend(params.backend, {
+        notify: true,
+        activate: true,
+        projectId: params.projectId ?? null,
+      });
     },
   );
   // Backend models
@@ -5898,6 +6049,12 @@ export function registerIpcHandlers() {
   ipcMain.handle('mobilePreview:listDevices', (_, platform: MobilePlatform) =>
     mobilePreviewService.listDevices(platform),
   );
+  ipcMain.handle('mobileBuildStore:list', (_, params) => mobileBuildStoreService.list(params));
+  ipcMain.handle('mobileBuildStore:build', (_, params) => mobileBuildStoreService.build(params));
+  ipcMain.handle('mobileBuildStore:store', (_, params) => mobileBuildStoreService.store(params));
+  ipcMain.handle('mobileBuildStore:install', (_, params) => mobileBuildStoreService.install(params));
+  ipcMain.handle('mobileBuildStore:delete', (_, params) => mobileBuildStoreService.delete(params));
+  ipcMain.handle('mobileBuildStore:rename', (_, params) => mobileBuildStoreService.rename(params));
   ipcMain.handle(
     'mobilePreview:listSessions',
     (_, params: MobilePreviewListSessionsParams) =>
@@ -6018,6 +6175,11 @@ export function registerIpcHandlers() {
     'mobilePreview:bootDevice',
     (_, params: MobilePreviewBootDeviceParams) =>
       mobilePreviewService.bootDevice(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:captureScreenshot',
+    (_, params: MobilePreviewCaptureScreenshotParams) =>
+      mobilePreviewService.captureScreenshot(params),
   );
   ipcMain.handle(
     'mobilePreview:openDevMenu',
@@ -7020,7 +7182,8 @@ export function registerIpcHandlers() {
 
       const project = await ProjectRepository.findById(task.projectId);
 
-      // Resolve backend from step, falling back to project default, then 'claude-code'.
+      // Resolve backend from the step, falling back to the `agent` role of the
+      // project's pinned or active model profile.
       // Only trust step backend when the step belongs to this task.
       let stepBackend: AgentBackendType | undefined;
       if (stepId) {
@@ -7031,9 +7194,7 @@ export function registerIpcHandlers() {
       }
 
       const backendType: AgentBackendType =
-        stepBackend ??
-        (project?.defaultAgentBackend as AgentBackendType | null) ??
-        'claude-code';
+        stepBackend ?? (await resolveProjectAgentBackend(task.projectId));
 
       if (backendType === 'vibe') {
         return [];

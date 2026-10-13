@@ -6,9 +6,33 @@ import type { ThinkingEffort } from '@shared/types';
 import { dbg } from '../lib/debug';
 
 import { getAgentBackendProvider } from './agent-backends/providers';
+import { getModelProfileService } from './model-profile-service';
 import { rateLimitSwapService } from './rate-limit-swap-service';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+
+/**
+ * The `ai-generation` catch-all role under the currently active profile, but
+ * only when it actually lands on `backend`. A profile whose catch-all names a
+ * different backend tells us nothing about the backend we just swapped to.
+ */
+async function resolveAiGenerationRole(
+  backend: AgentBackendType,
+): Promise<{ model: string; thinkingEffort: ThinkingEffort } | null> {
+  try {
+    const resolved = await getModelProfileService().resolveForRole({
+      role: 'ai-generation',
+    });
+    if (resolved.off || resolved.backend !== backend) return null;
+    return {
+      model: resolved.model,
+      thinkingEffort: resolved.thinkingEffort,
+    };
+  } catch (error) {
+    dbg.agent('Failed to resolve the ai-generation role: %O', error);
+    return null;
+  }
+}
 
 /**
  * Thin abstraction for simple text generation across agent backends.
@@ -25,6 +49,7 @@ export async function generateText({
   allowedTools,
   allowedToolPatterns,
   toolPolicy,
+  allowReadOnlyShell,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   throwOnError = false,
   allowRateLimitSwap = true,
@@ -41,6 +66,7 @@ export async function generateText({
   allowedTools?: string[];
   allowedToolPatterns?: Record<string, string[]>;
   toolPolicy?: 'default' | 'none';
+  allowReadOnlyShell?: boolean;
   timeoutMs?: number;
   throwOnError?: boolean;
   allowRateLimitSwap?: boolean;
@@ -53,10 +79,22 @@ export async function generateText({
     : { backend, swapped: false, model: undefined, thinkingEffort: undefined };
   const resolvedBackend = swapResult.backend;
   const backendChanged = resolvedBackend !== backend;
+  // Design §2/§4: the swap is a *profile* switch, so a cross-backend fallback
+  // takes its model from the profile's `ai-generation` role rather than
+  // collapsing to `'default'`. The caller's model belongs to the old backend
+  // and is meaningless on the new one.
+  const fromProfile =
+    backendChanged && swapResult.model == null
+      ? await resolveAiGenerationRole(resolvedBackend)
+      : null;
   const resolvedModel =
-    swapResult.model ?? (backendChanged ? 'default' : model);
+    swapResult.model ??
+    fromProfile?.model ??
+    (backendChanged ? 'default' : model);
   const resolvedThinkingEffort =
-    swapResult.thinkingEffort ?? (backendChanged ? undefined : thinkingEffort);
+    swapResult.thinkingEffort ??
+    fromProfile?.thinkingEffort ??
+    (backendChanged ? undefined : thinkingEffort);
   if (swapResult.swapped) {
     console.log(
       `[rate-limit-swap] AI gen${skillName ? ` (${skillName})` : ''}: swapped ${backend} -> ${resolvedBackend} (model: ${resolvedModel})`,
@@ -93,6 +131,7 @@ export async function generateText({
         allowedTools,
         allowedToolPatterns,
         toolPolicy,
+        allowReadOnlyShell,
         abortController,
         usageContext,
       };
@@ -135,6 +174,7 @@ export async function generateText({
       allowedTools,
       allowedToolPatterns,
       toolPolicy,
+      allowReadOnlyShell,
       abortController,
       usageContext,
     });

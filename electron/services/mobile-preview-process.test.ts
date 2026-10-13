@@ -32,7 +32,10 @@ async function waitForFileContent(
     await sleep(10);
   }
 
-  return lastContent || fs.readFile(path, 'utf8');
+  if (lastContent) return lastContent;
+  throw new Error(
+    `timed out after ${timeoutMs}ms waiting for "${expected}" in ${path} (file never appeared)`,
+  );
 }
 
 async function waitForProcessExit(
@@ -173,7 +176,13 @@ describe('mobile preview process helpers', () => {
             READY_MARKER: readyPath,
             TERM_MARKER: termPath,
           },
-          timeoutMs: 50,
+          // Long enough that the child has reliably spawned and written its
+          // ready marker before the timeout fires. At 50ms this raced Node's
+          // own startup under parallel load: SIGTERM arrived first, the marker
+          // was never written, and the assertion failed with ENOENT instead of
+          // the timeout it was testing. The child never exits on its own
+          // (setInterval), so the timeout path is still what is exercised.
+          timeoutMs: 1500,
         },
       );
       let settled = false;

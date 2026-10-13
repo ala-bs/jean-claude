@@ -38,6 +38,7 @@ const iphone: MobilePreviewDevice = {
 const pixel: MobilePreviewDevice = {
   id: '39021FDJH00123',
   name: 'Pixel 7',
+  model: 'Pixel 7',
   platform: 'android',
   state: 'booted',
   kind: 'physical',
@@ -87,9 +88,18 @@ describe('applyDeviceToBuildCommand', () => {
         device: pixel,
       });
       expect(result.command).toBe(
-        `npx expo run:android --variant debug --device ${pixel.id}`,
+        'npx expo run:android --variant debug --device Pixel_7',
       );
       expect(result.applied).toBe(true);
+    });
+
+    it('uses the raw Android model name for Expo physical-device selection', () => {
+      expect(
+        applyDeviceToBuildCommand({
+          command: 'npx expo run:android',
+          device: pixel,
+        }).command,
+      ).toBe('npx expo run:android --device Pixel_7');
     });
 
     it('appends --udid for react-native run-ios', () => {
@@ -168,13 +178,26 @@ describe('applyDeviceToBuildCommand', () => {
       ).toBe(`npx react-native run-ios --udid ${simulator.id}`);
     });
 
-    it('targets an Android emulator through expo using the adb serial', () => {
+    it('targets an Android emulator through expo using the AVD name', () => {
       expect(
         applyDeviceToBuildCommand({
           command: 'npx expo run:android',
           device: emulator,
         }).command,
-      ).toBe('npx expo run:android --device emulator-5554');
+      ).toBe('npx expo run:android --device Pixel_7_API_34');
+    });
+
+    it('reports a missing AVD name when the rail id is still an adb serial', () => {
+      const result = applyDeviceToBuildCommand({
+        command: 'npx expo run:android',
+        device: { ...emulator, id: 'emulator-5554' },
+      });
+      expect(result).toEqual({
+        command: 'npx expo run:android',
+        applied: false,
+        reason: 'missing-avd-name',
+      });
+      expect(getDeviceBuildCommandNotice(result)).toContain('AVD name');
     });
 
     it('targets an Android emulator through react-native using the adb serial', () => {
@@ -186,7 +209,7 @@ describe('applyDeviceToBuildCommand', () => {
       ).toBe('npx react-native run-android --deviceId emulator-5554');
     });
 
-    it('falls back to the rail id when there is no connectionId', () => {
+    it('uses the AVD name even without a connectionId', () => {
       expect(
         applyDeviceToBuildCommand({
           command: 'npx expo run:android',
@@ -261,19 +284,23 @@ describe('applyDeviceToBuildCommand', () => {
     );
 
     it.each([
-      ['npm run android', ['expo'], `npm run android -- --device ${pixel.id}`],
+      [
+        'npm run android',
+        ['expo'],
+        'npm run android -- --device Pixel_7',
+      ],
       [
         'npm run android',
         ['react-native'],
         `npm run android -- --deviceId ${pixel.id}`,
       ],
-      ['pnpm run android', ['expo'], `pnpm run android --device ${pixel.id}`],
+      ['pnpm run android', ['expo'], 'pnpm run android --device Pixel_7'],
       [
         'pnpm android',
         ['react-native'],
         `pnpm android --deviceId ${pixel.id}`,
       ],
-      ['yarn android', ['expo'], `yarn android --device ${pixel.id}`],
+      ['yarn android', ['expo'], 'yarn android --device Pixel_7'],
       [
         'bun run android',
         ['react-native'],
@@ -344,7 +371,7 @@ describe('applyDeviceToBuildCommand', () => {
           device: emulator,
           stacks: ['expo'],
         }).command,
-      ).toBe('pnpm run android --device emulator-5554');
+      ).toBe('pnpm run android --device Pixel_7_API_34');
     });
 
     it.each([undefined, null, [], ['ios'], ['android']])(
@@ -578,9 +605,9 @@ describe('applyDeviceToBuildCommand', () => {
       expect(
         applyDeviceToBuildCommand({
           command: 'npx expo run:android',
-          device: { ...pixel, id: 'weird id; rm -rf /' },
+          device: { ...pixel, model: 'weird;id' },
         }).command,
-      ).toBe(`npx expo run:android --device 'weird id; rm -rf /'`);
+      ).toBe("npx expo run:android --device 'weird;id'");
     });
 
     it('quotes an id containing a single quote', () => {

@@ -127,6 +127,79 @@ describe('FeedItemCard PR workspace badge', () => {
   });
 });
 
+describe('FeedItemCard work-item status chips', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(() => root.unmount());
+    container.remove();
+  });
+
+  it('renders status chips with matching IDs in the tooltip', async () => {
+    await act(() =>
+      root.render(
+        <FeedItemCard
+          item={{
+            ...item(),
+            workItemIds: ['101', '102'],
+            workItemStatusChips: [
+              {
+                ruleId: 'blocked',
+                label: 'Needs clarification',
+                tone: 'warning',
+                workItemIds: ['101'],
+              },
+            ],
+          }}
+        />,
+      ),
+    );
+    const chip = container.querySelector('[aria-label="Needs clarification"]');
+    expect(chip?.textContent).toBe('Needs clarification');
+    expect(chip?.getAttribute('title')).toContain('#101');
+    expect(chip?.className).toContain('text-status-run');
+  });
+
+  it('renders status chips on child task rows and hides empty matches', async () => {
+    await act(() =>
+      root.render(
+        <FeedItemCard
+          item={{
+            ...item(),
+            children: [
+              {
+                ...item(),
+                id: 'task:child',
+                taskId: 'child',
+                title: 'Child task',
+                workItemIds: ['202'],
+                workItemStatusChips: [
+                  {
+                    ruleId: 'severity',
+                    label: 'High severity',
+                    tone: 'danger',
+                    workItemIds: ['202'],
+                  },
+                ],
+              },
+            ],
+            workItemStatusChips: [],
+          }}
+        />,
+      ),
+    );
+    expect(container.querySelector('[aria-label="High severity"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Needs clarification"]')).toBeNull();
+  });
+});
+
 describe('FeedItemCard mobile device badge', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -158,7 +231,11 @@ describe('FeedItemCard mobile device badge', () => {
         },
       },
     });
-    await act(() => root.render(<FeedItemCard item={item()} />));
+    await act(() =>
+      root.render(
+        <FeedItemCard item={item()} mobileDeviceAssignments={[]} />,
+      ),
+    );
     expect(deviceBadge()?.textContent).toBe('iPhone 15 Pro');
     expect(deviceBadge()?.getAttribute('title')).toBe(
       'Mobile Dev · iOS · iPhone 15 Pro',
@@ -167,7 +244,12 @@ describe('FeedItemCard mobile device badge', () => {
     expect(container.textContent).toContain('Keep this title');
 
     await act(() =>
-      root.render(<FeedItemCard item={{ ...item(), taskId: 'other-task' }} />),
+      root.render(
+        <FeedItemCard
+          item={{ ...item(), taskId: 'other-task' }}
+          mobileDeviceAssignments={[]}
+        />,
+      ),
     );
     expect(deviceBadge()).toBeNull();
   });
@@ -182,7 +264,11 @@ describe('FeedItemCard mobile device badge', () => {
         },
       },
     });
-    await act(() => root.render(<FeedItemCard item={item()} />));
+    await act(() =>
+      root.render(
+        <FeedItemCard item={item()} mobileDeviceAssignments={[]} />,
+      ),
+    );
     expect(deviceBadge()?.getAttribute('title')).toBe(
       'Mobile Dev · Android · Pixel 8',
     );
@@ -196,7 +282,11 @@ describe('FeedItemCard mobile device badge', () => {
         'task-1': { platform: 'ios', deviceId: 'sim-1', deviceName: '' },
       },
     });
-    await act(() => root.render(<FeedItemCard item={item()} />));
+    await act(() =>
+      root.render(
+        <FeedItemCard item={item()} mobileDeviceAssignments={[]} />,
+      ),
+    );
     expect(deviceBadge()).toBeNull();
   });
 
@@ -224,6 +314,7 @@ describe('FeedItemCard mobile device badge', () => {
               },
             ],
           }}
+          mobileDeviceAssignments={[]}
         />,
       ),
     );

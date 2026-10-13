@@ -1,17 +1,26 @@
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
-import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import clsx from 'clsx';
 import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 import { Plus } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 
 
 
-import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
+import { api } from '@/lib/api';
+import type { BindingKey } from '@/common/context/keyboard-bindings/types';
+import { Kbd } from '@/common/ui/kbd';
+import type { Project } from '@shared/types';
 import { useActiveProjects } from '@/hooks/use-projects';
 import { useCommands } from '@/common/hooks/use-commands';
-import { useCurrentVisibleProject } from '@/stores/navigation';
-import { useFeedStore } from '@/stores/feed';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 
 
@@ -24,6 +33,105 @@ const PROJECT_OVERLAY_LG_GRID_CLASS: Record<number, string> = {
   4: 'lg:grid-cols-4',
 };
 
+// Uniform cover-art slot: real uploaded logo when there is one, otherwise a
+// color-tinted gradient tile with the project's initials — every slot is the
+// same size so the grid reads as one consistent system.
+function ProjectArt({
+  project,
+  size = 36,
+}: {
+  project: Pick<Project, 'name' | 'color' | 'logoPath'>;
+  size?: number;
+}) {
+  const { data: logoUrl } = useQuery({
+    queryKey: ['project-logo', project.logoPath],
+    queryFn: () => api.fs.getImageUrl(project.logoPath ?? ''),
+    enabled: !!project.logoPath,
+    staleTime: Infinity,
+  });
+
+  const radius = Math.round(size / 4.5);
+
+  if (logoUrl) {
+    return (
+      <img
+        src={logoUrl}
+        alt=""
+        className="shrink-0 object-cover"
+        style={{
+          width: size,
+          height: size,
+          borderRadius: radius,
+          boxShadow: 'inset 0 0 0 1px var(--color-glass-border)',
+        }}
+      />
+    );
+  }
+
+  const initial = project.name
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .slice(0, 2)
+    .toLowerCase();
+
+  return (
+    <div
+      aria-hidden="true"
+      className="grid shrink-0 place-items-center"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: radius,
+        background: `linear-gradient(150deg, color-mix(in oklch, ${project.color} 34%, var(--color-bg-2)), color-mix(in oklch, ${project.color} 10%, var(--color-bg-1)))`,
+        boxShadow: 'inset 0 0 0 1px var(--color-glass-border)',
+      }}
+    >
+      <span
+        className="font-mono font-semibold"
+        style={{
+          fontSize: Math.max(10, Math.round(size * 0.34)),
+          letterSpacing: '-0.02em',
+          color: `color-mix(in oklch, ${project.color} 80%, white)`,
+        }}
+      >
+        {initial}
+      </span>
+    </div>
+  );
+}
+
+// Truncates from the front (keeping the meaningful trailing segments visible)
+// instead of the end, via the classic rtl-direction + bdi trick.
+function ProjectPath({ path }: { path: string }) {
+  const display = path.replace(/^\/Users\/[^/]+\//, '~/');
+  return (
+    <span
+      className="text-ink-2 block font-mono text-[11px]"
+      style={{
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        direction: 'rtl',
+        textAlign: 'left',
+      }}
+    >
+      <bdi dir="ltr">{display}</bdi>
+    </span>
+  );
+}
+
+function Hint({ shortcuts, label }: { shortcuts: BindingKey[]; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="inline-flex items-center gap-0.5">
+        {shortcuts.map((shortcut) => (
+          <Kbd key={shortcut} shortcut={shortcut} />
+        ))}
+      </span>
+      {label}
+    </span>
+  );
+}
+
 export function ProjectOverlay({ onClose }: { onClose: () => void }) {
   const layer = useKeyboardLayer('overlay', {
     exclusive: true,
@@ -31,9 +139,7 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
   });
 
   const { data: projects = [] } = useActiveProjects();
-  const { moveToProject } = useCurrentVisibleProject();
   const navigate = useNavigate();
-  const clearHiddenProjects = useFeedStore((state) => state.clearHiddenProjects);
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
@@ -47,11 +153,11 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
   // the project-details route rather than the feed filter.
   const projectId = useMemo(() => {
     const match = pathname.match(/^\/all\/projects\/([^/]+)/);
-    return match ? decodeURIComponent(match[1]) : ('all' as const);
+    return match ? decodeURIComponent(match[1]) : null;
   }, [pathname]);
 
   const options = useMemo(
-    () => ['all' as const, ...sortedProjects.map((project) => project.id)],
+    () => sortedProjects.map((project) => project.id),
     [sortedProjects],
   );
 
@@ -61,6 +167,12 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
   );
 
   const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const gridRef = useRef<HTMLDivElement>(null);
+  // Keyboard nav can scroll a different tile under a stationary cursor,
+  // which fires a synthetic `mouseenter` with no real pointer movement —
+  // that would immediately fight the arrow key that just ran. Hover only
+  // drives the highlight again once the pointer genuinely moves.
+  const pointerActiveRef = useRef(true);
 
   useEffect(() => {
     if (selectedIndex >= 0) {
@@ -74,11 +186,29 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
     }
   }, [highlightedIndex, options.length, selectedIndex]);
 
+  // Keep the keyboard-highlighted tile in view as arrow keys move it —
+  // mouse hover already scrolls the item under the cursor into place by
+  // virtue of being visible, but keyboard nav can move the highlight
+  // off-screen in either direction.
+  useEffect(() => {
+    const highlighted = gridRef.current?.querySelector<HTMLButtonElement>(
+      'button[data-selected="true"]',
+    );
+
+    highlighted?.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest',
+      behavior: 'auto',
+    });
+  }, [highlightedIndex, options.length]);
+
   const moveHighlight = useCallback(
     (direction: 'up' | 'down' | 'left' | 'right') => {
       if (options.length === 0) {
         return;
       }
+
+      pointerActiveRef.current = false;
 
       setHighlightedIndex((current) => {
         const safeCurrent =
@@ -119,37 +249,16 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
         return;
       }
 
-      if (option === 'all') {
-        clearHiddenProjects();
-        if (projectId === 'all') {
-          // Already off a project-details route, so let the nav store keep the
-          // current task selection (it routes back to /all/$taskId).
-          moveToProject('all');
-        } else {
-          // `moveToProject` derives "current project" from a leading
-          // `/projects/` segment, so on `/all/projects/<id>` it already thinks
-          // we are on 'all' and would no-op, stranding the project panel.
-          navigate({ to: '/all' });
-        }
-      } else {
-        // Picking a project opens its details view; the feed filter is left
-        // untouched so the list keeps showing everything.
-        navigate({
-          to: '/all/projects/$projectId',
-          params: { projectId: option },
-        });
-      }
+      // Picking a project opens its details view; the feed filter is left
+      // untouched so the list keeps showing everything.
+      navigate({
+        to: '/all/projects/$projectId',
+        params: { projectId: option },
+      });
 
       onClose();
     },
-    [
-      clearHiddenProjects,
-      moveToProject,
-      navigate,
-      onClose,
-      options,
-      projectId,
-    ],
+    [navigate, onClose, options],
   );
 
   useCommands(
@@ -217,19 +326,19 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
           className="border-glass-border bg-bg-0 flex max-h-[72svh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="border-line-soft flex items-center justify-between border-b px-4 py-3">
-            <div>
-              <h2 className="text-ink-0 text-sm font-semibold">
+          <div className="border-line-soft flex items-center justify-between gap-4 border-b px-5 py-4">
+            <div className="min-w-0">
+              <h2 className="text-ink-0 text-[15px] font-semibold tracking-tight">
                 Switch Project
               </h2>
-              <p className="text-ink-2 text-xs">
+              <p className="text-ink-2 mt-0.5 text-xs">
                 Open a project to see its git status, branches and history.
               </p>
             </div>
             <Link
               to="/projects/new"
               onClick={onClose}
-              className="border-glass-border text-ink-1 hover:border-glass-border-strong hover:bg-glass-light hover:text-ink-0 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors"
+              className="border-glass-border text-ink-1 hover:border-glass-border-strong hover:bg-glass-light hover:text-ink-0 inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors"
             >
               <Plus size={12} />
               <span>New Project</span>
@@ -237,63 +346,76 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
           </div>
 
           <div
-            className={clsx(
-              'grid min-h-0 flex-1 gap-3 overflow-y-auto p-4 sm:grid-cols-2',
-              PROJECT_OVERLAY_LG_GRID_CLASS[PROJECT_OVERLAY_GRID_COLUMNS] ??
-                'lg:grid-cols-3',
-            )}
+            className="min-h-0 flex-1 overflow-y-auto"
+            ref={gridRef}
+            onMouseMove={() => {
+              pointerActiveRef.current = true;
+            }}
           >
-            <button
-              type="button"
-              onClick={() => selectIndex(0)}
-              onMouseEnter={() => setHighlightedIndex(0)}
+            <div
               className={clsx(
-                'rounded-lg border px-3 py-4 text-left transition-colors',
-                projectId === 'all'
-                  ? 'border-acc bg-acc/10'
-                  : highlightedIndex === 0
-                    ? 'border-glass-border-strong bg-bg-1'
-                    : 'border-glass-border bg-bg-1/80 hover:border-glass-border-strong hover:bg-glass-light',
-                highlightedIndex === 0 && 'ring-1 ring-white/35',
+                'grid gap-1.5 px-5 pt-3.5 pb-4 sm:grid-cols-2',
+                PROJECT_OVERLAY_LG_GRID_CLASS[PROJECT_OVERLAY_GRID_COLUMNS] ??
+                  'lg:grid-cols-3',
               )}
             >
-              <p className="text-ink-2 text-xs">Overview</p>
-              <p className="text-ink-0 mt-1 text-sm font-medium">
-                All Projects
-              </p>
-            </button>
+              {sortedProjects.map((project, index) => {
+                const isSelected = projectId === project.id;
+                const isHighlighted = highlightedIndex === index;
 
-            {sortedProjects.map((project, index) => {
-              const optionIndex = index + 1;
+                return (
+                  <button
+                    key={project.id}
+                    type="button"
+                    onClick={() => selectIndex(index)}
+                    onMouseEnter={() => {
+                      if (pointerActiveRef.current) {
+                        setHighlightedIndex(index);
+                      }
+                    }}
+                    data-selected={isHighlighted}
+                    className={clsx(
+                      'flex items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-2 text-left transition-colors',
+                      isHighlighted
+                        ? 'border-acc-line bg-acc-soft'
+                        : isSelected
+                          ? 'bg-glass-medium'
+                          : 'hover:bg-glass-subtle',
+                    )}
+                    style={
+                      isSelected
+                        ? { boxShadow: `inset 3px 0 0 0 ${project.color}` }
+                        : undefined
+                    }
+                  >
+                    <ProjectArt project={project} size={36} />
+                    <div className="min-w-0 flex-1">
+                      <p
+                        className={clsx(
+                          'truncate text-[13px]',
+                          isSelected
+                            ? 'text-ink-0 font-medium'
+                            : 'text-ink-1 font-normal',
+                        )}
+                      >
+                        {project.name}
+                      </p>
+                      <ProjectPath path={project.path} />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
-              return (
-                <button
-                  key={project.id}
-                  type="button"
-                  onClick={() => selectIndex(optionIndex)}
-                  onMouseEnter={() => setHighlightedIndex(optionIndex)}
-                  className={clsx(
-                    'relative overflow-hidden rounded-lg border px-3 py-4 text-left transition-colors',
-                    projectId === project.id
-                      ? 'border-acc bg-acc/10'
-                      : highlightedIndex === optionIndex
-                        ? 'border-glass-border-strong bg-bg-1'
-                        : 'border-glass-border bg-bg-1/80 hover:border-glass-border-strong hover:bg-glass-light',
-                    highlightedIndex === optionIndex && 'ring-1 ring-white/35',
-                  )}
-                >
-                  <ProjectLogoBackground project={project} showColorFallback />
-                  <div className="relative z-10 flex items-center gap-2">
-                    <p className="text-ink-0 truncate text-sm font-medium">
-                      {project.name}
-                    </p>
-                  </div>
-                  <p className="text-ink-2 relative z-10 mt-2 truncate text-xs">
-                    {project.path}
-                  </p>
-                </button>
-              );
-            })}
+          <div className="border-line-soft text-ink-2 flex items-center gap-4 border-t px-5 py-2.5 text-[11.5px]">
+            <Hint shortcuts={['up', 'down']} label="navigate" />
+            <Hint shortcuts={['enter']} label="open" />
+            <Hint shortcuts={['escape']} label="close" />
+            <span className="ml-auto">
+              {sortedProjects.length}{' '}
+              {sortedProjects.length === 1 ? 'project' : 'projects'}
+            </span>
           </div>
         </div>
       </div>

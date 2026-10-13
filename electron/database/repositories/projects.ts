@@ -4,6 +4,15 @@ import {
   isMobilePreviewProjectConfig,
 } from '@shared/types';
 import {
+  DEFAULT_PROJECT_MODEL_POLICY,
+  PROJECT_MODEL_POLICY_MODES,
+  type ProjectModelPolicy,
+} from '@shared/model-profiles';
+import {
+  isWorkItemDisplayConfig,
+  type WorkItemDisplayConfig,
+} from '@shared/work-item-display-config-types';
+import {
   isWorkItemTitleParserSetting,
   type WorkItemTitleParserSetting,
 } from '@shared/work-item-title-parser-types';
@@ -64,6 +73,110 @@ export function serializeWorkItemTitleParserUpdate(
     : { workItemTitleParser: serializeWorkItemTitleParser(setting) };
 }
 
+export function parseWorkItemDisplayConfig(
+  value: string | null,
+): WorkItemDisplayConfig | null {
+  if (value === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (isWorkItemDisplayConfig(parsed)) return parsed;
+    console.warn(
+      '[projects] Ignoring invalid workItemDisplayConfig — falling back to the default layout',
+    );
+    return null;
+  } catch {
+    console.warn(
+      '[projects] Ignoring malformed workItemDisplayConfig JSON — falling back to the default layout',
+    );
+    return null;
+  }
+}
+
+export function serializeWorkItemDisplayConfig(
+  config: WorkItemDisplayConfig | null,
+): string | null {
+  if (config === null) return null;
+  if (!isWorkItemDisplayConfig(config)) {
+    throw new TypeError('Invalid work item display config');
+  }
+  return JSON.stringify(config);
+}
+
+export function serializeWorkItemDisplayConfigUpdate(
+  config: WorkItemDisplayConfig | null | undefined,
+): { workItemDisplayConfig?: string | null } {
+  return config === undefined
+    ? {}
+    : { workItemDisplayConfig: serializeWorkItemDisplayConfig(config) };
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === 'string')
+  );
+}
+
+function isProjectModelPolicy(value: unknown): value is ProjectModelPolicy {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const policy = value as Record<string, unknown>;
+  if (
+    !PROJECT_MODEL_POLICY_MODES.includes(
+      policy.mode as ProjectModelPolicy['mode'],
+    )
+  ) {
+    return false;
+  }
+  if (
+    policy.allowedBackends !== undefined &&
+    !isStringArray(policy.allowedBackends)
+  ) {
+    return false;
+  }
+  if (
+    policy.allowedProfileIds !== undefined &&
+    !isStringArray(policy.allowedProfileIds)
+  ) {
+    return false;
+  }
+  if (
+    policy.pinnedProfileId !== undefined &&
+    typeof policy.pinnedProfileId !== 'string'
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Parses the `projects.modelPolicy` JSON column. Null, malformed or
+ * guard-failing values fall back to `{ mode: 'inherit' }`.
+ */
+export function parseProjectModelPolicy(
+  value: string | null,
+): ProjectModelPolicy {
+  if (!value) return DEFAULT_PROJECT_MODEL_POLICY;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isProjectModelPolicy(parsed)
+      ? parsed
+      : DEFAULT_PROJECT_MODEL_POLICY;
+  } catch {
+    // Malformed JSON — fall back to the inherit default
+    return DEFAULT_PROJECT_MODEL_POLICY;
+  }
+}
+
+export function serializeProjectModelPolicy(
+  policy: ProjectModelPolicy,
+): string {
+  if (!isProjectModelPolicy(policy)) {
+    throw new TypeError('Invalid project model policy');
+  }
+  return JSON.stringify(policy);
+}
+
 function parseProjectRow(row: ProjectRow) {
   let aiSkillSlots = null;
   if (row.aiSkillSlots) {
@@ -75,6 +188,9 @@ function parseProjectRow(row: ProjectRow) {
     }
   }
   const workItemTitleParser = parseWorkItemTitleParser(row.workItemTitleParser);
+  const workItemDisplayConfig = parseWorkItemDisplayConfig(
+    row.workItemDisplayConfig,
+  );
   let protectedBranches: string[] = [];
   if (row.protectedBranches) {
     try {
@@ -122,7 +238,9 @@ function parseProjectRow(row: ProjectRow) {
     autoAcceptOnTaskCreation: row.autoAcceptOnTaskCreation === 1,
     aiSkillSlots,
     mobilePreviewConfig,
+    modelPolicy: parseProjectModelPolicy(row.modelPolicy),
     workItemTitleParser,
+    workItemDisplayConfig,
     protectedBranches,
     favoriteBranches,
   };
@@ -177,6 +295,7 @@ export const ProjectRepository = {
       aiSkillSlots,
       mobilePreviewConfig,
       workItemTitleParser,
+      workItemDisplayConfig,
       protectedBranches,
       favoriteBranches,
       ...rest
@@ -201,6 +320,9 @@ export const ProjectRepository = {
         workItemTitleParser: serializeWorkItemTitleParser(
           workItemTitleParser ?? null,
         ),
+        workItemDisplayConfig: serializeWorkItemDisplayConfig(
+          workItemDisplayConfig ?? null,
+        ),
         protectedBranches: sanitizeBranchList(protectedBranches),
         favoriteBranches: sanitizeBranchList(favoriteBranches),
       })
@@ -222,6 +344,7 @@ export const ProjectRepository = {
       aiSkillSlots,
       mobilePreviewConfig,
       workItemTitleParser,
+      workItemDisplayConfig,
       protectedBranches,
       favoriteBranches,
       ...rest
@@ -257,12 +380,27 @@ export const ProjectRepository = {
             : null,
         }),
         ...serializeWorkItemTitleParserUpdate(workItemTitleParser),
+        ...serializeWorkItemDisplayConfigUpdate(workItemDisplayConfig),
         ...(protectedBranches !== undefined && {
           protectedBranches: sanitizeBranchList(protectedBranches),
         }),
         ...(favoriteBranches !== undefined && {
           favoriteBranches: sanitizeBranchList(favoriteBranches),
         }),
+        updatedAt: new Date().toISOString(),
+      })
+      .where('id', '=', id)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return parseProjectRow(row);
+  },
+
+  setModelPolicy: async (id: string, policy: ProjectModelPolicy) => {
+    dbg.db('projects.setModelPolicy id=%s mode=%s', id, policy.mode);
+    const row = await db
+      .updateTable('projects')
+      .set({
+        modelPolicy: serializeProjectModelPolicy(policy),
         updatedAt: new Date().toISOString(),
       })
       .where('id', '=', id)

@@ -1,6 +1,6 @@
 import { ExternalLink, X } from 'lucide-react';
-import { startTransition, useEffect, useState } from 'react';
-import { codeToHtml } from 'shiki';
+import { highlightToHtml, resolveLanguage } from '@/lib/syntax-highlight';
+import { startTransition, useEffect, useMemo, useState } from 'react';
 
 
 
@@ -23,7 +23,6 @@ export function FilePreviewPane({
   onClose: () => void;
 }) {
   const [content, setContent] = useState<string | null>(null);
-  const [html, setHtml] = useState<string>('');
   const [language, setLanguage] = useState<string>('text');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -58,23 +57,11 @@ export function FilePreviewPane({
       });
   }, [fullPath]);
 
-  // Syntax highlighting
-  useEffect(() => {
-    if (!content) return;
-
-    codeToHtml(content, {
-      lang: language,
-      theme: 'github-dark',
-    })
-      .then(setHtml)
-      .catch(() => {
-        // Fallback for unsupported languages
-        codeToHtml(content, {
-          lang: 'text',
-          theme: 'github-dark',
-        }).then(setHtml);
-      });
-  }, [content, language]);
+  // Syntax highlighting (synchronous)
+  const html = useMemo(
+    () => (content ? highlightToHtml(content, resolveLanguage(language)) : ''),
+    [content, language],
+  );
 
   // Scroll to highlighted line
   useEffect(() => {
@@ -92,14 +79,6 @@ export function FilePreviewPane({
     // TODO: Open in external editor (VS Code, Cursor, etc.)
     console.log('Open in editor:', fullPath);
   };
-
-  // Add line numbers and highlighting to HTML
-  const processedHtml = html
-    ? html.replace(
-        /<pre([^>]*)><code([^>]*)>/g,
-        '<pre$1><code$2 class="block">',
-      )
-    : '';
 
   return (
     <div className="border-glass-border bg-bg-0 flex h-full w-[450px] flex-col border-l">
@@ -186,11 +165,14 @@ export function FilePreviewPane({
                 );
               })}
             </div>
-            {/* Code content */}
-            <div
-              className="overflow-x-auto pl-12 text-sm [&_code_.line]:leading-6 [&_pre]:!bg-transparent [&_pre]:py-4"
-              dangerouslySetInnerHTML={{ __html: processedHtml }}
-            />
+            {/* Code content — leading-6 keeps rows at the 24px the line
+                numbers and highlight overlay below assume. */}
+            <pre className="overflow-x-auto bg-transparent py-4 pl-12 text-sm leading-6">
+              <code
+                className="block"
+                dangerouslySetInnerHTML={{ __html: html }}
+              />
+            </pre>
             {/* Highlight overlay */}
             {lineStart && (
               <div

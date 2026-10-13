@@ -3,25 +3,106 @@ import type {
   ProjectCommand,
 } from '@shared/run-command-types';
 import { getRunCommandLogLineCount } from '@/stores/task-messages';
+import type { MobilePlatform } from '@shared/mobile-simulator-types';
+import { parseMobileBuildCommandId } from '../mobile-preview-pane/utils-setup-operation';
+import { parseMobileDevServerCommandId } from '@/lib/mobile-preview-runtime';
 import type { RunCommandLogs } from '@/stores/task-messages';
+
+/**
+ * Shortens a device id enough to fit a tab label while keeping both ends, which
+ * is what distinguishes otherwise similar ids: iOS UDIDs are 36 chars and share
+ * no common prefix, Android AVD names are already short and pass through.
+ */
+export function abbreviateDeviceId(deviceId: string): string {
+  if (deviceId.length <= 14) return deviceId;
+  return `${deviceId.slice(0, 8)}…${deviceId.slice(-4)}`;
+}
+
+/**
+ * The one place build tabs are named, so a build reads the same wherever its tab
+ * is emitted from.
+ *
+ * `deviceLabel` is what makes the label unique: build command ids are
+ * device-scoped, so two builds on two simulators of the same platform would
+ * otherwise render two tabs reading exactly "iOS build" with nothing (not even
+ * the tooltip, since builds declare no ports) to tell them apart. Builds with no
+ * device (the `no-device` sentinel) keep the plain label.
+ */
+export function formatMobileBuildTabName({
+  platform,
+  deviceLabel,
+}: {
+  platform: MobilePlatform;
+  deviceLabel?: string | null;
+}): string {
+  const base = platform === 'ios' ? 'iOS build' : 'Android build';
+  return deviceLabel ? `${base} · ${deviceLabel}` : base;
+}
+
+/**
+ * Human label for command ids the app itself mints (mobile dev server / builds),
+ * so their logs are not shown as anonymous "Removed command" tabs.
+ *
+ * Only the id is available here, so a build is disambiguated by its abbreviated
+ * device id rather than the device's name. The Mobile Dev pane names its own
+ * (virtual) build tabs from the live device list and so can use the real name --
+ * see `buildMobileDevVirtualTabs`. A build therefore reads
+ * "iOS build · iPhone 15" while the pane owns it and "iOS build · ABCD1234…9F2C"
+ * once it falls through to here; the asymmetry is unavoidable (this function is
+ * called from `buildCommandLogTabs`, which is shared by panes that have no
+ * device list at all) and both forms stay unique per device, which is the point.
+ */
+export function describeWellKnownCommandId(commandId: string): string | null {
+  if (parseMobileDevServerCommandId(commandId)) return 'Mobile dev server';
+
+  const build = parseMobileBuildCommandId(commandId);
+  if (build) {
+    return formatMobileBuildTabName({
+      platform: build.platform,
+      deviceLabel: build.deviceId
+        ? abbreviateDeviceId(build.deviceId)
+        : null,
+    });
+  }
+
+  return null;
+}
 
 export function buildCommandLogTabs({
   commands,
   projectId,
   runCommandLogs,
   runningCommandIds,
+  virtualTabs = [],
 }: {
   commands: ProjectCommand[];
   projectId: string;
   runCommandLogs: RunCommandLogs;
   runningCommandIds: Set<string>;
+  /**
+   * Tabs owned by another pane (mobile dev server / builds), emitted first and
+   * in order. They obey the same visibility rule as configured commands.
+   */
+  virtualTabs?: ProjectCommand[];
 }): ProjectCommand[] {
-  const configuredTabs = commands.filter(
-    (command) =>
-      getRunCommandLogLineCount(runCommandLogs[command.id]) > 0 ||
-      runningCommandIds.has(command.id),
+  const virtualIds = new Set(virtualTabs.map((command) => command.id));
+
+  // A tab survives its process exiting -- that is how you read what happened.
+  // It only goes away once its output is cleared *and* nothing is running.
+  const hasSomethingToShow = (commandId: string) =>
+    getRunCommandLogLineCount(runCommandLogs[commandId]) > 0 ||
+    runningCommandIds.has(commandId);
+
+  const visibleVirtualTabs = virtualTabs.filter((command) =>
+    hasSomethingToShow(command.id),
   );
-  const configuredIds = new Set(commands.map((command) => command.id));
+  const configuredTabs = commands.filter(
+    (command) => !virtualIds.has(command.id) && hasSomethingToShow(command.id),
+  );
+  const configuredIds = new Set([
+    ...virtualIds,
+    ...commands.map((command) => command.id),
+  ]);
   const historicalTabs = Object.keys(runCommandLogs)
     .filter(
       (commandId) =>
@@ -32,7 +113,9 @@ export function buildCommandLogTabs({
       (commandId): ProjectCommand => ({
         id: commandId,
         projectId,
-        name: `Removed command (${commandId.slice(0, 8)})`,
+        name:
+          describeWellKnownCommandId(commandId) ??
+          `Removed command (${commandId.slice(0, 8)})`,
         command: '',
         ports: [],
         portConflictStrategy: 'prompt',
@@ -49,7 +132,7 @@ export function buildCommandLogTabs({
       }),
     );
 
-  return [...configuredTabs, ...historicalTabs];
+  return [...visibleVirtualTabs, ...configuredTabs, ...historicalTabs];
 }
 
 /**

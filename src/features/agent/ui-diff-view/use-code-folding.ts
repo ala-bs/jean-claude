@@ -64,16 +64,66 @@ function detectFoldRangesFromIndentation(lines: string[]): FoldRange[] {
 }
 
 /**
+ * Extension -> tree-sitter grammar key, matching the keys in
+ * electron/services/tree-sitter-fold-service.ts.
+ *
+ * Deliberately independent of the syntax-highlighting language: tree-sitter
+ * needs finer granularity than the highlighter (a distinct `tsx` grammar, and
+ * `bash` rather than the highlighter's umbrella `shell`).
+ */
+const EXTENSION_TO_FOLD_LANGUAGE: Record<string, string> = {
+  ts: 'typescript',
+  mts: 'typescript',
+  cts: 'typescript',
+  tsx: 'tsx',
+  js: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  jsx: 'javascript',
+  py: 'python',
+  rb: 'ruby',
+  go: 'go',
+  rs: 'rust',
+  java: 'java',
+  c: 'c',
+  h: 'c',
+  cpp: 'cpp',
+  cc: 'cpp',
+  cxx: 'cpp',
+  hpp: 'cpp',
+  hh: 'cpp',
+  cs: 'csharp',
+  css: 'css',
+  scss: 'css',
+  less: 'css',
+  html: 'html',
+  sh: 'bash',
+  bash: 'bash',
+  zsh: 'bash',
+  json: 'json',
+  yaml: 'yaml',
+  yml: 'yaml',
+  toml: 'toml',
+  kt: 'kotlin',
+  swift: 'swift',
+  sql: 'sql',
+  php: 'php',
+};
+
+function getFoldLanguageFromPath(filePath: string): string {
+  const filename = filePath.split('/').pop() || filePath;
+  const ext = filename.toLowerCase().split('.').pop();
+  return (ext && EXTENSION_TO_FOLD_LANGUAGE[ext]) || '';
+}
+
+/**
  * Hook for managing code folding state in the diff view.
  * Uses tree-sitter (via main process IPC) for AST-based fold detection,
  * with indentation-based fallback for unsupported languages.
  * Fold state is persisted per file path via Zustand store, keyed by content hash.
  */
-export function useCodeFolding(
-  content: string,
-  language: string,
-  filePath: string,
-) {
+export function useCodeFolding(content: string, filePath: string) {
+  const language = useMemo(() => getFoldLanguageFromPath(filePath), [filePath]);
   const contentHash = useMemo(() => hashContent(content), [content]);
   const { collapsedLines, setCollapsedLines } = useCollapsedLines(
     filePath,
@@ -81,13 +131,17 @@ export function useCodeFolding(
   );
   const [foldRanges, setFoldRanges] = useState<FoldRange[]>([]);
   const requestIdRef = useRef(0);
-  const lastHashRef = useRef('');
+  const lastRequestKeyRef = useRef('');
 
   // Fetch fold ranges from tree-sitter in main process.
-  // Uses content hash to avoid redundant IPC calls for same content.
+  // Keyed on language *and* content hash: two files with byte-identical
+  // content can still need different grammars (a .ts renamed to .py), and
+  // keying on the hash alone would serve the first file's stale fold ranges.
+  const requestKey = `${language}:${contentHash}`;
+
   useEffect(() => {
-    if (lastHashRef.current === contentHash) return;
-    lastHashRef.current = contentHash;
+    if (lastRequestKeyRef.current === requestKey) return;
+    lastRequestKeyRef.current = requestKey;
 
     const requestId = ++requestIdRef.current;
 
@@ -108,7 +162,7 @@ export function useCodeFolding(
         const lines = content.split('\n');
         setFoldRanges(detectFoldRangesFromIndentation(lines));
       });
-  }, [content, language, contentHash]);
+  }, [content, language, requestKey]);
 
   // Map from startLine to FoldRange for quick lookup
   const foldRangeMap = useMemo(() => {

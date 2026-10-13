@@ -15,7 +15,7 @@ export function getPrStateColor({
   if (status === 'abandoned') return 'var(--color-ink-4)';
   if (hasConflicts) return 'var(--color-status-fail)';
   if (hasOpenComments) return 'var(--color-status-run)';
-  if (isDraft) return 'var(--color-ink-3)';
+  if (isDraft) return 'var(--color-status-pr)';
   return 'var(--color-status-azure)';
 }
 

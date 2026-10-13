@@ -1,4 +1,5 @@
 import type { ComponentProps } from 'react';
+import { Loader2 } from 'lucide-react';
 
 import { Button } from '@/common/ui/button';
 import type { CommandRunStatus } from '@shared/run-command-types';
@@ -65,6 +66,9 @@ export function DevServerTab({
   handleStartStopBuild: () => void;
   handleStartStopDevServer: () => void;
 }) {
+  const isBuildRunning =
+    buildStatus?.status === 'running' || buildStarting;
+
   return (
     <div className="bg-bg-0 flex h-full min-h-0 flex-col">
       <div className="border-line bg-bg-1 flex items-center justify-between gap-3 border-b px-4 py-3">
@@ -108,7 +112,14 @@ export function DevServerTab({
               variant="tab"
               active={consoleIsBuild}
               onClick={() => setActiveConsoleCommandId(buildCommandId)}
+              aria-label={`${platform === 'android' ? 'Android' : 'iOS'} build${isBuildRunning ? ' is running' : ''}`}
             >
+              {isBuildRunning ? (
+                <Loader2
+                  aria-label="Build running"
+                  className="text-status-success h-3 w-3 animate-spin"
+                />
+              ) : null}
               {platform === 'android' ? 'Android' : 'iOS'} build
               {buildStatus?.status ? ` · ${buildStatus.status}` : ''}
             </Button>

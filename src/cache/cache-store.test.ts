@@ -46,6 +46,7 @@ function createProject(overrides: Partial<Project> = {}): Project {
     workItemProjectId: null,
     workItemProjectName: null,
     workItemTitleParser: null,
+    workItemDisplayConfig: null,
     showWorkItemsInFeed: false,
     showPrsInFeed: false,
     defaultAgentBackend: null,
@@ -238,6 +239,48 @@ describe('cache store foundation', () => {
       stale: false,
     });
     expect(cache$.resources.projects.get()?.stale).toBe(true);
+  });
+
+  it('invalidates work-item feeds when project display settings change', () => {
+    const before = createProject({
+      workItemProviderId: 'provider-1',
+      workItemProjectId: 'project-1',
+      workItemProjectName: 'Project 1',
+      showWorkItemsInFeed: true,
+      workItemDisplayConfig: null,
+    });
+    applyCacheEvent({ type: 'project.upsert', project: before });
+    setDocumentResource('feed:tasks', []);
+    setDocumentResource('feed:workItems', []);
+
+    applyCacheEvent({
+      type: 'project.upsert',
+      project: {
+        ...before,
+        workItemDisplayConfig: {
+          version: 1,
+          detail: before.workItemDisplayConfig?.detail ?? {
+            rows: [],
+            tabs: [],
+          },
+          board: before.workItemDisplayConfig?.board ?? { rows: [] },
+          overridesByType: before.workItemDisplayConfig?.overridesByType ?? {},
+          statusChips: [
+            {
+              id: 'blocked',
+              field: 'System.State',
+              values: ['Blocked'],
+              label: 'Blocked',
+              tone: 'warning',
+              enabled: true,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(cache$.resources['feed:tasks'].get()?.stale).toBe(true);
+    expect(cache$.resources['feed:workItems'].get()?.stale).toBe(true);
   });
 
   it('applies project patch events without replacing unrelated fields', () => {

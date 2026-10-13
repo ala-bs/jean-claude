@@ -12,8 +12,37 @@ import {
   getIosBuildAttemptDecision,
   getMobileAppSetupDecision,
   getMobileBuildCommandId,
+  parseMobileBuildCommandId,
   shouldStopPreviousIosBuild,
 } from './utils-setup-operation';
+
+describe('parseMobileBuildCommandId', () => {
+  it('round-trips ids produced by getMobileBuildCommandId', () => {
+    expect(
+      parseMobileBuildCommandId(
+        getMobileBuildCommandId({
+          appPath: 'apps/mobile',
+          platform: 'ios',
+          deviceId: 'sim 1',
+        }),
+      ),
+    ).toEqual({ appPath: 'apps/mobile', platform: 'ios', deviceId: 'sim 1' });
+
+    expect(
+      parseMobileBuildCommandId(
+        getMobileBuildCommandId({ appPath: '', platform: 'android' }),
+      ),
+    ).toEqual({ appPath: '.', platform: 'android' });
+  });
+
+  it('rejects ids that are not mobile builds', () => {
+    expect(parseMobileBuildCommandId('other')).toBeNull();
+    expect(parseMobileBuildCommandId('mobile-build:.')).toBeNull();
+    expect(parseMobileBuildCommandId('mobile-build:.:web:x')).toBeNull();
+    expect(parseMobileBuildCommandId('mobile-build:.:ios:x:y')).toBeNull();
+    expect(parseMobileBuildCommandId('mobile-build::ios:x')).toBeNull();
+  });
+});
 
 describe('preview setup operation coordinator', () => {
   it('stops an iOS build after start resolves when cancelled during start', async () => {

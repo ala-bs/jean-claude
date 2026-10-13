@@ -1418,3 +1418,32 @@ html[data-reduce-motion='true'] .resource-status-pulse {
   color: var(--color-acc-ink);
   animation: rg-blink 1s steps(2, start) infinite;
 }
+
+/* ── Syntax highlighting: sugar-high palette (github-dark) ── */
+/*
+ * sugar-high emits `style="color: var(--sh-<token>)"` for every token, and
+ * `tokenizeLines()` in src/lib/syntax-highlight.ts reuses the same variables.
+ * Values below mirror the github-dark theme previously loaded via shiki.
+ */
+:root {
+  --sh-identifier: #c9d1d9; /* default foreground */
+  --sh-keyword: #ff7b72; /* control flow, const, def, fn */
+  --sh-string: #a5d6ff; /* string + template literals */
+  --sh-class: #ffa657; /* types, classes, numeric literals */
+  --sh-property: #79c0ff; /* object keys and properties */
+  --sh-entity: #d2a8ff; /* function + method names */
+  --sh-jsxliterals: #7ee787; /* JSX/HTML tag names */
+  --sh-sign: #8b949e; /* punctuation and operators */
+  --sh-comment: #8b949e; /* comments */
+  --sh-space: inherit;
+  --sh-break: inherit;
+}
+
+/*
+ * sugar-high emits one `.sh__line` span per line, separated by real newlines.
+ * Inside a `<pre>` those newlines do the line breaking, so callers control row
+ * height with `line-height` on the wrapper (see FilePreviewPane).
+ */
+.sh__line {
+  display: inline;
+}

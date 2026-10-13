@@ -25,8 +25,9 @@ export const DEVICE_PLACEHOLDER = '{{device}}';
  * | `react-native run-android`  | `--deviceId`  |
  *
  * The same flags apply to simulators/emulators and to physical hardware:
- * `expo run:<platform> --device` accepts a simulator udid or an AVD name, and
- * `react-native run-ios --udid` accepts a simulator udid.
+ * `expo run:<platform> --device` accepts an iOS simulator udid or an Android
+ * AVD name (never an adb serial), and `react-native run-ios --udid` accepts a
+ * simulator udid.
  */
 const DEVICE_SELECTOR_TABLE: ReadonlyArray<{ match: string; flag: string }> = [
   // react-native entries first: `react-native run-ios` does not contain
@@ -44,10 +45,18 @@ const DEVICE_SELECTOR_TABLE: ReadonlyArray<{ match: string; flag: string }> = [
  * `error: device 'Pixel_7_API_34' not found`.
  *
  * `expo run:<platform> --device` is deliberately not in this set: the Expo CLI
- * resolves the value itself and happily accepts an AVD name for a shutdown
- * emulator (it boots it), so `id` remains a valid selector there.
+ * resolves the value by *name* itself and accepts an AVD name even for a
+ * shutdown emulator (it boots it), so the rail `id` is the selector there — see
+ * `getDeviceSelectorValue`.
  */
 const TRANSPORT_ID_FLAGS = new Set(['--udid', '--deviceId']);
+
+/** adb serial of a local emulator, e.g. `emulator-5554`. */
+const ANDROID_EMULATOR_SERIAL_PATTERN = /^emulator-\d+$/;
+
+function isAndroidEmulatorSerial(value: string | undefined) {
+  return Boolean(value && ANDROID_EMULATOR_SERIAL_PATTERN.test(value));
+}
 
 /** Selectors that already pin a device, in any of the supported CLIs. */
 const EXISTING_SELECTOR_PATTERN = /(^|\s)--(device|udid|deviceId)(=|\s|$)/;
@@ -117,15 +126,36 @@ export type ApplyDeviceToBuildCommandResult = {
     | 'appended'
     | 'unknown-command'
     | 'missing-device-id'
-    | 'device-not-running';
+    | 'device-not-running'
+    | 'missing-avd-name';
 };
 
 /**
- * The identifier the platform CLI expects for this device: the adb serial for
- * a booted Android emulator (whose rail id is the AVD name), the udid/serial
- * everywhere else.
+ * The identifier the platform CLI expects for this device. Expo Android uses
+ * the ADB model name for physical devices (the raw value uses underscores),
+ * while React Native's `--deviceId` passes the value directly to adb and
+ * needs the serial. Android emulators use their AVD name for Expo and their
+ * adb serial for transport-level selectors.
  */
-function getDeviceSelectorValue(device: MobilePreviewDevice) {
+function getDeviceSelectorValue({
+  device,
+  flag,
+}: {
+  device: MobilePreviewDevice;
+  flag?: string;
+}) {
+  if (flag === '--device' && device.platform === 'android') {
+    if (isPhysicalMobilePreviewDevice(device)) {
+      // `name` is intentionally humanized for the rail (`Redmi Note 7`), but
+      // Expo matches the raw adb model name (`Redmi_Note_7`).
+      return (device.model ?? device.name).replaceAll(' ', '_');
+    }
+    // Expo lists emulators under their AVD name only (it resolves it with
+    // `adb -s <serial> emu avd name`), so `--device emulator-5554` fails with
+    // "Could not find device with name: emulator-5554". The rail id *is* the
+    // AVD name for emulators, so never prefer `connectionId` here.
+    return isAndroidEmulatorSerial(device.id) ? '' : device.id;
+  }
   return device.connectionId ?? device.id ?? '';
 }
 
@@ -148,6 +178,24 @@ function isMissingTransportId({
   if (device.kind === 'physical') return false;
   if (device.platform !== 'android') return false;
   return !device.connectionId;
+}
+
+/**
+ * Why no selector value could be produced. `--device` on an Android emulator
+ * needs the AVD name specifically, which has its own actionable notice.
+ */
+function missingIdReason({
+  device,
+  flag,
+}: {
+  device: MobilePreviewDevice;
+  flag: string;
+}): ApplyDeviceToBuildCommandResult['reason'] {
+  return flag === '--device' &&
+    device.platform === 'android' &&
+    !isPhysicalMobilePreviewDevice(device)
+    ? 'missing-avd-name'
+    : 'missing-device-id';
 }
 
 /** Detect `npm run ios` / `pnpm ios` / `yarn ios` / `bun run ios` shapes. */
@@ -245,12 +293,11 @@ export function applyDeviceToBuildCommand({
   if (!device) {
     return { command, applied: false, reason: 'missing-device-id' };
   }
-  const deviceId = getDeviceSelectorValue(device);
-  if (!deviceId) {
-    return { command, applied: false, reason: 'missing-device-id' };
-  }
-
   if (command.includes(DEVICE_PLACEHOLDER)) {
+    const deviceId = getDeviceSelectorValue({ device });
+    if (!deviceId) {
+      return { command, applied: false, reason: 'missing-device-id' };
+    }
     return {
       command: command.replaceAll(
         DEVICE_PLACEHOLDER,
@@ -272,6 +319,10 @@ export function applyDeviceToBuildCommand({
     if (isMissingTransportId({ device, flag: entry.flag })) {
       return { command, applied: false, reason: 'device-not-running' };
     }
+    const deviceId = getDeviceSelectorValue({ device, flag: entry.flag });
+    if (!deviceId) {
+      return { command, applied: false, reason: missingIdReason({ device, flag: entry.flag }) };
+    }
     return {
       command: appendSelector({
         command,
@@ -291,6 +342,10 @@ export function applyDeviceToBuildCommand({
   if (!flag) return notApplied('unknown-command');
   if (isMissingTransportId({ device, flag })) {
     return { command, applied: false, reason: 'device-not-running' };
+  }
+  const deviceId = getDeviceSelectorValue({ device, flag });
+  if (!deviceId) {
+    return { command, applied: false, reason: missingIdReason({ device, flag }) };
   }
 
   return {
@@ -312,6 +367,9 @@ export function applyDeviceToBuildCommand({
 export function getDeviceBuildCommandNotice(
   result: ApplyDeviceToBuildCommandResult,
 ) {
+  if (result.reason === 'missing-avd-name') {
+    return `Expo selects an Android emulator by its AVD name, which we could not read for this emulator (\`adb emu avd name\`). Refresh the device list, or add ${DEVICE_PLACEHOLDER} to the build command (project settings) to choose the value yourself.`;
+  }
   if (result.reason === 'device-not-running') {
     return `This build command selects a device by its adb serial, which only exists once the emulator is running. Start the emulator (or refresh the device list if you just booted it) and run the build again, or add ${DEVICE_PLACEHOLDER} to the build command (project settings) to choose the value yourself.`;
   }

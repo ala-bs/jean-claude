@@ -24,6 +24,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -41,9 +42,17 @@ import {
   CloneRepoPane,
   type CloneResult,
 } from '@/features/project/ui-clone-repo-pane';
+import type { ModelProfile, ProfilePreset } from '@shared/model-profiles';
+import { toModelTriple, tripleForBinding } from '@shared/model-profiles';
+import {
+  useActiveModelProfileId,
+  useModelProfilesSetting,
+  useUpdateModelProfiles,
+} from '@/hooks/use-model-profiles';
 import {
   useBackendsSetting,
   useUpdateBackendsSetting,
+  useUpdateSetting,
 } from '@/hooks/use-settings';
 import {
   useCreateProject,
@@ -55,6 +64,7 @@ import type { AgentBackendType } from '@shared/agent-backend-types';
 import { Button } from '@/common/ui/button';
 import { getRandomColor } from '@/lib/colors';
 import { Input } from '@/common/ui/input';
+import { nanoid } from 'nanoid';
 import { ProtectedBranchesInput } from '@/features/project/ui-project-settings/protected-branches-input';
 import { Select } from '@/common/ui/select';
 import { useCreateToken } from '@/hooks/use-tokens';
@@ -96,6 +106,96 @@ const backendOptions: Array<{
   },
 ];
 
+/**
+ * First-run model configuration.
+ *
+ * Onboarding no longer picks a "default backend" — that setting is gone. It
+ * makes sure the user comes out of the wizard with an **active model profile**
+ * whose `agent` role points at a real preset, which is what every role (agent,
+ * summaries, AI-generation slots…) resolves through.
+ *
+ * Pure so it can be tested without rendering the wizard. Returns `null` when
+ * nothing needs to change (no backend enabled yet, or the active profile
+ * already binds `agent` to an existing preset).
+ */
+export function buildInitialModelProfileSetup({
+  enabledBackends,
+  profiles,
+  activeProfileId,
+  createId,
+}: {
+  enabledBackends: AgentBackendType[];
+  profiles: ModelProfile[];
+  activeProfileId: string | null;
+  createId?: () => string;
+}): {
+  profiles: ModelProfile[];
+  activeProfileId: string;
+} | null {
+  const backend = enabledBackends[0];
+  if (!backend) return null;
+
+  const activeProfile =
+    profiles.find((profile) => profile.id === activeProfileId) ?? null;
+  // Revision 1: the `agent` role holds its own triple, so "usable" means the
+  // binding IS a triple — there is no preset id left to look up.
+  // "Usable" means the agent role resolves to a triple — either inline or
+  // through one of the profile's presets. Checking `isModelTriple` alone would
+  // treat a preset-bound profile as unconfigured and overwrite it.
+  const activeAgentTriple = activeProfile
+    ? tripleForBinding({
+        binding: activeProfile.roles.agent,
+        presets: activeProfile.presets,
+      })
+    : null;
+  if (activeAgentTriple) return null;
+
+  const nextId = createId ?? (() => nanoid());
+  const triple = toModelTriple({ backend });
+  const presetName =
+    backendOptions.find((option) => option.id === backend)?.name ?? backend;
+
+  // Reuse the active profile, else the first defined one, else create "Default".
+  const target = activeProfile ?? profiles[0] ?? null;
+  const existingPreset = target?.presets?.find(
+    (preset) =>
+      preset.backend === triple.backend && preset.model === triple.model,
+  );
+  const preset: ProfilePreset = existingPreset ?? {
+    id: nextId(),
+    name: presetName,
+    ...triple,
+  };
+  const nextProfile: ModelProfile = target
+    ? {
+        ...target,
+        presets: existingPreset
+          ? target.presets
+          : [...(target.presets ?? []), preset],
+        quickPresetIds: (target.quickPresetIds ?? []).includes(preset.id)
+          ? target.quickPresetIds
+          : [...(target.quickPresetIds ?? []), preset.id],
+        roles: { ...target.roles, agent: triple },
+      }
+    : {
+        id: nextId(),
+        name: 'Default',
+        presets: [preset],
+        quickPresetIds: [preset.id],
+        roles: { agent: triple },
+      };
+  const nextProfiles = target
+    ? profiles.map((profile) =>
+        profile.id === nextProfile.id ? nextProfile : profile,
+      )
+    : [...profiles, nextProfile];
+
+  return {
+    profiles: nextProfiles,
+    activeProfileId: nextProfile.id,
+  };
+}
+
 const sourceBadgeConfig: Record<string, { className: string; label: string }> =
   {
     'claude-code': {
@@ -119,6 +219,9 @@ const sourceBadgeConfig: Record<string, { className: string; label: string }> =
       label: 'Mistral Vibe',
     },
   };
+
+/** Shared empty array so effect dependencies stay stable (AGENTS.md). */
+const EMPTY_BACKENDS: AgentBackendType[] = [];
 
 type ProjectCreationState = 'source-selection' | 'form';
 
@@ -196,6 +299,13 @@ function SetupWizardPage() {
     [cliStatuses],
   );
   const updateBackends = useUpdateBackendsSetting();
+  const { profiles, isLoading: isLoadingProfiles } = useModelProfilesSetting();
+  const { activeProfileId, isLoading: isLoadingActiveProfile } =
+    useActiveModelProfileId();
+  // Goes through the profiles hook so the resolved-model cache is invalidated
+  // too — writing `modelProfiles` via the raw setting hook skips that.
+  const updateModelProfiles = useUpdateModelProfiles();
+  const updateActiveProfile = useUpdateSetting<'activeModelProfileId'>();
   const openOverlay = useOverlaysStore((s) => s.open);
   const setSelectedProjectId = useNewTaskDraftStore(
     (s) => s.setSelectedProjectId,
@@ -212,8 +322,11 @@ function SetupWizardPage() {
 
   const firstProject = projects[0];
   const hasProject = projects.length > 0;
-  const defaultBackend = backendsSetting?.defaultBackend ?? null;
-  const selectedBackends = backendsSetting?.enabledBackends ?? [];
+  // Stable identity: this feeds an effect dependency list.
+  const selectedBackends = useMemo(
+    () => backendsSetting?.enabledBackends ?? EMPTY_BACKENDS,
+    [backendsSetting?.enabledBackends],
+  );
   const hasSelectedBackend = selectedBackends.length > 0;
   const hasTask = firstProject
     ? tasks.some((task) => task.projectId === firstProject.id)
@@ -290,32 +403,17 @@ function SetupWizardPage() {
       : [...enabledBackends, backend];
     if (nextEnabledBackends.length === 0) return;
 
-    const nextDefaultBackend =
-      defaultBackend && nextEnabledBackends.includes(defaultBackend)
-      ? defaultBackend
-      : nextEnabledBackends[0];
-
     await updateBackends.mutateAsync({
       enabledBackends: nextEnabledBackends,
-      defaultBackend: nextDefaultBackend,
-    });
-    markSetupBackendSelected();
-  }
-
-  async function handleSetDefaultBackend(backend: AgentBackendType) {
-    const enabledBackends = backendsSetting?.enabledBackends ?? [];
-    if (!enabledBackends.includes(backend)) return;
-
-    await updateBackends.mutateAsync({
-      enabledBackends,
-      defaultBackend: backend,
+      // Deprecated field, still required by `BackendsSetting`. The active model
+      // profile's `agent` role is the default now.
     });
     markSetupBackendSelected();
   }
 
   function handleCreateTask() {
     if (firstProject) {
-      const taskBackend = defaultBackend ?? selectedBackends[0];
+      const taskBackend = selectedBackends[0];
       setSelectedProjectId(firstProject.id);
       setDraft(firstProject.id, {
         inputMode: 'prompt',
@@ -341,7 +439,7 @@ function SetupWizardPage() {
 
     void updateBackends.mutateAsync({
       enabledBackends: installedBackends,
-      defaultBackend: installedBackends[0],
+      // Deprecated: replaced by the active model profile's `agent` role.
     });
   }, [
     backendsSetting,
@@ -349,6 +447,46 @@ function SetupWizardPage() {
     isLoadingCliStatuses,
     setupBackendSelected,
     updateBackends,
+  ]);
+
+  // A fresh install must leave onboarding with a usable active model profile:
+  // without one, every role falls back to an unnamed backend guess.
+  const isProvisioningProfile = useRef(false);
+  useEffect(() => {
+    if (isProvisioningProfile.current) return;
+    if (isLoadingProfiles || isLoadingActiveProfile) return;
+    if (selectedBackends.length === 0) return;
+
+    const next = buildInitialModelProfileSetup({
+      enabledBackends: selectedBackends,
+      profiles,
+      activeProfileId,
+    });
+    if (!next) return;
+
+    isProvisioningProfile.current = true;
+    void (async () => {
+      try {
+        await updateModelProfiles.mutateAsync({
+          key: 'modelProfiles',
+          value: next.profiles,
+        });
+        await updateActiveProfile.mutateAsync({
+          key: 'activeModelProfileId',
+          value: next.activeProfileId,
+        });
+      } finally {
+        isProvisioningProfile.current = false;
+      }
+    })();
+  }, [
+    activeProfileId,
+    isLoadingActiveProfile,
+    isLoadingProfiles,
+    profiles,
+    selectedBackends,
+    updateActiveProfile,
+    updateModelProfiles,
   ]);
 
   return (
@@ -496,11 +634,9 @@ function SetupWizardPage() {
                 <AgentStep
                   backends={backendOptions}
                   selectedBackends={selectedBackends}
-                  defaultBackend={defaultBackend}
                   cliStatusByBackend={cliStatusByBackend}
                   isLoading={isLoadingCliStatuses}
                   onToggle={handleToggleBackend}
-                  onSetDefault={handleSetDefaultBackend}
                 />
               )}
               {activeStep.id === 'azure' && (
@@ -724,28 +860,25 @@ function EnvironmentStep({
 function AgentStep({
   backends,
   selectedBackends,
-  defaultBackend,
   cliStatusByBackend,
   isLoading,
   onToggle,
-  onSetDefault,
 }: {
   backends: typeof backendOptions;
   selectedBackends: AgentBackendType[];
-  defaultBackend: AgentBackendType | null;
   cliStatusByBackend: Map<
     AgentBackendType,
     Awaited<ReturnType<typeof api.shell.getAgentCliStatus>>[number]
   >;
   isLoading: boolean;
   onToggle: (backend: AgentBackendType) => Promise<void>;
-  onSetDefault: (backend: AgentBackendType) => Promise<void>;
 }) {
   return (
     <SetupPanel>
       <SetupNote>
         Backend is local CLI Jean-Claude drives for coding sessions. Pick at
-        least one installed backend; enable more anytime in settings.
+        least one installed backend; enable more anytime in settings. Which
+        backend and model each feature uses is set by the active model profile.
       </SetupNote>
       <div className="mt-4 grid gap-3">
         {backends.map((backend) => {
@@ -787,23 +920,6 @@ function AgentStep({
                     <span className="text-ink-0 text-sm font-semibold">
                       {backend.name}
                     </span>
-                    {backend.id === defaultBackend && selected ? (
-                      <span className="text-acc bg-acc/10 rounded px-1.5 py-0.5 font-mono text-[10px]">
-                        default
-                      </span>
-                    ) : null}
-                    {selected && backend.id !== defaultBackend ? (
-                      <button
-                        type="button"
-                        className="text-ink-2 hover:text-ink-0 rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 font-mono text-[10px] transition-colors"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void onSetDefault(backend.id);
-                        }}
-                      >
-                        set default
-                      </button>
-                    ) : null}
                     <span className="flex-1" />
                     <span
                       className={`rounded-full border px-2 py-0.5 font-mono text-[10px] ${

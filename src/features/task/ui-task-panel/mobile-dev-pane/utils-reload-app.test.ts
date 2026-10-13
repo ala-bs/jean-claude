@@ -34,18 +34,27 @@ function call(
 }
 
 describe('reloadAppOnMetro', () => {
-  it('reports a plain reload when an app is attached', async () => {
+  it('targets the selected device even when another app is attached to Metro', async () => {
     const api = makeApi({ connectedClients: 1 });
-    await expect(call(api)).resolves.toEqual({ status: 'reloaded' });
-    expect(api.launchExpo).not.toHaveBeenCalled();
+    await expect(call(api)).resolves.toEqual({
+      status: 'reattached',
+      metroPort: 49801,
+    });
+    expect(api.reloadExpo).not.toHaveBeenCalled();
+    expect(api.launchExpo).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: 'sim-1', metroPort: 49801 }),
+    );
   });
 
-  it('does not deeplink when the peer count is unknown', async () => {
-    // -1 means "could not count", not "nobody": repairing here would hard
-    // reload a live app every time the peer query failed.
+  it('uses the selected-device path without relying on the peer count', async () => {
     const api = makeApi({ connectedClients: -1 });
-    await expect(call(api)).resolves.toEqual({ status: 'reloaded' });
-    expect(api.launchExpo).not.toHaveBeenCalled();
+    await expect(call(api)).resolves.toEqual({
+      status: 'reattached',
+      metroPort: 49801,
+    });
+    expect(api.launchExpo).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: 'sim-1' }),
+    );
   });
 
   it('re-attaches the app when nothing is connected to this Metro', async () => {
@@ -102,7 +111,7 @@ describe('reloadAppOnMetro', () => {
       reloadExpo: vi.fn().mockRejectedValue(error),
       launchExpo: vi.fn(),
     };
-    await expect(call(api)).rejects.toThrow(
+    await expect(call(api, { reattach: null })).rejects.toThrow(
       'Could not reach the Metro dev server',
     );
     expect(api.launchExpo).not.toHaveBeenCalled();

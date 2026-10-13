@@ -6,16 +6,7 @@ import {
   FileText,
   MessageSquarePlus,
 } from 'lucide-react';
-import { codeToTokens, type ThemedToken } from 'shiki';
-import {
-  memo,
-  startTransition,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
 
@@ -24,6 +15,11 @@ import type { ReactNode } from 'react';
 import { useUISetting, useUIStore } from '@/stores/ui';
 
 import { computeDiff, type DiffLine } from './diff-utils';
+import {
+  getLanguageFromPath,
+  type HighlightToken,
+  tokenizeLines,
+} from '@/lib/syntax-highlight';
 import {
   type LineRangeSelectionPosition,
   useLineRangeSelection,
@@ -37,7 +33,6 @@ import { ChangeNavigatorOverlay } from './change-navigator';
 import { CurrentStateTable } from './current-state-table';
 import { DiffMinimapOverlay } from './diff-minimap';
 import { DiffSearchBar } from './diff-search-bar';
-import { getLanguageFromPath } from './language-utils';
 import { SideBySideDiffTable } from './side-by-side-table';
 import { useCodeFolding } from './use-code-folding';
 import { useScrollToFirstChange } from './use-scroll-to-first-change';
@@ -46,8 +41,8 @@ import { useScrollToFirstChange } from './use-scroll-to-first-change';
 
 interface DiffState {
   lines: DiffLine[];
-  oldTokens: ThemedToken[][];
-  newTokens: ThemedToken[][];
+  oldTokens: HighlightToken[][];
+  newTokens: HighlightToken[][];
 }
 
 const EMPTY_SEARCH_MATCHES: SearchMatch[] = [];
@@ -110,13 +105,21 @@ export function DiffView({
   /** New-file line to scroll into view after render */
   scrollToLine?: number;
 }) {
-  const [state, setState] = useState<DiffState | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
   const viewMode = useUISetting('diffViewMode');
   const setSetting = useUIStore((s) => s.setSetting);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const language = getLanguageFromPath(filePath);
+
+  // Highlighting is synchronous, so the diff is ready on first render.
+  const state = useMemo<DiffState>(
+    () => ({
+      lines: computeDiff(oldString, newString),
+      oldTokens: tokenizeLines(oldString, language),
+      newTokens: tokenizeLines(newString, language),
+    }),
+    [oldString, newString, language],
+  );
 
   useEffect(() => {
     if (!state || !scrollToLine || !scrollContainerRef.current) return;
@@ -130,45 +133,6 @@ export function DiffView({
 
     return () => window.cancelAnimationFrame(frame);
   }, [state, scrollToLine, viewMode]);
-
-  useEffect(() => {
-    startTransition(() => setIsLoading(true));
-
-    // Compute diff
-    const lines = computeDiff(oldString, newString);
-
-    // Get syntax tokens for both strings (use space for empty to avoid Shiki errors)
-    Promise.all([
-      codeToTokens(oldString || ' ', {
-        lang: language,
-        theme: 'github-dark',
-      }).catch(() =>
-        codeToTokens(oldString || ' ', { lang: 'text', theme: 'github-dark' }),
-      ),
-      codeToTokens(newString || ' ', {
-        lang: language,
-        theme: 'github-dark',
-      }).catch(() =>
-        codeToTokens(newString || ' ', { lang: 'text', theme: 'github-dark' }),
-      ),
-    ])
-      .then(([oldResult, newResult]) => {
-        setState({
-          lines,
-          oldTokens: oldResult.tokens,
-          newTokens: newResult.tokens,
-        });
-      })
-      .catch(() => {
-        // Fallback: no syntax highlighting
-        setState({
-          lines,
-          oldTokens: [],
-          newTokens: [],
-        });
-      })
-      .finally(() => setIsLoading(false));
-  }, [oldString, newString, language]);
 
   // Search functionality
   const {
@@ -188,7 +152,7 @@ export function DiffView({
   });
 
   // Code folding based on new file content (tree-sitter in main process)
-  const folding = useCodeFolding(newString, language, filePath);
+  const folding = useCodeFolding(newString, filePath);
 
   // Auto-scroll to the first change when opening a file (no explicit target line)
   useScrollToFirstChange({
@@ -202,15 +166,7 @@ export function DiffView({
     hiddenLines: folding.hiddenLines,
   });
 
-  const hasChanges = state?.lines.some((line) => line.type !== 'context') ?? false;
-
-  if (isLoading || !state) {
-    return (
-      <div className="flex items-center justify-center rounded bg-black/30 p-2">
-        <span className="text-ink-3 text-xs">Loading diff…</span>
-      </div>
-    );
-  }
+  const hasChanges = state.lines.some((line) => line.type !== 'context');
 
   return (
     <div className="relative h-full overflow-hidden">
@@ -394,8 +350,8 @@ function InlineDiffTable({
   folding,
 }: {
   lines: DiffLine[];
-  oldTokens: ThemedToken[][];
-  newTokens: ThemedToken[][];
+  oldTokens: HighlightToken[][];
+  newTokens: HighlightToken[][];
   onAddCommentClick?: (
     lineRange: LineRange,
     position: LineRangeSelectionPosition,
@@ -590,8 +546,8 @@ const DiffLineRow = memo(function DiffLineRow({
 }: {
   lineIndex: number;
   line: DiffLine;
-  oldTokens: ThemedToken[][];
-  newTokens: ThemedToken[][];
+  oldTokens: HighlightToken[][];
+  newTokens: HighlightToken[][];
   canComment: boolean;
   canSelect: boolean;
   isInCommentRange: boolean;

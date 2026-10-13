@@ -356,6 +356,29 @@ export function parseProjectRootRunId(taskId: string): string | null {
   return taskId.slice(PROJECT_ROOT_RUN_PREFIX.length) || null;
 }
 
+/**
+ * Single definition of the renderer's log-generation filter.
+ *
+ * A log batch (including the synthetic exit/refusal markers the main process
+ * emits) is only kept when it carries at least the current generation: a
+ * "clear logs" bumps the generation so stale in-flight output is dropped. A
+ * marker written below the current generation is silently discarded and the
+ * user sees an empty log, so the rule must live in exactly one place. Both
+ * renderer call sites (`appendRunCommandLogBatch` and `clearRunCommandLogs` in
+ * `src/stores/task-messages.ts`) and the main-process marker tests go through
+ * this function, so a change to the rule cannot pass the suite while the two
+ * sides disagree.
+ */
+export function acceptsRunCommandLogGeneration({
+  generation,
+  currentGeneration,
+}: {
+  generation: number;
+  currentGeneration: number;
+}): boolean {
+  return generation >= currentGeneration;
+}
+
 export function getRunCommandDisplayName(command: {
   name?: string | null;
   command: string;

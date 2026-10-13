@@ -14,10 +14,16 @@ import type { AgentMemoryTaskReviewCapture } from '@shared/agent-memory-types';
 import type { AgentRunHandle } from '@shared/agent-backend-provider-types';
 import type { Task } from '@shared/types';
 
+import {
+  assertModelPolicyAllowed,
+  buildSessionIdStepUpdate,
+  ModelPolicyViolationError,
+  resolveRunModelSettings,
+} from './agent-session-update';
 import { buildJcMcpServersConfigForCwd } from './jc-mcp-config';
-import { buildSessionIdStepUpdate } from './agent-session-update';
 import { deleteAllPrWorkspaces } from './pr-workspace-deletion-service';
 import { JcMcpBridgeService } from './jc-mcp-bridge-service';
+import type { ModelProfileService } from './model-profile-service';
 import { QuestionBrokerService } from './question-broker-service';
 
 const TEST_ALLOWED_DIRECTORY = fs.realpathSync.native(os.tmpdir());
@@ -100,7 +106,7 @@ const {
     modes: [] as unknown[],
     sessionAllowedTools: [] as unknown[],
     permissionRuleUpdates: [] as unknown[],
-    followUpPrompts: [] as unknown[],
+    promptSteeringCalls: [] as unknown[],
     stops: [] as string[],
   };
 
@@ -115,8 +121,8 @@ const {
       | ((input: unknown) => Promise<AgentRunHandle>)
       | null,
     sessionAllowedTools: [] as string[],
-    followUpPromptSupported: true,
-    followUpPromptAccepted: true,
+    promptSteeringSupported: true,
+    promptSteeringAccepted: true,
   };
 
   const unsupported = (reason: string) => ({ supported: false, reason });
@@ -180,14 +186,14 @@ const {
               providerCalls.permissionRuleUpdates.push(input);
             },
           }),
-          followUpPrompt: providerState.followUpPromptSupported
+          promptSteering: providerState.promptSteeringSupported
             ? supported({
                 send: async (input: unknown) => {
-                  providerCalls.followUpPrompts.push(input);
-                  return providerState.followUpPromptAccepted;
+                  providerCalls.promptSteeringCalls.push(input);
+                  return providerState.promptSteeringAccepted;
                 },
               })
-            : unsupported('follow-up prompts unsupported'),
+            : unsupported('prompt steering unsupported'),
           resourceTracking: supported({
             getRootPid: ({ handle }: { handle: AgentRunHandle }) =>
               handle.rootPid ?? null,
@@ -204,10 +210,10 @@ const {
     providerCalls.modes.length = 0;
     providerCalls.sessionAllowedTools.length = 0;
     providerCalls.permissionRuleUpdates.length = 0;
-    providerCalls.followUpPrompts.length = 0;
+    providerCalls.promptSteeringCalls.length = 0;
     providerCalls.stops.length = 0;
-    providerState.followUpPromptSupported = true;
-    providerState.followUpPromptAccepted = true;
+    providerState.promptSteeringSupported = true;
+    providerState.promptSteeringAccepted = true;
     providerState.permissionsSupported = true;
     providerState.questionsSupported = true;
     providerState.runtimeModeSwitchSupported = true;
@@ -327,6 +333,33 @@ vi.mock('../database/repositories/settings', () => ({
   SettingsRepository: settingsRepositoryMock,
 }));
 
+// The agent role resolver. The default fake simply echoes the step override
+// back, i.e. "no profile configured, the step's own triple wins".
+const { modelProfileServiceMock } = vi.hoisted(() => ({
+  modelProfileServiceMock: {
+    resolveForRole: vi.fn(
+      async ({
+        override,
+      }: {
+        override?: {
+          backend?: string | null;
+          model?: string | null;
+          thinkingEffort?: string | null;
+        } | null;
+      }) => ({
+        backend: override?.backend ?? 'claude-code',
+        model: override?.model ?? 'default',
+        thinkingEffort: override?.thinkingEffort ?? 'default',
+        source: 'override',
+      }),
+    ),
+  },
+}));
+
+vi.mock('./model-profile-service', () => ({
+  getModelProfileService: () => modelProfileServiceMock,
+}));
+
 vi.mock('../database/repositories/task-steps', () => ({
   TaskStepRepository: taskStepRepositoryMock,
 }));
@@ -443,8 +476,8 @@ vi.mock('./system-project-service', () => ({
 }));
 
 import { agentService } from './agent-service';
-import { emitPermissionsChanged } from './permission-event-service';
 import { buildReadOnlyPrReviewSessionRules } from './pr-review-agent-service';
+import { emitPermissionsChanged } from './permission-event-service';
 
 const defaultStep = {
   id: 'step-1',
@@ -739,7 +772,7 @@ describe('buildSessionIdStepUpdate', () => {
     });
   });
 
-  it('clears stale model settings when backend changes without explicit overrides', () => {
+  it('keeps the step model when the backend changes (design §4)', () => {
     expect(
       buildSessionIdStepUpdate({
         sessionId: 'session-1',
@@ -749,8 +782,6 @@ describe('buildSessionIdStepUpdate', () => {
     ).toEqual({
       sessionId: 'session-1',
       agentBackend: 'opencode',
-      modelPreference: 'default',
-      thinkingEffort: 'default',
     });
   });
 
@@ -769,6 +800,165 @@ describe('buildSessionIdStepUpdate', () => {
       modelPreference: 'openai/gpt-5.1',
       thinkingEffort: 'high',
     });
+  });
+});
+
+describe('model policy enforcement at session creation', () => {
+  it('throws a visible error when the resolution was blocked', () => {
+    expect(() =>
+      assertModelPolicyAllowed({
+        backend: 'claude-code',
+        model: 'default',
+        thinkingEffort: 'default',
+        source: 'policy',
+        blocked: {
+          reason: 'backend-not-allowed',
+          message: 'This project does not permit the backend "codex".',
+          allowed: { backends: ['claude-code'] },
+        },
+      }),
+    ).toThrow(ModelPolicyViolationError);
+  });
+
+  it('does nothing when the resolution is allowed', () => {
+    expect(() =>
+      assertModelPolicyAllowed({
+        backend: 'claude-code',
+        model: 'sonnet',
+        thinkingEffort: 'high',
+        source: 'profile',
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe('resolveRunModelSettings', () => {
+  const CLAUDE_TRIPLE = {
+    backend: 'claude-code' as const,
+    model: 'sonnet',
+    thinkingEffort: 'high' as const,
+  };
+
+  const CODEX_TRIPLE = {
+    backend: 'codex' as const,
+    model: 'gpt-5',
+    thinkingEffort: 'medium' as const,
+  };
+
+  /**
+   * Minimal stand-in for the real service: runs the shared resolver against an
+   * in-memory active profile so a "profile switch" is a single assignment.
+   */
+  function fakeProfileService(state: { activeProfileId: string }) {
+    return {
+      resolveForRole: async ({
+        role,
+        override,
+      }: Parameters<ModelProfileService['resolveForRole']>[0]) => {
+        const { resolveModelForRole } = await import('@shared/model-profiles');
+        return resolveModelForRole({
+          role,
+          activeProfileId: state.activeProfileId,
+          profiles: [
+            {
+              id: 'anthropic',
+              name: 'Anthropic',
+              presets: [],
+              quickPresetIds: [],
+              roles: { agent: { ...CLAUDE_TRIPLE } },
+            },
+            {
+              id: 'codex',
+              name: 'Codex',
+              presets: [],
+              quickPresetIds: [],
+              roles: { agent: { ...CODEX_TRIPLE } },
+            },
+          ],
+          enabledBackends: ['claude-code', 'codex'],
+          override,
+        });
+      },
+    } as unknown as ModelProfileService;
+  }
+
+  it('keeps the step model and effort across a cross-backend run', async () => {
+    const state = { activeProfileId: 'codex' };
+    await expect(
+      resolveRunModelSettings({
+        session: { projectId: 'p1', backendType: 'codex' },
+        step: { modelPreference: 'gpt-5-mini', thinkingEffort: 'low' },
+        modelProfileService: fakeProfileService(state),
+      }),
+    ).resolves.toEqual({
+      modelPreference: 'gpt-5-mini',
+      thinkingEffort: 'low',
+    });
+  });
+
+  it('keeps an explicit swap model and effort instead of blanking them', async () => {
+    const state = { activeProfileId: 'anthropic' };
+    await expect(
+      resolveRunModelSettings({
+        session: {
+          projectId: 'p1',
+          backendType: 'codex',
+          swapModel: 'gpt-5',
+          swapThinkingEffort: 'medium',
+        },
+        step: { modelPreference: 'sonnet', thinkingEffort: 'high' },
+        modelProfileService: fakeProfileService(state),
+      }),
+    ).resolves.toEqual({
+      modelPreference: 'gpt-5',
+      thinkingEffort: 'medium',
+    });
+  });
+
+  it('a new session picks up the switched profile', async () => {
+    const state = { activeProfileId: 'anthropic' };
+    const service = fakeProfileService(state);
+    const session = { projectId: 'p1', backendType: 'claude-code' as const };
+
+    const before = await resolveRunModelSettings({
+      session,
+      step: {},
+      modelProfileService: service,
+    });
+    expect(before).toEqual({
+      modelPreference: 'sonnet',
+      thinkingEffort: 'high',
+    });
+
+    state.activeProfileId = 'codex';
+
+    const after = await resolveRunModelSettings({
+      session: { projectId: 'p1', backendType: 'codex' },
+      step: {},
+      modelProfileService: service,
+    });
+    expect(after).toEqual({
+      modelPreference: 'gpt-5',
+      thinkingEffort: 'medium',
+    });
+  });
+
+  it('leaves a running step on its own model after a profile switch', async () => {
+    const state = { activeProfileId: 'anthropic' };
+    const service = fakeProfileService(state);
+    // The step row of a run that started under the Anthropic profile.
+    const step = { modelPreference: 'sonnet', thinkingEffort: 'high' as const };
+    const session = { projectId: 'p1', backendType: 'claude-code' as const };
+
+    state.activeProfileId = 'codex';
+
+    await expect(
+      resolveRunModelSettings({
+        session,
+        step,
+        modelProfileService: service,
+      }),
+    ).resolves.toEqual({ modelPreference: 'sonnet', thinkingEffort: 'high' });
   });
 });
 
@@ -813,6 +1003,21 @@ describe('buildJcMcpServersConfigForCwd', () => {
 
     expect(config['jean-claude-mcp'].env).toMatchObject({
       JC_MCP_ENABLE_AGENT_TOOL: '1',
+    });
+  });
+
+  it('auto-approves only ask_question for Codex elicitation', () => {
+    const config = buildJcMcpServersConfigForCwd({
+      cwd: '/tmp/worktree',
+      useCodexElicitation: true,
+      questionBridge: {
+        serverUrl: 'http://127.0.0.1:4321',
+        token: 'token-1',
+      },
+    });
+
+    expect(config['jean-claude-mcp'].tools).toEqual({
+      ask_question: { approval_mode: 'auto' },
     });
   });
 
@@ -1613,6 +1818,34 @@ describe('agentService provider runtime', () => {
     });
   });
 
+  // The policy check must run BEFORE the step is flipped to `running`. The
+  // catch in `start()` begins `if (!session) throw error`, so anything thrown
+  // from `createSession` skips `errorStep()` and the synthetic timeline entry,
+  // and the IPC caller only logs it — leaving the step stuck on `running`
+  // with no explanation. Assert the ordering, not just the assert helper.
+  it('refuses a policy-blocked run before marking the step running', async () => {
+    modelProfileServiceMock.resolveForRole.mockResolvedValueOnce({
+      backend: 'claude-code',
+      model: 'default',
+      thinkingEffort: 'default',
+      source: 'policy',
+      blocked: {
+        reason: 'backend-not-allowed',
+        message: 'This project only permits codex.',
+        allowed: { backends: ['codex'] },
+      },
+    } as never);
+
+    await expect(agentService.start('step-1')).rejects.toThrow(
+      'This project only permits codex.',
+    );
+
+    expect(stepServiceMock.update).not.toHaveBeenCalledWith(
+      'step-1',
+      expect.objectContaining({ status: 'running' }),
+    );
+  });
+
   it('rejects PR review task starts when backend permissions are unsupported', async () => {
     providerState.permissionsSupported = false;
     taskRepositoryMock.findById.mockResolvedValue({
@@ -2208,8 +2441,8 @@ describe('agentService provider runtime', () => {
     ]);
 
     // Delivered through the live run...
-    expect(providerCalls.followUpPrompts).toHaveLength(1);
-    expect(providerCalls.followUpPrompts[0]).toMatchObject({
+    expect(providerCalls.promptSteeringCalls).toHaveLength(1);
+    expect(providerCalls.promptSteeringCalls[0]).toMatchObject({
       handle,
       parts: [{ type: 'text', text: 'follow up' }],
     });
@@ -2244,7 +2477,7 @@ describe('agentService provider runtime', () => {
     await agentService.beginSendMessage('step-1', [
       { type: 'text', text: 'follow up' },
     ]);
-    expect(providerCalls.followUpPrompts).toHaveLength(1);
+    expect(providerCalls.promptSteeringCalls).toHaveLength(1);
 
     // Reflect the `StepService.update(stepId, {status:'running'})` that
     // injection just performed — `closeReactivatedStep` reads the step row back
@@ -2268,7 +2501,7 @@ describe('agentService provider runtime', () => {
   it('falls back to restarting the run when the live run refuses the follow-up', async () => {
     const { handle, release } = createBackgroundWorkHandle();
     providerState.runStartImplementation = async () => handle;
-    providerState.followUpPromptAccepted = false;
+    providerState.promptSteeringAccepted = false;
 
     const startPromise = agentService.start('step-1');
     await waitForAssertion(() => {
@@ -2286,7 +2519,7 @@ describe('agentService provider runtime', () => {
     ]);
     await completion;
 
-    expect(providerCalls.followUpPrompts).toHaveLength(1);
+    expect(providerCalls.promptSteeringCalls).toHaveLength(1);
     expect(providerCalls.stops).toContain('provider-run-1');
     expect(providerCalls.runStarts).toHaveLength(2);
 
@@ -2348,7 +2581,7 @@ describe('agentService provider runtime', () => {
 
     // The run was live and finalized, but with no background work to protect
     // the old interrupt-and-restart semantics must be preserved exactly.
-    expect(providerCalls.followUpPrompts).toHaveLength(0);
+    expect(providerCalls.promptSteeringCalls).toHaveLength(0);
     expect(providerCalls.stops).toContain('provider-run-1');
     expect(providerCalls.runStarts).toHaveLength(2);
 
@@ -2356,7 +2589,7 @@ describe('agentService provider runtime', () => {
     await startPromise;
   });
 
-  it('still interrupts a mid-turn run even while background jobs are live', async () => {
+  it('steers a mid-turn run instead of interrupting it', async () => {
     let release!: () => void;
     const released = new Promise<void>((resolve) => {
       release = resolve;
@@ -2369,7 +2602,7 @@ describe('agentService provider runtime', () => {
           type: 'background-tasks',
           tasks: [{ taskId: 'bg-1', description: 'long build' }],
         } as AgentEvent;
-        // NOTE: no result — the turn is still in flight.
+        // NOTE: no result — the turn is still in flight and can be steered.
         await released;
       })(),
       rootPid: 123,
@@ -2386,22 +2619,16 @@ describe('agentService provider runtime', () => {
       expect(providerCalls.runStarts).toHaveLength(1);
     });
 
-    const secondHandle = createHandle({
-      runId: 'provider-run-2',
-      events: [completeEvent()],
-    });
-    providerState.runStartImplementation = async () => secondHandle;
-
-    const { completion } = await agentService.beginSendMessage('step-1', [
+    await agentService.beginSendMessage('step-1', [
       { type: 'text', text: 'follow up' },
     ]);
-    await completion;
 
-    // Interrupting a turn in progress is what the user asked for; injecting
-    // would have queued the prompt behind work they wanted abandoned.
-    expect(providerCalls.followUpPrompts).toHaveLength(0);
-    expect(providerCalls.stops).toContain('provider-run-1');
+    expect(providerCalls.promptSteeringCalls).toHaveLength(1);
+    expect(providerCalls.stops).toHaveLength(0);
+    expect(providerCalls.runStarts).toHaveLength(1);
 
+    // The active run remains responsible for the steered turn.
+    release();
     await startPromise;
   });
 
@@ -2449,7 +2676,7 @@ describe('agentService provider runtime', () => {
     ]);
     await completion;
 
-    expect(providerCalls.followUpPrompts).toHaveLength(0);
+    expect(providerCalls.promptSteeringCalls).toHaveLength(0);
     expect(providerCalls.stops).toContain('provider-run-1');
     expect(providerCalls.runStarts).toHaveLength(2);
 
@@ -2482,7 +2709,7 @@ describe('agentService provider runtime', () => {
     ]);
     await completion;
 
-    expect(providerCalls.followUpPrompts).toHaveLength(0);
+    expect(providerCalls.promptSteeringCalls).toHaveLength(0);
     expect(providerCalls.stops).toContain('provider-run-1');
     expect(providerCalls.runStarts).toHaveLength(2);
 
@@ -2512,7 +2739,7 @@ describe('agentService provider runtime', () => {
 
     // Without this, per-prompt prefaces silently vanish exactly when
     // background jobs are live.
-    expect(providerCalls.followUpPrompts[0]).toMatchObject({
+    expect(providerCalls.promptSteeringCalls[0]).toMatchObject({
       parts: [
         { type: 'text', text: 'PREFACE' },
         { type: 'text', text: 'follow up' },
@@ -2638,6 +2865,8 @@ describe('agentService provider runtime', () => {
   });
 
   it('snapshots an active session result before stopping without delaying the next backend', async () => {
+    // This test exercises the restart path; active steering is covered above.
+    providerState.promptSteeringSupported = false;
     const activeRun = createIdleHandle('active-prior-run');
     const previousResult = createDeferred<string | null>();
     providerState.runStartImplementation = vi
@@ -3068,6 +3297,8 @@ describe('agentService provider runtime', () => {
   it.each(['initial', 'follow-up'] as const)(
     'waits for paused raw persistence before starting a replacement after %s run',
     async (runKind) => {
+      // This test exercises replacement after persistence, not live steering.
+      providerState.promptSteeringSupported = false;
       const rawPersist = createDeferred<{ id: string }>();
       const replacementRun = createIdleHandle('replacement-run');
       let oldCompletion: Promise<void> | undefined;

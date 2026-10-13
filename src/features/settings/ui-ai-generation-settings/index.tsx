@@ -1,4 +1,4 @@
-import { KeyRound, Sparkles, TextQuote } from 'lucide-react';
+import { KeyRound, Sparkles } from 'lucide-react';
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -17,26 +17,17 @@ import {
 import {
   useAiGenerationSetting,
   useAiSkillSlotsSetting,
-  useBackendDefaultModelsSetting,
-  useBackendsSetting,
   useSaveAiGenerationSetting,
   useUpdateAiSkillSlotsSetting,
 } from '@/hooks/use-settings';
 import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
-import { getDefaultModelForBackend } from '@/lib/default-models';
 import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
 import { Input } from '@/common/ui/input';
-import { SummaryModelSettings } from '@/features/settings/ui-general-settings';
 import { Switch } from '@/common/ui/switch';
-import { useEnabledBackends } from '@/hooks/use-enabled-backends';
 
 
 
-const SUMMARY_MODEL_ITEMS = [
-  { key: 'summary-model:claude-code', label: 'Claude Code Summary' },
-  { key: 'summary-model:opencode', label: 'OpenCode Summary' },
-] as const;
 const OPENAI_API_ITEM = {
   key: 'provider:openai-api',
   label: 'OpenAI API Key',
@@ -46,21 +37,14 @@ const OPENAI_IMAGE_ITEM = {
   label: 'OpenAI Image Generation',
 } as const;
 
-type SummaryModelSelection = (typeof SUMMARY_MODEL_ITEMS)[number]['key'];
 type OpenAiSelection =
   | typeof OPENAI_API_ITEM.key
   | typeof OPENAI_IMAGE_ITEM.key;
-type AiGenerationSelection =
-  | AiSkillSlotKey
-  | SummaryModelSelection
-  | OpenAiSelection;
+type AiGenerationSelection = AiSkillSlotKey | OpenAiSelection;
 
 export function AiGenerationSettings() {
   const { data: slots } = useAiSkillSlotsSetting();
   const updateSlots = useUpdateAiSkillSlotsSetting();
-  const enabledBackends = useEnabledBackends();
-  const { data: backendsSetting } = useBackendsSetting();
-  const { data: backendDefaultModels } = useBackendDefaultModelsSetting();
   const [selectedItem, setSelectedItem] = useState<AiGenerationSelection>(
     SLOT_DEFINITIONS[0].key,
   );
@@ -87,19 +71,6 @@ export function AiGenerationSettings() {
   const selectedSlot = SLOT_DEFINITIONS.find(
     (slot) => slot.key === selectedItem,
   );
-  const selectedSummaryBackend = selectedItem.startsWith('summary-model:')
-    ? selectedItem.replace('summary-model:', '')
-    : null;
-  const globalDefaultBackend = backendsSetting?.defaultBackend ?? null;
-  const fallbackBackend =
-    globalDefaultBackend &&
-    enabledBackends.some((backend) => backend.value === globalDefaultBackend)
-      ? globalDefaultBackend
-      : (enabledBackends[0]?.value ?? 'claude-code');
-  const fallbackModel = getDefaultModelForBackend({
-    backend: fallbackBackend,
-    backendDefaultModels,
-  });
 
   return (
     <ListDetailLayout
@@ -114,30 +85,16 @@ export function AiGenerationSettings() {
         selectedSlot ? (
           <SlotDetail
             key={selectedSlot.key}
+            slotKey={selectedSlot.key}
             label={selectedSlot.label}
             description={selectedSlot.description}
             config={slots?.[selectedSlot.key] ?? null}
-            enabledBackends={enabledBackends}
-            fallbackBackend={fallbackBackend}
-            fallbackModel={fallbackModel}
             onUpdate={(config) => handleUpdate(selectedSlot.key, config)}
           />
         ) : selectedItem === OPENAI_API_ITEM.key ? (
           <OpenAiApiKeyDetail />
-        ) : selectedItem === OPENAI_IMAGE_ITEM.key ? (
-          <OpenAiImageGenerationDetail />
         ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto p-6">
-            <div className="max-w-3xl">
-              <SummaryModelSettings
-                backend={
-                  selectedSummaryBackend === 'opencode'
-                    ? 'opencode'
-                    : 'claude-code'
-                }
-              />
-            </div>
-          </div>
+          <OpenAiImageGenerationDetail />
         )
       }
     />
@@ -162,7 +119,7 @@ function AiGenerationRail({
       maxWidth={420}
       onWidthChange={setWidth}
       title="AI Generation"
-      count={SLOT_DEFINITIONS.length + SUMMARY_MODEL_ITEMS.length + 2}
+      count={SLOT_DEFINITIONS.length + 2}
       headerSupplement={
         <p className="text-[12px] leading-relaxed text-white/45">
           Configure AI-powered content generation by feature.
@@ -228,26 +185,6 @@ function AiGenerationRail({
           />
         )}
       />
-      {SUMMARY_MODEL_ITEMS.map((item) => (
-        <ListItemButton
-          key={item.key}
-          label={item.label}
-          isActive={selectedItem === item.key}
-          size="compact"
-          onClick={() => onSelect(item.key)}
-          renderIcon={({ isActive }) => (
-            <TextQuote
-              size={14}
-              className="shrink-0"
-              style={{
-                color: isActive
-                  ? 'oklch(0.78 0.18 295)'
-                  : 'oklch(0.78 0.16 295)',
-              }}
-            />
-          )}
-        />
-      ))}
     </ListPane>
   );
 }

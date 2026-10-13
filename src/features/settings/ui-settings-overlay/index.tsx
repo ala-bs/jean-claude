@@ -1,6 +1,7 @@
 import {
   ArrowLeftRight,
   Bell,
+  Blocks,
   Bot,
   Box,
   Brain,
@@ -29,7 +30,6 @@ import {
   Search,
   Settings,
   Settings2,
-  Sliders,
   Sparkles,
   StickyNote,
   TextCursorInput,
@@ -56,6 +56,7 @@ import { RemoveScroll } from 'react-remove-scroll';
 import {
   AgentMemorySettings,
   AppearanceSettings,
+  BackendsSettings,
   CalendarSettings,
   EditorSettings,
   EureciaSettings,
@@ -92,9 +93,9 @@ import { GlobalMcpSettings } from '@/features/settings/ui-global-mcp-settings';
 import { GlobalPermissionsSettings } from '@/features/settings/ui-global-permissions-settings';
 import { Kbd } from '@/common/ui/kbd';
 import { McpServersSettings } from '@/features/settings/ui-mcp-servers-settings';
-import { ModelPresetsSettings } from '@/features/settings/ui-model-presets-settings';
+import { ModelFallbackOrderSettings } from '@/features/settings/ui-rate-limit-swap-settings';
+import { ModelProfilesSettings } from '@/features/settings/ui-model-profiles-settings';
 import { PromptSnippetsSettings } from '@/features/settings/ui-prompt-snippets-settings';
-import { RateLimitSwapSettings } from '@/features/settings/ui-rate-limit-swap-settings';
 import { SettingsErrorBoundary } from '@/features/settings/ui-settings-error-boundary';
 import { SkillsSettings } from '@/features/settings/ui-skills-settings';
 import { SourcesSettings } from '@/features/settings/ui-sources-settings';
@@ -197,16 +198,26 @@ function getGlobalSections(): GlobalSection[] {
       label: 'Coding Agents',
       icon: Grid3X3,
       title: 'Coding Agents',
-      subtitle: 'Backends, thinking defaults, and model presets',
+      subtitle: 'Model profiles, backends, and process mode',
       subs: [
-        { id: 'presets', label: 'Model Presets', icon: Sliders },
+        { id: 'backends', label: 'Backends', icon: Blocks },
+        {
+          id: 'profiles',
+          label: 'Model Profiles',
+          layout: 'fill',
+          icon: Layers,
+        },
         { id: 'process-mode', label: 'Process Mode', icon: Cog },
         {
           id: 'prompt-preface',
           label: 'Prompt Preface',
           icon: MessageSquareQuote,
         },
-        { id: 'rate-limit-swap', label: 'Rate Limit Swap', icon: ArrowLeftRight },
+        {
+          id: 'rate-limit-swap',
+          label: 'Rate Limit Fallback',
+          icon: ArrowLeftRight,
+        },
         createBackendSubItem({ id: 'claude-code', label: 'Claude Code' }),
         createBackendSubItem({ id: 'opencode', label: 'OpenCode' }),
         createBackendSubItem({ id: 'codex', label: 'Codex' }),
@@ -504,7 +515,8 @@ function getGlobalNavGroups(): SettingsNavGroup[] {
     {
       label: 'Agents',
       items: [
-        globalLeaf('coding-agents', 'presets', 'Defaults'),
+        globalLeaf('coding-agents', 'backends', 'Backends'),
+        globalLeaf('coding-agents', 'profiles', 'Model Profiles'),
         globalLeaf('coding-agents', 'process-mode', 'Process Mode'),
         globalLeaf('coding-agents', 'claude-code', 'Claude Code'),
         globalLeaf('coding-agents', 'opencode', 'OpenCode'),
@@ -601,10 +613,12 @@ const SETTINGS_SEARCH_ALIASES: Record<string, string> = {
   'global:general:usage': 'rate limit status title bar tokens usage',
   'global:general:agent-memory': 'agent memory evidence extraction learning beta',
   'global:general:maintenance': 'cleanup gitignore housekeeping cache worktrees unused prune disk space',
-  'global:coding-agents:presets': 'models defaults thinking effort agent model presets',
   'global:coding-agents:process-mode': 'opencode server managed process lifecycle',
   'global:coding-agents:prompt-preface': 'instructions system prompt preface custom prompt',
-  'global:coding-agents:rate-limit-swap': 'fallback model swap rate limit',
+  'global:coding-agents:profiles':
+    'model profiles roles inherit off preset presets defaults thinking effort agent summary autocomplete',
+  'global:coding-agents:rate-limit-swap':
+    'fallback profile order swap rate limit quota',
   'global:coding-agents:claude-code': 'anthropic claude backend sdk auth',
   'global:coding-agents:opencode': 'sst opencode backend sdk auth',
   'global:coding-agents:codex': 'openai codex backend auth',
@@ -861,14 +875,16 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <SourcesSettings />;
       case 'skills-agents:agents':
         return <AgentsSettings />;
-      case 'coding-agents:presets':
-        return <ModelPresetsSettings />;
+      case 'coding-agents:backends':
+        return <BackendsSettings />;
+      case 'coding-agents:profiles':
+        return <ModelProfilesSettings />;
       case 'coding-agents:process-mode':
         return <OpenCodeProcessModeSettings />;
       case 'coding-agents:prompt-preface':
         return <PromptPrefaceSettings />;
       case 'coding-agents:rate-limit-swap':
-        return <RateLimitSwapSettings />;
+        return <ModelFallbackOrderSettings />;
       case 'coding-agents:claude-code':
         return <BackendConfigSettings backend="claude-code" />;
       case 'coding-agents:opencode':
@@ -885,7 +901,7 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
   // Handle leaf sections (no subs)
   switch (selection.sectionId) {
     case 'coding-agents':
-      return <ModelPresetsSettings />;
+      return <ModelProfilesSettings />;
     case 'ai-generation':
       return <AiGenerationSettings />;
     case 'permissions':

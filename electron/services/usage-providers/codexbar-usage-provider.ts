@@ -4,7 +4,10 @@ import type {
   UsageResult,
 } from '@shared/usage-types';
 
-import { runCodexBarCli } from '../codexbar-cli';
+import {
+  type CodexBarCliError,
+  runCodexBarCli,
+} from '../codexbar-cli';
 
 import type { BackendUsageProvider } from './types';
 import { formatTimeUntil } from './utils';
@@ -33,6 +36,9 @@ type CodexBarWindow = {
 
 type CodexBarUsagePayload = {
   provider?: string;
+  error?: {
+    message?: string;
+  };
   usage?: {
     primary?: CodexBarWindow | null;
     secondary?: CodexBarWindow | null;
@@ -77,28 +83,58 @@ export class CodexBarUsageProvider implements BackendUsageProvider {
       return `CodexBar has no configured fetch method for ${label}. Open CodexBar Settings > Providers and configure ${label}.`;
     }
 
+    if (
+      this.providerType === 'opencode' &&
+      detail.toLowerCase().includes('no opencode session cookies found')
+    ) {
+      return 'CodexBar OpenCode is not signed in. Sign in to OpenCode in a supported browser, then click Refresh in Usage Display settings.';
+    }
+
     return `CodexBar could not fetch ${label} usage. Try running \`codexbar --provider ${provider} --format json --json-only\` in Terminal. ${detail}`;
   }
 
   private runCodexBar(): Promise<CodexBarUsagePayload> {
     const provider = PROVIDER_TO_CODEXBAR_ID[this.providerType];
-    return runCodexBarCli(
-      ['--provider', provider, '--format', 'json', '--json-only'],
-      { timeout: 30_000, maxBuffer: 1024 * 1024 },
-    ).then(({ stdout }) => {
+    const parseOutput = (stdout: string): CodexBarUsagePayload => {
+      let parsed: CodexBarUsagePayload | CodexBarUsagePayload[];
       try {
-        const parsed = JSON.parse(stdout) as
+        parsed = JSON.parse(stdout) as
           | CodexBarUsagePayload
           | CodexBarUsagePayload[];
-        return Array.isArray(parsed) ? parsed[0] : parsed;
       } catch (parseError) {
         throw new Error(
           parseError instanceof Error
             ? `Failed to parse CodexBar JSON: ${parseError.message}`
-            : 'Failed to parse CodexBar JSON',
+          : 'Failed to parse CodexBar JSON',
         );
       }
-    });
+
+      const payload = Array.isArray(parsed) ? parsed[0] : parsed;
+      if (!payload) {
+        throw new Error('CodexBar returned an empty response');
+      }
+      if (payload.error?.message) {
+        throw new Error(payload.error.message);
+      }
+      return payload;
+    };
+
+    return runCodexBarCli(
+      ['--provider', provider, '--format', 'json', '--json-only'],
+      { timeout: 30_000, maxBuffer: 1024 * 1024 },
+    )
+      .then(({ stdout }) => parseOutput(stdout))
+      .catch((error: unknown) => {
+        // CodexBar emits structured provider failures on stdout while exiting
+        // with status 1 when --json-only is enabled.
+        if (error instanceof Error) {
+          const cliError = error as CodexBarCliError;
+          if (cliError.stdout?.trim()) {
+            return parseOutput(cliError.stdout);
+          }
+        }
+        throw error;
+      });
   }
 
   private transformPayload(payload: CodexBarUsagePayload): UsageDisplayData {
@@ -112,7 +148,6 @@ export class CodexBarUsageProvider implements BackendUsageProvider {
       if (
         !window ||
         typeof window.usedPercent !== 'number' ||
-        typeof window.windowMinutes !== 'number' ||
         typeof window.resetsAt !== 'string'
       ) {
         return [];
@@ -120,6 +155,8 @@ export class CodexBarUsageProvider implements BackendUsageProvider {
 
       const resetsAt = new Date(window.resetsAt);
       if (Number.isNaN(resetsAt.getTime())) return [];
+      const windowDurationMs = this.getWindowDurationMs(window, resetsAt);
+      if (windowDurationMs == null) return [];
 
       return [
         {
@@ -130,16 +167,52 @@ export class CodexBarUsageProvider implements BackendUsageProvider {
             utilization: window.usedPercent,
             resetsAt,
             timeUntilReset: formatTimeUntil(resetsAt),
-            windowDurationMs: window.windowMinutes * 60 * 1000,
+            windowDurationMs,
           },
         },
       ];
     });
 
     if (limits.length === 0) {
+      console.warn('[codexbar-usage] No usable usage windows', {
+        provider: this.providerType,
+        usageKeys: Object.keys(payload.usage ?? {}),
+        windowKeys: Object.fromEntries(
+          windows.map(([key, , , window]) => [
+            key,
+            window ? Object.keys(window) : [],
+          ]),
+        ),
+      });
       throw new Error('CodexBar response did not include usage windows');
     }
 
     return { limits };
+  }
+
+  private getWindowDurationMs(
+    window: CodexBarWindow,
+    resetsAt: Date,
+  ): number | null {
+    if (typeof window.windowMinutes === 'number' && window.windowMinutes > 0) {
+      return window.windowMinutes * 60 * 1000;
+    }
+
+    if (this.providerType !== 'copilot') return null;
+
+    // Copilot's monthly payload omits windowMinutes. A reset at UTC midnight
+    // on the first day of a month identifies the current calendar-month window.
+    if (
+      resetsAt.getUTCDate() === 1 &&
+      resetsAt.getUTCHours() === 0 &&
+      resetsAt.getUTCMinutes() === 0
+    ) {
+      const previousMonth = new Date(
+        Date.UTC(resetsAt.getUTCFullYear(), resetsAt.getUTCMonth() - 1, 1),
+      );
+      return resetsAt.getTime() - previousMonth.getTime();
+    }
+
+    return 30 * 24 * 60 * 60 * 1000;
   }
 }

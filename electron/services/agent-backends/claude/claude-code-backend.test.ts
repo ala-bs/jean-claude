@@ -247,10 +247,18 @@ describe('ClaudeCodeBackend prompt stream lifetime', () => {
     };
   }
 
-  async function startBackend(controller: ReturnType<typeof makeControllableQuery>) {
+  async function startBackend(
+    controller: ReturnType<typeof makeControllableQuery>,
+    configOverrides: { env?: Record<string, string> } = {},
+  ) {
     const backend = makeBackend();
     const session = await backend.start(
-      { type: 'claude-code', cwd: '/worktree', interactionMode: 'ask' },
+      {
+        type: 'claude-code',
+        cwd: '/worktree',
+        interactionMode: 'ask',
+        ...configOverrides,
+      },
       [{ type: 'text', text: 'go' }],
     );
     await vi.waitFor(() => expect(controller.getPromptIterator()).not.toBeNull());
@@ -343,6 +351,438 @@ describe('ClaudeCodeBackend prompt stream lifetime', () => {
       vi.useRealTimers();
       controller.end();
       await backend.dispose();
+    }
+  });
+
+  // Real transcript, 2026-10-03: result at 17:31:06 (end of the user's turn,
+  // a background subagent still live) -> `init` at 17:33:11 started a new turn
+  // in which the agent worked for another HOUR. The previous turn's 30s close
+  // kept being re-armed by every message, so the first model-generation gap
+  // longer than the grace (103s composing a long subagent prompt, zero messages
+  // emitted) closed stdin mid-run. The CLI survived, so the run continued with
+  // a dead control channel and 17 later Bash calls died with
+  // "Tool permission request failed: AbortError: Stream closed".
+  //
+  // Zero live background tasks is the deliberate configuration: it is what
+  // selects POST_RESULT_CLOSE_GRACE_MS (30s) over the 10-minute background
+  // grace, and so the setup in which the bug is observable at all.
+  it('does not close stdin during a turn the CLI started after a result', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next(); // the user message
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      // End of the user's turn while background work is still live.
+      controller.send(realResult);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(closed).toBe(false);
+
+      // The CLI resumes the agent for a new turn.
+      controller.send({ type: 'system', subtype: 'init' });
+      await vi.advanceTimersByTimeAsync(50);
+
+      // The agent now spends minutes composing one message and emits NOTHING.
+      // Nothing holds stdin (no pending tool, no permission card) — before the
+      // fix this is exactly where the 30s close fired.
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(closed).toBe(false);
+
+      // A permission request raised that late must still be answerable.
+      const canUseTool = queryMock.mock.calls[0][0].options.canUseTool;
+      const decision = canUseTool('Bash', { command: 'pnpm -v' }, {});
+      const requestId = await readPermissionRequestId(events);
+      await backend.respondToPermission(session.sessionId, requestId, {
+        behavior: 'allow',
+        updatedInput: { command: 'pnpm -v' },
+      });
+      await expect(decision).resolves.toMatchObject({ behavior: 'allow' });
+
+      // The resumed turn's own result still ends the run on silence.
+      controller.send(realResult);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(closed).toBe(false);
+      await vi.advanceTimersByTimeAsync(30 * 1000 + 1_000);
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // The flip side of the test above: standing down the 30s close must not leave
+  // the run with NO terminating timer. The real `result` already cleared both
+  // conditions the idle watchdog arms on, so the stand-down has to arm it
+  // itself — otherwise a live-but-silent CLI holds stdin, and the step's
+  // `running` status, forever.
+  it('still terminates a CLI-started turn that never reports a result', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next();
+
+      controller.send(realResult);
+      await vi.advanceTimersByTimeAsync(50);
+      controller.send({ type: 'system', subtype: 'init' });
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Well past the 30s close, so the stand-down is working...
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(closed).toBe(false);
+
+      // ...but total silence still ends the run rather than hanging forever.
+      await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // `task_notification` is a task SETTLEMENT record, and the SDK documents such
+  // messages as able to follow the turn-complete `result`. One arriving after
+  // the user's turn genuinely ended has no new turn behind it, so it must NOT
+  // stand down the close — doing so would hold stdin open for a turn that never
+  // comes.
+  it('does not treat a background task settling as a new turn', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next();
+
+      controller.send(realResult);
+      await vi.advanceTimersByTimeAsync(50);
+      controller.send({
+        type: 'system',
+        subtype: 'task_notification',
+        status: 'completed',
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(closed).toBe(false);
+
+      // The settlement re-armed the grace (any message does) but did not
+      // disarm it, so the run still ends on the next silence.
+      await vi.advanceTimersByTimeAsync(30 * 1000 + 1_000);
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // Observed against the bundled CLI: `idle` lands in the same millisecond as
+  // the turn's `result`. With no background work left it is the authoritative
+  // end of the run, so the 30s grace invented for guessing is pure latency.
+  it('closes stdin at once when the CLI reports idle with no background work', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next();
+
+      controller.send(realResult);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(closed).toBe(false);
+
+      controller.send({
+        type: 'system',
+        subtype: 'session_state_changed',
+        state: 'idle',
+        session_id: 'sess-idle-1',
+      });
+      // Not immediate — a short window stays open so a resumption can cancel.
+      await vi.advanceTimersByTimeAsync(100);
+      expect(closed).toBe(false);
+
+      // ...but far below the 30s grace the turn-end used to wait out.
+      await vi.advanceTimersByTimeAsync(2 * 1000 + 100);
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // The trap the CLI probe exposed: `idle` fires when the TURN ends, not when
+  // the RUN does. In a real background-task run it arrived with one task still
+  // live, 24 seconds before that task resumed the agent for another turn.
+  // Closing stdin on it would kill the control channel for the resumed turn —
+  // the exact "AbortError: Stream closed" this machinery prevents.
+  it('does not close on idle while background work is still live', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next();
+
+      controller.send(backgroundTasksChanged(['bg-1']));
+      controller.send(realResult);
+      controller.send({
+        type: 'system',
+        subtype: 'session_state_changed',
+        state: 'idle',
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(closed).toBe(false);
+
+      // Past the 30s grace too — the live task earns the long one.
+      await vi.advanceTimersByTimeAsync(60 * 1000);
+      expect(closed).toBe(false);
+
+      // The task settles and resumes the agent, and the permission channel it
+      // needs is still alive.
+      controller.send(backgroundTasksChanged([]));
+      controller.send({
+        type: 'system',
+        subtype: 'session_state_changed',
+        state: 'running',
+      });
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(closed).toBe(false);
+
+      const canUseTool = queryMock.mock.calls[0][0].options.canUseTool;
+      const decision = canUseTool('Bash', { command: 'pnpm -v' }, {});
+      const requestId = await readPermissionRequestId(events);
+      await backend.respondToPermission(session.sessionId, requestId, {
+        behavior: 'allow',
+        updatedInput: { command: 'pnpm -v' },
+      });
+      await expect(decision).resolves.toMatchObject({ behavior: 'allow' });
+
+      // That turn ends and now the run really is over.
+      controller.send(realResult);
+      controller.send({
+        type: 'system',
+        subtype: 'session_state_changed',
+        state: 'idle',
+      });
+      await vi.advanceTimersByTimeAsync(2 * 1000 + 100);
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // An authoritative turn-over signal must still not outrank a human. stdin is
+  // the channel the permission answer travels back on, so the immediate close
+  // routes through the same hold machinery as the timed one.
+  it('holds stdin open on idle while a permission card is unanswered', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next();
+
+      const canUseTool = queryMock.mock.calls[0][0].options.canUseTool;
+      const decision = canUseTool('Bash', { command: 'ls' }, {});
+      const requestId = await readPermissionRequestId(events);
+
+      controller.send(realResult);
+      controller.send({
+        type: 'system',
+        subtype: 'session_state_changed',
+        state: 'idle',
+      });
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(closed).toBe(false);
+
+      await backend.respondToPermission(session.sessionId, requestId, {
+        behavior: 'allow',
+        updatedInput: { command: 'ls' },
+      });
+      await expect(decision).resolves.toMatchObject({ behavior: 'allow' });
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // `idle` is a TURN boundary and `backgroundTaskIds` is a weak proxy for "no
+  // resumption coming" — this file's own transcript records a resumption with
+  // zero tracked tasks. So the idle close must stay cancellable: a `running`
+  // arriving inside the window has to keep the control channel alive.
+  it('lets a resumption inside the idle window cancel the close', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next();
+
+      controller.send(realResult);
+      controller.send({
+        type: 'system',
+        subtype: 'session_state_changed',
+        state: 'idle',
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(closed).toBe(false);
+
+      // A turn the background-task bookkeeping never saw coming.
+      controller.send({
+        type: 'system',
+        subtype: 'session_state_changed',
+        state: 'running',
+      });
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(closed).toBe(false);
+
+      // And its tool calls can still get an answer.
+      const canUseTool = queryMock.mock.calls[0][0].options.canUseTool;
+      const decision = canUseTool('Bash', { command: 'ls' }, {});
+      const requestId = await readPermissionRequestId(events);
+      await backend.respondToPermission(session.sessionId, requestId, {
+        behavior: 'allow',
+        updatedInput: { command: 'ls' },
+      });
+      await expect(decision).resolves.toMatchObject({ behavior: 'allow' });
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // A turn can end on a withheld background-notification result, whose replay
+  // in `finally` is the ONLY thing that finalizes the step. `idle` must not
+  // make a later turn-start edge discard it — the SDK re-emits `init` on
+  // reconnect with no turn behind it, which would strand the step on `running`.
+  it('keeps a withheld result through idle and a spurious turn start', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+      // Collected from the start: the replay happens as the channel closes, and
+      // a closed channel yields `{done: true}` forever, so draining afterwards
+      // would see nothing.
+      const seen: string[] = [];
+      const collector = (async () => {
+        for await (const event of session.events) {
+          seen.push((event as { type: string }).type);
+        }
+      })();
+
+      // The turn's only result is a zero-turn notification one: withheld, so
+      // `sawRealResult` stays false and nothing has finalized the step yet.
+      controller.send(notificationResult);
+      controller.send({
+        type: 'system',
+        subtype: 'session_state_changed',
+        state: 'idle',
+      });
+      // A reconnect re-emits `init` with no real turn behind it.
+      controller.send({ type: 'system', subtype: 'init' });
+      await vi.advanceTimersByTimeAsync(500);
+
+      // The run still terminates...
+      await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+      expect(closed).toBe(true);
+
+      // Closing stdin makes the real CLI exit, which ends the SDK stream and
+      // runs the generator's `finally` — where the replay lives.
+      controller.end();
+      await collector;
+
+      // ...and the withheld result survived to finalize the step.
+      expect(seen).toContain('complete');
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // The single line that changes behaviour for every existing user: without the
+  // env var the CLI emits no session-state messages at all and the whole
+  // explicit-turn-boundary path above is dead.
+  it('enables the CLI session-state events, and lets config env override them', async () => {
+    const controller = makeControllableQuery();
+    const { backend } = await startBackend(controller);
+    try {
+      expect(queryMock.mock.calls[0][0].options.env).toMatchObject({
+        CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
+      });
+    } finally {
+      controller.end();
+      await backend.dispose();
+    }
+
+    const second = makeControllableQuery();
+    const { backend: backend2 } = await startBackend(second, {
+      env: { CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '' },
+    });
+    try {
+      const lastCall = queryMock.mock.calls[queryMock.mock.calls.length - 1];
+      expect(
+        lastCall[0].options.env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS,
+      ).toBe('');
+    } finally {
+      second.end();
+      await backend2.dispose();
     }
   });
 

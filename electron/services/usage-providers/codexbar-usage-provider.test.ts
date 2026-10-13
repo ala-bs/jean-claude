@@ -83,6 +83,27 @@ describe('CodexBarUsageProvider', () => {
     );
   });
 
+  it('infers Copilot monthly window duration when CodexBar omits it', async () => {
+    mockCodexBar(
+      JSON.stringify({
+        provider: 'copilot',
+        usage: {
+          primary: {
+            usedPercent: 2.3,
+            resetsAt: '2026-10-01T00:00:00Z',
+          },
+        },
+      }),
+    );
+
+    const result = await new CodexBarUsageProvider('copilot').getUsage();
+
+    expect(result.error).toBeNull();
+    expect(result.data?.limits[0].range.windowDurationMs).toBe(
+      30 * 24 * 60 * 60 * 1000,
+    );
+  });
+
   it('falls back to common macOS install paths when PATH lookup fails', async () => {
     vi.mocked(execFile)
       .mockImplementationOnce((...args: unknown[]) => {
@@ -204,6 +225,73 @@ describe('CodexBarUsageProvider', () => {
     );
     expect(result.error?.message).toContain(
       'codexbar config set-api-key --provider copilot --stdin',
+    );
+  });
+
+  it('surfaces structured CodexBar OpenCode authentication errors', async () => {
+    mockCodexBar(
+      JSON.stringify([
+        {
+          provider: 'opencode',
+          error: {
+            code: 1,
+            kind: 'provider',
+            message: 'No OpenCode session cookies found in browsers.',
+          },
+        },
+      ]),
+    );
+
+    const result = await new CodexBarUsageProvider('opencode').getUsage();
+
+    expect(result.data).toBeNull();
+    expect(result.error?.message).toBe(
+      'CodexBar OpenCode is not signed in. Sign in to OpenCode in a supported browser, then click Refresh in Usage Display settings.',
+    );
+  });
+
+  it('parses structured errors written to stdout on a non-zero exit', async () => {
+    vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
+      const callback = args.at(-1) as (
+        error: NodeJS.ErrnoException,
+        stdout: string,
+        stderr: string,
+      ) => void;
+      const error = Object.assign(new Error('exit 1'), { code: '1' });
+      callback(
+        error,
+        JSON.stringify({
+          provider: 'opencode',
+          error: {
+            message: 'No OpenCode session cookies found in browsers.',
+          },
+        }),
+        '',
+      );
+      return {} as ReturnType<typeof execFile>;
+    });
+
+    const result = await new CodexBarUsageProvider('opencode').getUsage();
+
+    expect(result.error?.message).toContain(
+      'CodexBar OpenCode is not signed in.',
+    );
+  });
+
+  it('does not misreport structured CodexBar errors as missing usage windows', async () => {
+    mockCodexBar(
+      JSON.stringify({
+        provider: 'codex',
+        error: { message: 'Codex authentication expired.' },
+      }),
+    );
+
+    const result = await new CodexBarUsageProvider('codex').getUsage();
+
+    expect(result.data).toBeNull();
+    expect(result.error?.message).toContain('Codex authentication expired.');
+    expect(result.error?.message).not.toContain(
+      'response did not include usage windows',
     );
   });
 });

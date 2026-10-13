@@ -41,7 +41,9 @@ describe('resolveMobileDevBuildCommand', () => {
       appPath: '.',
       device: iosSimulator,
     });
-    expect(result.command).toBe('npx expo run:ios --device ABC-123');
+    expect(result.command).toBe(
+      'npx expo run:ios --device ABC-123 --no-bundler',
+    );
     expect(result.unavailableReason).toBeNull();
     expect(result.commandId).toContain(encodeURIComponent('ABC-123'));
     expect(result.commandId).toContain(':ios:');
@@ -61,7 +63,9 @@ describe('resolveMobileDevBuildCommand', () => {
         state: 'shutdown',
       },
     });
-    expect(result.command).toBe('npx expo run:android --device Pixel_7');
+    expect(result.command).toBe(
+      'npx expo run:android --device Pixel_7 --no-bundler',
+    );
   });
 
   it('falls back to the detected build command when none is configured', () => {
@@ -81,7 +85,7 @@ describe('resolveMobileDevBuildCommand', () => {
       device: iosSimulator,
     });
     // Script wrapper: the flag comes from the detected stacks.
-    expect(result.command).toBe('pnpm run ios --device ABC-123');
+    expect(result.command).toBe('pnpm run ios --device ABC-123 --no-bundler');
   });
 
   it('ignores a whitespace-only override and still uses the detected command', () => {
@@ -101,7 +105,9 @@ describe('resolveMobileDevBuildCommand', () => {
       appPath: '.',
       device: iosSimulator,
     });
-    expect(result.command).toBe('npx expo run:ios --device ABC-123');
+    expect(result.command).toBe(
+      'npx expo run:ios --device ABC-123 --no-bundler',
+    );
     expect(result.unavailableReason).toBeNull();
   });
 
@@ -114,5 +120,44 @@ describe('resolveMobileDevBuildCommand', () => {
     expect(result.command).toBeNull();
     expect(result.unavailableReason).toMatch(/iOS build command/);
     expect(result.commandId).not.toBeNull();
+  });
+
+  it('does not duplicate an existing no-bundler flag', () => {
+    const result = resolveMobileDevBuildCommand({
+      config: config({ iosBuildCommand: 'npx expo run:ios --no-bundler' }),
+      appPath: '.',
+      device: iosSimulator,
+    });
+    expect(result.command).toBe(
+      'npx expo run:ios --no-bundler --device ABC-123',
+    );
+  });
+
+  it('uses React Native flag when command identifies React Native', () => {
+    const result = resolveMobileDevBuildCommand({
+      config: config({ iosBuildCommand: 'npx react-native run-ios' }),
+      appPath: '.',
+      device: iosSimulator,
+    });
+    expect(result.command).toBe(
+      'npx react-native run-ios --udid ABC-123 --no-packager',
+    );
+  });
+
+  it('does not append framework flags to custom or compound commands', () => {
+    expect(
+      resolveMobileDevBuildCommand({
+        config: config({ iosBuildCommand: 'bash scripts/build-ios.sh' }),
+        appPath: '.',
+        device: iosSimulator,
+      }).command,
+    ).toBe('bash scripts/build-ios.sh');
+    expect(
+      resolveMobileDevBuildCommand({
+        config: config({ iosBuildCommand: 'npx expo run:ios && echo done' }),
+        appPath: '.',
+        device: iosSimulator,
+      }).command,
+    ).toBe('npx expo run:ios && echo done --device ABC-123');
   });
 });

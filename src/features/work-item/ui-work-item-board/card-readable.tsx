@@ -5,6 +5,17 @@ import clsx from 'clsx';
 
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
+import type { WorkItemDisplayConfig } from '@shared/work-item-display-config-types';
+import { resolveBoardRows } from '@shared/work-item-display-config-types';
+import {
+  FIELD_PRIORITY,
+  FIELD_TAGS,
+  getIterationPath,
+  getPriority,
+  getStringField,
+  getTitle,
+  getWorkItemType,
+} from '@shared/work-item-field-types';
 import {
   HighlightedSearchText,
   WorkItemPriorityBadge,
@@ -41,6 +52,7 @@ export function WorkItemBoardReadableCard({
   onOpen,
   onOpenChildBugs,
   colorSettings = DEFAULT_BOARD_COLOR_SETTINGS,
+  displayConfig = null,
 }: {
   workItem: AzureDevOpsWorkItem;
   colorSettings?: BoardColorSettings;
@@ -55,8 +67,28 @@ export function WorkItemBoardReadableCard({
   isExactMatch: boolean;
   onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
   onOpenChildBugs?: () => void;
+  /**
+   * Per-project work item display config. `null` (the default) means "render
+   * today's card", so an unconfigured project is byte-identical. Unknown
+   * refNames in `board.rows` are simply ignored.
+   */
+  displayConfig?: WorkItemDisplayConfig | null;
 }) {
-  const parsed = parseWorkItemTitle({ title: workItem.fields.title, setting: parserSetting });
+  // `resolveBoardRows` hands back a module-level singleton for a null config —
+  // read only, never mutate it.
+  const visibleBoardRefNames = new Set(
+    resolveBoardRows(displayConfig)
+      .filter((row) => row.visible)
+      .map((row) => row.refName),
+  );
+  const showPriority =
+    colorSettings.showPriority && visibleBoardRefNames.has(FIELD_PRIORITY);
+  const showTags = visibleBoardRefNames.has(FIELD_TAGS);
+  const iterationPath = getIterationPath(workItem);
+  const parsed = parseWorkItemTitle({
+    title: getTitle(workItem),
+    setting: parserSetting,
+  });
   // Colour rules apply to title-extracted labels too; coloured ones never collapse.
   const scopeEntries = parsed.labels.map((label) => ({
     label,
@@ -74,8 +106,10 @@ export function WorkItemBoardReadableCard({
   const hiddenScopeLabels = plainScopeIndexes
     .slice(VISIBLE_SCOPE_LIMIT)
     .map((index) => scopeEntries[index].label);
-  const isBug = workItem.fields.workItemType === 'Bug';
-  const tags = parseAzureWorkItemTags(workItem.fields.tags ?? '');
+  const isBug = getWorkItemType(workItem) === 'Bug';
+  const tags = showTags
+    ? parseAzureWorkItemTags(getStringField(workItem, FIELD_TAGS) ?? '')
+    : [];
   const stateTags = tags.flatMap((tag) => {
     const tone = getBoardTagTone(tag, colorSettings.rules);
     return tone ? [{ tag, ...tone }] : [];
@@ -83,7 +117,7 @@ export function WorkItemBoardReadableCard({
   const otherTags = tags.filter(
     (tag) => !getBoardTagTone(tag, colorSettings.rules),
   );
-  const sprint = iterationLeaf(workItem.fields.iterationPath);
+  const sprint = iterationLeaf(iterationPath);
   // Single overflow badge for everything collapsed on the card (title labels + plain tags).
   const hiddenLabels = [...hiddenScopeLabels, ...otherTags].filter(
     (label, index, all) =>
@@ -117,13 +151,17 @@ export function WorkItemBoardReadableCard({
       {/* 2 — one quiet identity line */}
       <div className="flex min-w-0 items-center gap-1.5">
         {selectionControl}
-        <WorkItemTypeIcon type={workItem.fields.workItemType} size="sm" variant="editorial" />
+        <WorkItemTypeIcon
+          type={getWorkItemType(workItem)}
+          size="sm"
+          variant="editorial"
+        />
         <span className="text-ink-3 min-w-0 truncate font-mono text-[10.5px]">
           <HighlightedSearchText text={`${workItem.id}`} search={search} />
           {sprint ? ` · ${sprint}` : ''}
         </span>
-        {colorSettings.showPriority && (
-          <WorkItemPriorityBadge priority={workItem.fields.priority} />
+        {showPriority && (
+          <WorkItemPriorityBadge priority={getPriority(workItem)} />
         )}
         {isExactMatch && (
           <span className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">
@@ -133,7 +171,7 @@ export function WorkItemBoardReadableCard({
         {outOfSprintLabel && (
           <span
             className="max-w-24 truncate rounded border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase"
-            title={`Iteration: ${workItem.fields.iterationPath}`}
+            title={`Iteration: ${iterationPath}`}
           >
             {outOfSprintLabel}
           </span>

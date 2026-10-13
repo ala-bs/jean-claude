@@ -9,6 +9,7 @@ import { dbg } from '../lib/debug';
 
 import { aiUsageTrackingService } from './ai-usage-tracking-service';
 import { encryptionService } from './encryption-service';
+import { getModelProfileService } from './model-profile-service';
 
 let cachedClient: Mistral | null = null;
 let cachedSettingsKey = '';
@@ -53,6 +54,32 @@ export async function complete({
       return null;
     }
 
+    // The active model profile binds the `completion` role, which may be `off`
+    // (a cheap / rate-limited profile shouldn't burn quota on FIM completions)
+    // or blocked by the project policy. Both short-circuit *before* the Mistral
+    // client is constructed.
+    const role = await getModelProfileService().resolveForRole({
+      role: 'completion',
+      ...(projectId ? { projectId } : {}),
+    });
+
+    if (role.off) {
+      dbg.completion('Completion skipped: `completion` role is off');
+      return null;
+    }
+
+    if (role.blocked) {
+      dbg.completion('Completion skipped: %s', role.blocked.message);
+      return null;
+    }
+
+    // The `completion` role is toggle-only: it decides *whether* autocomplete
+    // runs, never which model serves it. Autocomplete is Mistral FIM through
+    // the Autocomplete settings (own API key, own model), so `role.model`
+    // would be a model name from some other backend — sending it to the
+    // Mistral client would just fail the request.
+    const model = settings.model;
+
     let projectCompletionContext = '';
     if (projectId) {
       const project = await ProjectRepository.findById(projectId);
@@ -80,13 +107,13 @@ export async function complete({
 
     dbg.completion(
       'Requesting FIM completion (model=%s, promptLen=%d, withContext=%s)',
-      settings.model,
+      model,
       effectivePrompt.length,
       effectivePrompt !== prompt,
     );
 
     const result = await client.fim.complete({
-      model: settings.model,
+      model,
       prompt: effectivePrompt,
       suffix: suffix || undefined,
       maxTokens: 64,
@@ -106,7 +133,7 @@ export async function complete({
 
       aiUsageTrackingService.recordAutocompleteUsageBatched({
         backend: 'mistral',
-        model: settings.model,
+        model,
         usage: {
           inputTokens: result.usage.promptTokens ?? 0,
           outputTokens: result.usage.completionTokens ?? 0,

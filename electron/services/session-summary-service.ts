@@ -16,6 +16,8 @@ import { generateText } from './ai-generation-service';
 
 const MAX_INLINE_TRANSCRIPT_CHARS = 30_000;
 const MAX_TOOL_RESULT_CHARS = 4_000;
+const MAX_SUMMARY_CHARS = 8_000;
+const STEP_SUMMARY_TIMEOUT_MS = 10 * 60 * 1000;
 
 function truncateMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
@@ -192,7 +194,28 @@ export async function summarizeNormalizedMessages({
       model,
       outputSchema: SESSION_SUMMARY_SCHEMA,
       prompt,
-      ...(transcriptPath
+      // Never swap the summary backend on a rate limit. The tool options below
+      // are picked from `backend`, so a swap would hand e.g. Codex a scoped
+      // `Read` permission it cannot honor — and more importantly it silently
+      // runs the summary on a backend the active model profile never selected
+      // for the `summary` role.
+      allowRateLimitSwap: false,
+      ...(backend === 'codex'
+        ? {
+            // Codex has no scoped Read tool, so the isolated runner is given
+            // read-only shell instead and reads the spilled transcript itself.
+            // That avoids inlining it — the prompt stays small regardless of
+            // transcript size, so no history is dropped.
+            toolPolicy: 'none' as const,
+            allowedTools: [],
+            ...(transcriptPath
+              ? {
+                  allowReadOnlyShell: true,
+                  cwd: path.dirname(transcriptPath),
+                }
+              : {}),
+          }
+        : transcriptPath
         ? {
             cwd: path.dirname(transcriptPath),
             allowedTools: ['Read'],
@@ -200,6 +223,7 @@ export async function summarizeNormalizedMessages({
           }
         : {}),
       throwOnError: true,
+      timeoutMs: STEP_SUMMARY_TIMEOUT_MS,
       usageContext,
     });
   } finally {
@@ -214,7 +238,7 @@ export async function summarizeNormalizedMessages({
     typeof (result as { summary?: unknown }).summary === 'string'
   ) {
     const summary = (result as { summary: string }).summary.trim();
-    if (summary) return summary;
+    if (summary && summary.length <= MAX_SUMMARY_CHARS) return summary;
   }
 
   // A raw string means the backend did not honor the schema. Only accept it if
@@ -230,7 +254,7 @@ export async function summarizeNormalizedMessages({
         typeof (parsed as { summary?: unknown }).summary === 'string'
       ) {
         const summary = (parsed as { summary: string }).summary.trim();
-        if (summary) return summary;
+        if (summary && summary.length <= MAX_SUMMARY_CHARS) return summary;
       }
     } catch {
       // fall through to the error below

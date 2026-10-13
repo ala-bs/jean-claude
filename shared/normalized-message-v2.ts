@@ -46,6 +46,7 @@ export type NormalizedToolUse = {
   parentToolId?: string;
   permission?: {
     allowedBy: 'agent' | 'system';
+    source?: 'sandbox';
     rule?: {
       tool: string;
       pattern: string;

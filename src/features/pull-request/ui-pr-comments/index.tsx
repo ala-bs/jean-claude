@@ -8,7 +8,6 @@ import {
   ThumbsUp,
   Trash2,
 } from 'lucide-react';
-import { codeToTokens, type ThemedToken } from 'shiki';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 
@@ -19,6 +18,7 @@ import {
   encodeMentionDisplayNames,
   type MentionOption,
 } from '@/common/ui/mention-textarea';
+import { getLanguageFromPath, tokenizeLines } from '@/lib/syntax-highlight';
 import {
   type MentionDisplayNames,
   replaceAzureDevOpsMentions,
@@ -39,10 +39,10 @@ import { AzureMarkdownContent } from '@/features/common/ui-azure-html-content';
 import { Button } from '@/common/ui/button';
 import { encodeProxyUrl } from '@/lib/azure-image-proxy';
 import { formatRelativeTime } from '@/lib/time';
-import { getLanguageFromPath } from '@/features/agent/ui-diff-view/language-utils';
 import { IconButton } from '@/common/ui/icon-button';
 import { InlineCommentComposer } from '@/features/common/ui-inline-comments';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import { Tooltip } from '@/common/ui/tooltip';
 import { UserAvatar } from '@/common/ui/user-avatar';
 
 
@@ -438,7 +438,6 @@ function ThreadCodePreview({
     'current',
     repoInfo,
   );
-  const [tokens, setTokens] = useState<ThemedToken[][]>([]);
 
   const currentSelectedLines = useMemo(
     () => getSelectedLines(currentContent, startLine, endLine),
@@ -486,17 +485,13 @@ function ThreadCodePreview({
 
   const language = useMemo(() => getLanguageFromPath(filePath), [filePath]);
 
-  useEffect(() => {
-    if (snippetLines.length === 0) return;
-    const code = snippetLines.join('\n');
-    codeToTokens(code, { lang: language, theme: 'github-dark' })
-      .then((result) => setTokens(result.tokens))
-      .catch(() => {
-        codeToTokens(code, { lang: 'text', theme: 'github-dark' }).then(
-          (result) => setTokens(result.tokens),
-        );
-      });
-  }, [snippetLines, language]);
+  const tokens = useMemo(
+    () =>
+      snippetLines.length === 0
+        ? []
+        : tokenizeLines(snippetLines.join('\n'), language),
+    [snippetLines, language],
+  );
 
   if (!activeContent || snippetLines.length === 0) return null;
 
@@ -892,6 +887,40 @@ function ThreadComment({
     );
   });
   const likeCount = comment.usersLiked.length;
+  const likeNames = comment.usersLiked
+    .map((user) => user.displayName || user.uniqueName || user.id)
+    .filter((name): name is string => !!name);
+  const likeButton = (
+    <button
+      type="button"
+      onClick={() => {
+        setCommentLike.mutate({
+          threadId,
+          commentId: comment.id,
+          liked: !likedByCurrentUser,
+        });
+      }}
+      disabled={setCommentLike.isPending}
+      className={clsx(
+        'flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[11px] transition-colors disabled:opacity-50',
+        likedByCurrentUser
+          ? 'bg-acc/20 text-acc-ink hover:bg-acc/30'
+          : 'text-ink-3 hover:bg-glass-light hover:text-ink-1',
+      )}
+      title={likedByCurrentUser ? 'Remove thumbs up' : 'Thumbs up'}
+    >
+      <ThumbsUp className="h-3.5 w-3.5" />
+      {likeCount > 0 && <span>{likeCount}</span>}
+    </button>
+  );
+  const likeIndicator = (
+    <span className="text-ink-3 flex shrink-0 items-center gap-1 px-1.5 py-1 text-[11px]">
+      <ThumbsUp className="h-3.5 w-3.5" />
+      <span>{likeCount}</span>
+    </span>
+  );
+  const likeControl =
+    !readOnly && !isEditing && currentUser ? likeButton : likeIndicator;
 
   const saveEdit = async (body: string, images: PromptImagePart[] = []) => {
     if (updateComment.isPending || isUploadingEditImages) return;
@@ -952,29 +981,22 @@ function ThreadComment({
               {formatRelativeTime(comment.publishedDate)}
             </span>
           </div>
-          {!readOnly && !isEditing && currentUser && (
-            <button
-              type="button"
-              onClick={() => {
-                setCommentLike.mutate({
-                  threadId,
-                  commentId: comment.id,
-                  liked: !likedByCurrentUser,
-                });
-              }}
-              disabled={setCommentLike.isPending}
-              className={clsx(
-                'flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[11px] transition-colors disabled:opacity-50',
-                likedByCurrentUser
-                  ? 'bg-acc/20 text-acc-ink hover:bg-acc/30'
-                  : 'text-ink-3 hover:bg-glass-light hover:text-ink-1',
-              )}
-              title={likedByCurrentUser ? 'Remove thumbs up' : 'Thumbs up'}
-            >
-              <ThumbsUp className="h-3.5 w-3.5" />
-              {likeCount > 0 && <span>{likeCount}</span>}
-            </button>
-          )}
+          {((!readOnly && !isEditing && currentUser) || likeCount > 0) &&
+            (likeNames.length > 0 ? (
+              <Tooltip
+                content={
+                  <div className="flex max-w-64 flex-col gap-1 break-words">
+                    {likeNames.map((name, index) => (
+                      <span key={`${name}-${index}`}>{name}</span>
+                    ))}
+                  </div>
+                }
+              >
+                {likeControl}
+              </Tooltip>
+            ) : (
+              likeControl
+            ))}
           {!readOnly && canEdit && !isEditing && (
             <div className="flex shrink-0 items-center gap-0.5">
               <IconButton

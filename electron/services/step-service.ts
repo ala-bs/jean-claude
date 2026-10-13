@@ -10,11 +10,11 @@ import type {
   TaskStepType,
   ThinkingEffort,
 } from '@shared/types';
+import type { ResolvedModel } from '@shared/model-profiles';
 
 import { AgentMessageRepository } from '../database/repositories/agent-messages';
 import { createDebug } from '../lib/debug';
 import { ProjectRepository } from '../database/repositories/projects';
-import { SettingsRepository } from '../database/repositories/settings';
 import { TaskRepository } from '../database/repositories/tasks';
 import { TaskStepRepository } from '../database/repositories/task-steps';
 
@@ -24,6 +24,7 @@ import {
   emitStepUpsert,
   emitTaskUpsert,
 } from './cache-event-service';
+import { getModelProfileService } from './model-profile-service';
 import { prepareSummaryGenerationPrompt } from './session-summary-service';
 import { summarizeNormalizedMessages } from './session-summary-service';
 import { taskRuntimeCleanupService } from './task-runtime-cleanup-service';
@@ -55,10 +56,13 @@ function canUseStepAsContinueSource(status: TaskStep['status']): boolean {
   );
 }
 
+const MAX_FALLBACK_SUMMARY_CHARS = 8_000;
+const FALLBACK_SUMMARY_MARKER = '...[fallback summary truncated]...';
+
 /**
  * Simple text condensation fallback for `{{summary(...)}}` when the argument
  * resolves to a raw value rather than a step reference (which uses normalized
- * messages instead). Collapses whitespace and truncates to 320 characters.
+ * messages instead). Collapses whitespace and keeps both ends of long output.
  */
 function condenseText(value: string): string {
   const normalized = value.replace(/\r\n/g, '\n').trim();
@@ -73,8 +77,14 @@ function condenseText(value: string): string {
     .trim();
 
   if (!condensed) return '';
-  if (condensed.length <= 320) return condensed;
-  return `${condensed.slice(0, 317).trim()}...`;
+  if (condensed.length <= MAX_FALLBACK_SUMMARY_CHARS) return condensed;
+  const contentLength =
+    MAX_FALLBACK_SUMMARY_CHARS - FALLBACK_SUMMARY_MARKER.length - 2;
+  const headLength = Math.ceil(contentLength / 2);
+  const tailLength = Math.floor(contentLength / 2);
+  return `${condensed.slice(0, headLength).trimEnd()}
+${FALLBACK_SUMMARY_MARKER}
+${condensed.slice(-tailLength).trimStart()}`;
 }
 
 function getSummaryFallbackText({
@@ -108,8 +118,7 @@ async function resolvePromptTemplate({
   taskId,
   projectId,
   steps,
-  summaryBackend,
-  summaryModels,
+  summaryModel,
   onSummaryLifecycle,
 }: {
   template: string;
@@ -118,17 +127,20 @@ async function resolvePromptTemplate({
   taskId: string;
   projectId: string;
   steps: TaskStep[];
-  summaryBackend: AgentBackendType;
-  summaryModels: Partial<Record<
-    import('@shared/agent-backend-types').AgentBackendType,
-    import('@shared/types').ModelPreference
-  >>;
+  /** Model resolved for the `summary` role; may be `off`. */
+  summaryModel: ResolvedModel;
   onSummaryLifecycle?: {
     onStart?: (step: TaskStep, prompt: string) => Promise<void> | void;
     onResolved?: (step: TaskStep, summary: string) => Promise<void> | void;
   };
 }): Promise<{ resolvedPrompt: string; warnings: string[] }> {
   const warnings: string[] = [];
+  const summaryBackend = summaryModel.backend;
+  // Provenance of the summary backend, so a surprising one ("why is my Claude
+  // profile summarizing on codex?") is attributable from the error alone.
+  const summaryOrigin = `source=${summaryModel.source}${
+    summaryModel.profileId ? ` profile=${summaryModel.profileId}` : ''
+  }${summaryModel.presetId ? ` preset=${summaryModel.presetId}` : ''}`;
 
   // {{step.<id>}} is an alias for {{step.<id>.output}} — both return step.output.
   function resolveValueExpression(expression: string): string {
@@ -186,7 +198,29 @@ async function resolvePromptTemplate({
 
       const messages = await AgentMessageRepository.findByStepId(step.id);
 
-      const model = summaryModels[summaryBackend] ?? 'default';
+      // The active profile bound `summary` to `off`: skip generation entirely
+      // and reuse what the step already produced.
+      if (summaryModel.off) {
+        const fallback = getSummaryFallbackText({ step, messages });
+        if (!fallback) {
+          throw new Error(
+            `Failed to summarize step "${step.name}" (${stepId}): summary generation is disabled and no previous output is available`,
+          );
+        }
+        warnings.push(
+          `Summary generation is disabled by the active model profile; used ${fallback.source} fallback for step "${step.name}" (${stepId}).`,
+        );
+        await onSummaryLifecycle?.onResolved?.(step, fallback.text);
+        return fallback.text;
+      }
+
+      if (summaryModel.blocked) {
+        throw new Error(
+          `Failed to summarize step "${step.name}" (${stepId}): ${summaryModel.blocked.message}`,
+        );
+      }
+
+      const model = summaryModel.model;
       const summaryStartedAt = Date.now();
       const messageTypes = countMessageTypes(messages);
       let summaryPrompt = '';
@@ -195,26 +229,6 @@ async function resolvePromptTemplate({
         | undefined;
 
       const handleSummaryFailure = async (error: unknown): Promise<string> => {
-        const fallback = getSummaryFallbackText({ step, messages });
-        if (fallback) {
-          warnings.push(
-            `Summary generation failed for step "${step.name}" (${stepId}); used ${fallback.source} fallback.`,
-          );
-          debug(
-            'Prompt summary failed for step %s (%s); using %s fallback durationMs=%d messages=%d messageTypes=%o fallbackLength=%d error=%O',
-            stepId,
-            step.name,
-            fallback.source,
-            Date.now() - summaryStartedAt,
-            messages.length,
-            messageTypes,
-            fallback.text.length,
-            error,
-          );
-          await onSummaryLifecycle?.onResolved?.(step, fallback.text);
-          return fallback.text;
-        }
-
         debug(
           'Prompt summary failed for step %s (%s): sourceStep=%s backend=%s model=%s durationMs=%d messages=%d messageTypes=%o summaryPromptLength=%d error=%O',
           stepId,
@@ -229,7 +243,7 @@ async function resolvePromptTemplate({
           error,
         );
         const wrappedError = new Error(
-          `Failed to summarize step "${step.name}" (${stepId}) using backend ${summaryBackend}: ${getErrorMessage(error)}`,
+          `Failed to summarize step "${step.name}" (${stepId}) using backend ${summaryBackend} (model ${model}, ${summaryOrigin}): ${getErrorMessage(error)}`,
         );
         (wrappedError as Error & { cause?: unknown }).cause = error;
         throw wrappedError;
@@ -674,8 +688,6 @@ export const StepService = {
     if (!project)
       throw new Error(`Project not found for task: ${task.projectId}`);
 
-    const summaryModelsSetting = await SettingsRepository.get('summaryModels');
-
     const steps = await TaskStepRepository.findByTaskId(step.taskId);
 
     // Validate all dependencies are completed
@@ -689,9 +701,24 @@ export const StepService = {
       }
     }
 
-    const summaryBackend = (step.agentBackend ??
-      project.defaultAgentBackend ??
-      'claude-code') as AgentBackendType;
+    // The summary runs on the backend THIS step was given, so a continuation
+    // never summarizes on a backend the user did not pick for it. Only the
+    // backend is overridden: the step's own `modelPreference` is an agent-sized
+    // model (e.g. opus) and must not become the summary model — the model stays
+    // whatever the profile binds for `summary` on that backend, and degrades to
+    // the backend default when the profile's summary slot targets another one.
+    const summaryModel = await getModelProfileService().resolveForRole({
+      role: 'summary',
+      projectId: task.projectId,
+      override: step.agentBackend ? { backend: step.agentBackend } : null,
+    });
+    const summaryBackend = summaryModel.backend;
+
+    // Visible without DEBUG: this is the one decision that explains a summary
+    // running on a backend the user did not expect.
+    console.log(
+      `[step-summary] step=${step.id} role=summary backend=${summaryBackend} model=${summaryModel.model} source=${summaryModel.source} profile=${summaryModel.profileId ?? 'none'} stepBackend=${step.agentBackend ?? 'none'}${summaryModel.off ? ' off' : ''}`,
+    );
 
     debug(
       'Resolving prompt template for step %s (%s): backend=%s dependsOn=%d',
@@ -709,8 +736,7 @@ export const StepService = {
       taskId: task.id,
       projectId: task.projectId,
       steps,
-      summaryBackend,
-      summaryModels: summaryModelsSetting.models,
+      summaryModel,
       onSummaryLifecycle: options?.onSummaryLifecycle,
     });
 

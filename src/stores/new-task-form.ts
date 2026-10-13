@@ -23,6 +23,11 @@ interface NewTaskFormDraft {
   interactionMode?: InteractionMode;
   modelPreference: ModelPreference;
   thinkingEffort: ThinkingEffort;
+  // Which preset chip is highlighted. Presets are owned by the *active model
+  // profile*, so this id is only meaningful while that profile is active; an
+  // id that no longer resolves simply falls back to "Custom". The task itself
+  // is always created from the resolved triple below (`agentBackend`,
+  // `modelPreference`, `thinkingEffort`), never from this id.
   backendModelPresetId: string | null;
   shouldAutoSelectBackendModelPreset: boolean;
   agentBackend?: AgentBackendType;

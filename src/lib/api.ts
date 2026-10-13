@@ -6,6 +6,15 @@ import type {
 } from '@shared/source-management-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
 import type {
+  MobileBuildArtifact,
+  MobileBuildStoreBuildParams,
+  MobileBuildStoreDeleteParams,
+  MobileBuildStoreInstallParams,
+  MobileBuildStoreListParams,
+  MobileBuildStoreRenameParams,
+  MobileBuildStoreStoreParams,
+} from '@shared/mobile-build-store';
+import type {
   AgentBackgroundTask,
   AgentQuestion,
   PermissionResponse,
@@ -93,6 +102,11 @@ import type {
   AzureDevOpsPullRequestDetails,
   AzureDevOpsPullRequestTag,
 } from '@shared/azure-devops-types';
+import type {
+  AzureFieldRefName,
+  WorkItemFieldMetadata,
+  WorkItemFieldValue,
+} from '@shared/work-item-field-types';
 import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
 import type {
   CleanupUnusedWorktreesResult,
@@ -143,6 +157,8 @@ import type {
   MobilePreviewAttachSessionParams,
   MobilePreviewBootDeviceParams,
   MobilePreviewBootDeviceResult,
+  MobilePreviewCaptureScreenshotParams,
+  MobilePreviewCaptureScreenshotResult,
   MobilePreviewDetachSessionParams,
   MobilePreviewDevice,
   MobilePreviewDeviceAssignment,
@@ -393,31 +409,21 @@ export interface TestStep {
 export interface AzureDevOpsWorkItem {
   id: number;
   url: string;
-  fields: {
-    title: string;
-    workItemType: string;
-    teamProject?: string;
-    state: string;
-    assignedTo?: string;
-    assignedToUniqueName?: string;
-    description?: string;
-    acceptanceCriteria?: string;
-    reproSteps?: string;
-    changedDate?: string;
-    boardColumn?: string;
-    boardColumnDone?: boolean;
-    tags?: string;
-    priority?: number;
-    stackRank?: number;
-    storyPoints?: number;
-    iterationPath?: string;
-  };
+  fields: Record<AzureFieldRefName, WorkItemFieldValue>;
   testSteps?: TestStep[];
   parentId?: number;
   childIds?: number[];
   relatedWorkItemIds?: number[];
   linkedPrs?: Array<{ prId: number; projectId: string; repoId: string }>;
   relatedTestCaseIds?: number[];
+  attachments?: Array<{ name: string; url: string }>;
+  /**
+   * Set when Azure rejected one or more configured extra refNames and the
+   * service retried without them (design failure mode F3). Carried per item
+   * rather than on the array, because structured clone drops an array's
+   * non-index properties on the way through IPC.
+   */
+  partialFieldFailure?: AzureFieldRefName[];
 }
 
 export interface AzureDevOpsPullRequestStatus {
@@ -612,6 +618,25 @@ export interface Api {
     deleteEnvVar: (id: string) => Promise<void>;
     isSecretStorageAvailable: () => Promise<boolean>;
     findById: (id: string) => Promise<Project | undefined>;
+    /**
+     * Effective model policy for a project: the committed
+     * `.jean-claude/model-policy.json` when present (wholesale), else the
+     * `modelPolicy` column, else `{ mode: 'inherit' }`.
+     */
+    getEffectivePolicy: (
+      projectId: string,
+    ) => Promise<
+      import('@shared/model-profiles').EffectiveProjectModelPolicy
+    >;
+    /**
+     * Write the project-level model policy. Separate from `update` because
+     * `UpdateProject` spreads straight into Kysely and cannot carry an object
+     * column; the repository serializes this one.
+     */
+    setModelPolicy: (
+      projectId: string,
+      policy: import('@shared/model-profiles').ProjectModelPolicy,
+    ) => Promise<Project>;
     create: (data: NewProject) => Promise<Project>;
     update: (id: string, data: UpdateProject) => Promise<Project>;
     detectMobilePreview: (projectId: string) => Promise<Project>;
@@ -971,6 +996,7 @@ export interface Api {
           iterationPaths?: string[];
           assignedTo?: string;
       };
+      extraFieldRefNames?: AzureFieldRefName[];
     }) => Promise<AzureDevOpsWorkItem[]>;
     queryWorkItemOwners: (params: {
       providerId: string;
@@ -979,12 +1005,18 @@ export interface Api {
     getWorkItemById: (params: {
       providerId: string;
       workItemId: number;
+      extraFieldRefNames?: AzureFieldRefName[];
     }) => Promise<AzureDevOpsWorkItem | null>;
     getWorkItemsByIds: (params: {
       providerId: string;
       projectName: string;
       workItemIds: number[];
+      extraFieldRefNames?: AzureFieldRefName[];
     }) => Promise<AzureDevOpsWorkItem[]>;
+    getWorkItemTypeFields: (params: {
+      providerId: string;
+      azureProjectId: string;
+    }) => Promise<WorkItemFieldMetadata[]>;
     getPullRequestStatuses: (params: {
       providerId: string;
       linkedPrs: Array<{ prId: number; projectId: string; repoId: string }>;
@@ -1068,6 +1100,7 @@ export interface Api {
     uploadWorkItemAttachment: (params: {
       providerId: string;
       projectName: string;
+      workItemId?: number;
       filename: string;
       mimeType: string;
       base64: string;
@@ -1388,6 +1421,21 @@ export interface Api {
       value: AppSettings[K],
     ) => Promise<void>;
   };
+  modelProfiles: {
+    /**
+     * Resolves `(backend, model, thinkingEffort)` for a role using the project
+     * policy, the pinned or active profile, and any step override.
+     */
+    resolve: (params: {
+      role: import('@shared/model-profiles').ModelRole;
+      projectId?: string | null;
+      override?: import('@shared/model-profiles').ModelOverride | null;
+    }) => Promise<import('@shared/model-profiles').ResolvedModel>;
+    /** Makes a profile the globally active one. */
+    activate: (
+      profileId: string,
+    ) => Promise<import('@shared/model-profiles').ModelProfile>;
+  };
   backendConfig: {
     getUserConfig: (
       backend: import('@shared/agent-backend-types').AgentBackendType,
@@ -1628,6 +1676,9 @@ export interface Api {
     bootDevice: (
       params: MobilePreviewBootDeviceParams,
     ) => Promise<MobilePreviewBootDeviceResult>;
+    captureScreenshot: (
+      params: MobilePreviewCaptureScreenshotParams,
+    ) => Promise<MobilePreviewCaptureScreenshotResult>;
     forwardPort: (params: MobilePreviewForwardPortParams) => Promise<void>;
     ensureMetroReverse: (params: {
       deviceId: string;
@@ -1685,6 +1736,14 @@ export interface Api {
     onSession: (
       callback: (event: MobilePreviewSessionEvent) => void,
     ) => UnsubscribeFn;
+  };
+  mobileBuildStore: {
+    list: (params: MobileBuildStoreListParams) => Promise<MobileBuildArtifact[]>;
+    build: (params: MobileBuildStoreBuildParams) => Promise<MobileBuildArtifact>;
+    store: (params: MobileBuildStoreStoreParams) => Promise<MobileBuildArtifact>;
+    install: (params: MobileBuildStoreInstallParams) => Promise<void>;
+    delete: (params: MobileBuildStoreDeleteParams) => Promise<void>;
+    rename: (params: MobileBuildStoreRenameParams) => Promise<void>;
   };
   debug: {
     log: (params: {
@@ -1759,6 +1818,37 @@ export interface Api {
       model?: string;
       thinkingEffort?: ThinkingEffort;
       swapped: boolean;
+      /**
+       * `true` when the backend is STILL over its limit but no fallback
+       * profile is available. Without this, `swapped: false` conflates
+       * "quota recovered" with "nothing left to switch to".
+       */
+      skippedDueToRateLimit?: boolean;
+    }>;
+    /**
+     * React to a real rate-limit event by activating the fallback profile
+     * (design §4). Distinct from `resolve`, which is a side-effect-free probe
+     * used by the status panel and AI-generation peek path.
+     *
+     * `projectId` is required for design §8: an `enforce` project whose only
+     * permitted backend is limited comes back with `blocked` set and no swap.
+     */
+    react: (params: {
+      backend: AgentBackendType;
+      projectId?: string | null;
+    }) => Promise<{
+      backend: AgentBackendType;
+      model?: string;
+      thinkingEffort?: ThinkingEffort;
+      swapped: boolean;
+      skippedDueToRateLimit?: boolean;
+      profileId?: string;
+      blocked?: {
+        reason: 'backend-not-allowed' | 'profile-not-allowed';
+        message: string;
+        allowedBackends?: AgentBackendType[];
+        allowedProfileIds?: string[];
+      };
     }>;
   };
   usageDisplay: {
@@ -2335,6 +2425,12 @@ export const api: Api = hasWindowApi
       projects: {
         findAll: async () => [],
         findById: async () => undefined,
+        getEffectivePolicy: async () => {
+          throw new Error('API not available');
+        },
+        setModelPolicy: async () => {
+          throw new Error('API not available');
+        },
         listEnvVars: async () => [],
         createEnvVar: async () => {
           throw new Error('API not available');
@@ -2635,6 +2731,7 @@ export const api: Api = hasWindowApi
         queryWorkItemOwners: async () => [],
         getWorkItemById: async () => null,
         getWorkItemsByIds: async () => [],
+        getWorkItemTypeFields: async () => [],
         getPullRequestStatuses: async () => [],
         getWorkItemStates: async () => [],
         getBoardColumns: async () => [],
@@ -2780,6 +2877,14 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
       },
+      modelProfiles: {
+        resolve: async () => {
+          throw new Error('API not available');
+        },
+        activate: async () => {
+          throw new Error('API not available');
+        },
+      },
       backendConfig: {
         getUserConfig: async () => {
           throw new Error('API not available');
@@ -2873,6 +2978,9 @@ export const api: Api = hasWindowApi
         listDevices: async () => [],
         listSessions: async () => [],
         listDeviceAssignments: async () => [],
+        captureScreenshot: async () => {
+          throw new Error('API not available');
+        },
         getAndroidToolStatus: async () => ({
           hostArch: 'unknown',
           sdkRoot: null,
@@ -2960,6 +3068,24 @@ export const api: Api = hasWindowApi
         onFrame: () => () => {},
         onSession: () => () => {},
       },
+      mobileBuildStore: {
+        list: async () => [],
+        build: async () => {
+          throw new Error('API not available');
+        },
+        store: async () => {
+          throw new Error('API not available');
+        },
+        install: async () => {
+          throw new Error('API not available');
+        },
+        delete: async () => {
+          throw new Error('API not available');
+        },
+        rename: async () => {
+          throw new Error('API not available');
+        },
+      },
       debug: {
         log: async () => {},
         getTableNames: async () => [],
@@ -2991,6 +3117,7 @@ export const api: Api = hasWindowApi
           byDay: [],
           byFeature: [],
           byModel: [],
+          byProject: [],
           topTasks: [],
           unknownPricing: [],
         }),
@@ -3058,6 +3185,7 @@ export const api: Api = hasWindowApi
       rateLimitSwap: {
         getStatus: async () => ({ active: false, swaps: [] }),
         resolve: async (backend) => ({ backend, swapped: false }),
+        react: async ({ backend }) => ({ backend, swapped: false }),
       },
       usageDisplay: {
         saveSettings: async (value) => value,

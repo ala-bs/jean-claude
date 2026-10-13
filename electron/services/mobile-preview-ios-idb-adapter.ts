@@ -80,15 +80,16 @@ import {
   showIosSoftwareKeyboard,
 } from './mobile-preview-ios-hid-input';
 import {
-  commandExists,
-  MOBILE_PREVIEW_DEEPLINK_OPEN_TIMEOUT_MS,
-  runCommand,
-} from './mobile-preview-process';
-import {
+  captureSimulatorScreenshotPng,
   createCoreSimulatorFramebufferStream,
   createScreenshotStream,
   getSimulatorScreenshotSize,
 } from './mobile-preview-ios-framebuffer';
+import {
+  commandExists,
+  MOBILE_PREVIEW_DEEPLINK_OPEN_TIMEOUT_MS,
+  runCommand,
+} from './mobile-preview-process';
 import {
   isAppNotRunningError,
   isUnsupportedTerminateRunningProcessError,
@@ -641,6 +642,16 @@ export const iosIdbAdapter = {
       { minimizeWindow: false },
     );
     return { deviceId: device.id };
+  },
+
+  async captureScreenshot(deviceId: string): Promise<Buffer> {
+    await assertXcrunAvailable();
+    assertSafeSimctlDeviceSelector('iOS simulator deviceId', deviceId);
+    await assertSimulatorOnlyIosDeviceAsync({
+      deviceId,
+      capability: 'Capturing a screenshot',
+    });
+    return captureSimulatorScreenshotPng(deviceId);
   },
 
   async startStream(params: {

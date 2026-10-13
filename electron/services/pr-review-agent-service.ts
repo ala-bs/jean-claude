@@ -1,14 +1,13 @@
 import {
-  type BackendsSetting,
   type InteractionMode,
   isPrReviewChatStepMeta,
   type ModelPreference,
-  type PrReviewAgentSetting,
   type Task,
   type TaskStep,
   type ThinkingEffort,
 } from '@shared/types';
 import type { AgentBackendType } from '@shared/agent-backend-types';
+import type { ResolvedModel } from '@shared/model-profiles';
 
 import { getAgentBackendProvider } from './agent-backends/providers';
 import type { PermissionScope } from '../../shared/permission-types';
@@ -46,8 +45,6 @@ type PrReviewChatProject = {
   repoProviderId: string | null;
   repoProjectId: string | null;
   repoId: string | null;
-  defaultAgentBackend: string | null;
-  defaultAgentModelPreference: ModelPreference | null;
 };
 
 export type CreatePrReviewChatStepDeps = {
@@ -59,8 +56,13 @@ export type CreatePrReviewChatStepDeps = {
     repoId: string;
     pullRequestId: number;
   }) => Promise<{ title: string; description?: string | null }>;
-  getPrReviewAgentSetting: () => Promise<PrReviewAgentSetting>;
-  getBackendsSetting: () => Promise<BackendsSetting>;
+  /**
+   * Resolves the model for the `pr-review` role (real impl:
+   * `getModelProfileService().resolveForRole`).
+   */
+  resolvePrReviewModel: (params: {
+    projectId: string;
+  }) => Promise<ResolvedModel>;
   createStep: (data: {
     taskId: string;
     name: string;
@@ -207,25 +209,28 @@ export async function createPrReviewChatStep(
     throw new Error('Project has no linked repository');
   }
 
-  const [pr, setting, backendsSetting] = await Promise.all([
+  const [pr, resolved] = await Promise.all([
     deps.getPullRequest({
       providerId: project.repoProviderId,
       projectId: project.repoProjectId,
       repoId: project.repoId,
       pullRequestId: params.pullRequestId,
     }),
-    deps.getPrReviewAgentSetting(),
-    deps.getBackendsSetting(),
+    deps.resolvePrReviewModel({ projectId: task.projectId }),
   ]);
-  const globalDefaultBackend =
-    backendsSetting.defaultBackend &&
-    backendsSetting.enabledBackends.includes(backendsSetting.defaultBackend)
-      ? backendsSetting.defaultBackend
-      : null;
-  const agentBackend = (setting.backend ??
-    project.defaultAgentBackend ??
-    globalDefaultBackend ??
-    'claude-code') as AgentBackendType;
+
+  // The active profile bound `pr-review` to `off`: the feature is disabled,
+  // there is no model to fall back to.
+  if (resolved.off) {
+    throw new Error(
+      'PR review chat is disabled by the active model profile.',
+    );
+  }
+  if (resolved.blocked) {
+    throw new Error(resolved.blocked.message);
+  }
+
+  const agentBackend = resolved.backend;
   assertPrReviewChatBackendSupported(agentBackend);
 
   const step = await deps.createStep({
@@ -244,11 +249,8 @@ export async function createPrReviewChatStep(
       question: params.question,
     }),
     interactionMode: 'ask',
-    modelPreference:
-      setting.modelPreference === 'default'
-        ? project.defaultAgentModelPreference
-        : setting.modelPreference,
-    thinkingEffort: setting.thinkingEffort,
+    modelPreference: resolved.model,
+    thinkingEffort: resolved.thinkingEffort,
     agentBackend,
     meta: {
       kind: 'pr-review-chat',

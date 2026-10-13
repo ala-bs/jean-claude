@@ -5,7 +5,10 @@ import { Language, type Node, Parser } from 'web-tree-sitter';
 import type { FoldRange } from '@shared/fold-types';
 
 /**
- * Map from Shiki language IDs (used in our language-utils) to tree-sitter grammar file names.
+ * Map from language IDs to tree-sitter grammar file names.
+ *
+ * Callers send these keys from EXTENSION_TO_FOLD_LANGUAGE in
+ * src/features/agent/ui-diff-view/use-code-folding.ts — keep the two in sync.
  */
 const LANGUAGE_TO_GRAMMAR: Record<string, string> = {
   typescript: 'tree-sitter-typescript',

@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const { transcodeBase64ImageSpy } = vi.hoisted(() => ({
+const { compressImageSpy, transcodeBase64ImageSpy } = vi.hoisted(() => ({
+  compressImageSpy: vi.fn(),
   transcodeBase64ImageSpy: vi.fn(),
 }));
 
 vi.mock('./image-compression', () => ({
-  compressImage: vi.fn(),
+  compressImage: compressImageSpy,
   transcodeBase64Image: transcodeBase64ImageSpy,
 }));
 
@@ -13,6 +14,7 @@ import {
   getAttachmentFileName,
   getAttachmentPayload,
   getAzureAttachmentPayload,
+  processImageFile,
 } from './image-utils';
 
 describe('getAzureAttachmentPayload', () => {
@@ -59,6 +61,27 @@ describe('getAzureAttachmentPayload', () => {
       getAzureAttachmentPayload({ data: 'png-bytes', mimeType: 'image/png' }),
     ).resolves.toEqual({ dataBase64: 'png-bytes', mimeType: 'image/png' });
     expect(transcodeBase64ImageSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('processImageFile', () => {
+  it('preserves the original file size in the image metadata', async () => {
+    compressImageSpy.mockResolvedValue({
+      agent: { data: 'webp-bytes', mimeType: 'image/webp' },
+      storage: { data: 'avif-bytes', mimeType: 'image/avif' },
+      width: 800,
+      height: 600,
+    });
+    const file = new File(['image bytes'], 'screenshot.png', {
+      type: 'image/png',
+    });
+    const onAttach = vi.fn();
+
+    await processImageFile(file, onAttach);
+
+    expect(onAttach).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: 'screenshot.png', sizeBytes: file.size }),
+    );
   });
 });
 

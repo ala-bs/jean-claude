@@ -702,6 +702,25 @@ process.on('exit', () => {
   recordProcessExit();
 });
 
+// Terminal-driven dev shutdowns commonly arrive as SIGINT/SIGTERM instead of
+// an Electron menu quit. Route them through the same awaited cleanup path so
+// Chromium flushes localStorage and releases the shared LevelDB lock before
+// electron-vite starts the next process. SIGKILL cannot be handled here; the
+// renderer boot guard remains the last line of defence for that case.
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    // Dev-server shutdown is an internal/programmatic quit, not a user
+    // request. Keep the awaited cleanup path, but do not show the Cmd+Q
+    // confirmation modal while restarting the dev instance. Set this before
+    // logging: the dev command's output stream may already be closing, and a
+    // logging failure must not prevent the quit from being marked internal.
+    if (!isQuittingAfterCleanup) {
+      quitWithoutConfirmation();
+      dbg.main('Received %s; requesting graceful Electron quit', signal);
+    }
+  });
+}
+
 app.on('window-all-closed', () => {
   dbg.main('All windows closed');
   showDockIcon();

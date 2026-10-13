@@ -6,12 +6,24 @@ const {
   queryMock,
   rateLimitResolveBackendMock,
   recordUsageSafeMock,
+  resolveForRoleMock,
+  generateCodexWithoutToolsMock,
 } = vi.hoisted(() => ({
   getOrCreateServerMock: vi.fn(),
   getOrCreateCodexAppServerMock: vi.fn(),
   queryMock: vi.fn(),
   rateLimitResolveBackendMock: vi.fn(),
   recordUsageSafeMock: vi.fn(),
+  resolveForRoleMock: vi.fn(),
+  generateCodexWithoutToolsMock: vi.fn(),
+}));
+
+vi.mock('./agent-backends/codex/codex-generation', () => ({
+  generateCodexWithoutTools: generateCodexWithoutToolsMock,
+}));
+
+vi.mock('./model-profile-service', () => ({
+  getModelProfileService: () => ({ resolveForRole: resolveForRoleMock }),
 }));
 
 vi.mock('./agent-backends/opencode/opencode-backend', () => ({
@@ -779,6 +791,102 @@ describe('generateText opencode structured output', () => {
   });
 });
 
+describe('generateText profile-based rate-limit swap', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveForRoleMock.mockReset();
+    rateLimitResolveBackendMock.mockResolvedValue({
+      backend: 'opencode',
+      swapped: true,
+      profileId: 'codex-fallback',
+    });
+  });
+
+  function mockOpenCodeClient() {
+    const client = createMockClient({
+      data: { info: {}, parts: [{ type: 'text', text: 'done' }] },
+    });
+    getOrCreateServerMock.mockResolvedValue({ client });
+    return client;
+  }
+
+  it('takes the model from the profile ai-generation role after a cross-backend swap', async () => {
+    const client = mockOpenCodeClient();
+    resolveForRoleMock.mockResolvedValue({
+      backend: 'opencode',
+      model: 'openai/gpt-5.1-codex',
+      thinkingEffort: 'medium',
+      source: 'profile',
+    });
+
+    await generateText({
+      backend: 'claude-code',
+      model: 'haiku',
+      prompt: 'Generate a title',
+    });
+
+    expect(resolveForRoleMock).toHaveBeenCalledWith({ role: 'ai-generation' });
+    expect(client.session.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({ modelID: 'gpt-5.1-codex' }),
+      }),
+    );
+  });
+
+  it('ignores a profile role that resolves to another backend', async () => {
+    const client = mockOpenCodeClient();
+    resolveForRoleMock.mockResolvedValue({
+      backend: 'codex',
+      model: 'gpt-5.1-codex',
+      thinkingEffort: 'high',
+      source: 'profile',
+    });
+
+    await generateText({
+      backend: 'claude-code',
+      model: 'haiku',
+      prompt: 'Generate a title',
+    });
+
+    expect(client.session.prompt).not.toHaveBeenCalledWith(
+      expect.objectContaining({ model: expect.anything() }),
+    );
+  });
+
+  it('prefers an explicit swap model over the profile role', async () => {
+    mockOpenCodeClient();
+    rateLimitResolveBackendMock.mockResolvedValue({
+      backend: 'opencode',
+      model: 'anthropic/claude-haiku-4-5',
+      swapped: true,
+    });
+
+    await generateText({
+      backend: 'claude-code',
+      model: 'haiku',
+      prompt: 'Generate a title',
+    });
+
+    expect(resolveForRoleMock).not.toHaveBeenCalled();
+  });
+
+  it('does not consult the profile when the backend is unchanged', async () => {
+    mockOpenCodeClient();
+    rateLimitResolveBackendMock.mockResolvedValue({
+      backend: 'opencode',
+      swapped: false,
+    });
+
+    await generateText({
+      backend: 'opencode',
+      model: 'anthropic/claude-sonnet-4-5',
+      prompt: 'Generate a title',
+    });
+
+    expect(resolveForRoleMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('generateText codex structured output', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -786,6 +894,19 @@ describe('generateText codex structured output', () => {
       backend,
       swapped: false,
     }));
+  });
+
+  it('routes explicit no-tools Codex generation through the isolated runner', async () => {
+    generateCodexWithoutToolsMock.mockResolvedValueOnce({ summary: 'Done' });
+    await expect(generateText({
+      backend: 'codex', model: 'selected-model', prompt: 'full history',
+      outputSchema: { type: 'object' }, toolPolicy: 'none', allowedTools: [],
+      throwOnError: true,
+    })).resolves.toEqual({ summary: 'Done' });
+    expect(generateCodexWithoutToolsMock).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'selected-model', prompt: 'full history', outputSchema: { type: 'object' },
+    }));
+    expect(getOrCreateCodexAppServerMock).not.toHaveBeenCalled();
   });
 
   it.each([

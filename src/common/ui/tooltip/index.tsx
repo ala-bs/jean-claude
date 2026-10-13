@@ -31,6 +31,8 @@ export function Tooltip({
   align = 'left',
   className,
   delay = 200,
+  closeDelay,
+  interactive = false,
   minWidth,
 }: {
   children: ReactElement;
@@ -39,8 +41,13 @@ export function Tooltip({
   align?: 'left' | 'right';
   className?: string;
   delay?: number;
+  /** Grace period before hiding, letting the mouse travel into the tooltip. */
+  closeDelay?: number;
+  /** Allow hovering/selecting inside the tooltip content. */
+  interactive?: boolean;
   minWidth?: number;
 }) {
+  const resolvedCloseDelay = closeDelay ?? (interactive ? 300 : 0);
   const [isOpen, setIsOpen] = useState(false);
   const [contentElement, setContentElement] = useState<HTMLDivElement | null>(
     null,
@@ -107,8 +114,12 @@ export function Tooltip({
 
   const handleMouseLeave = () => {
     if (delayRef.current) clearTimeout(delayRef.current);
-    delayRef.current = null;
-    setIsOpen(false);
+    if (resolvedCloseDelay <= 0) {
+      delayRef.current = null;
+      setIsOpen(false);
+      return;
+    }
+    delayRef.current = setTimeout(() => setIsOpen(false), resolvedCloseDelay);
   };
 
   if (!isValidElement(children)) {
@@ -137,8 +148,21 @@ export function Tooltip({
           <div
             ref={handleContentRef}
             role="tooltip"
+            onMouseEnter={
+              interactive
+                ? () => {
+                    // Cancel the pending close so the tooltip stays while hovered
+                    if (delayRef.current) clearTimeout(delayRef.current);
+                    delayRef.current = null;
+                  }
+                : undefined
+            }
+            onMouseLeave={interactive ? handleMouseLeave : undefined}
             className={clsx(
-              'border-glass-border bg-bg-1 text-ink-1 pointer-events-none fixed z-[10020] rounded-md border px-3 py-2 text-xs shadow-lg',
+              'border-glass-border bg-bg-1 text-ink-1 fixed z-[10020] rounded-md border px-3 py-2 text-xs shadow-lg',
+              interactive
+                ? 'pointer-events-auto select-text'
+                : 'pointer-events-none',
               className,
             )}
             style={{

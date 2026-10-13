@@ -1,13 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { RunCommandGroupAbortEvent } from '@shared/run-command-types';
+import {
+  acceptsRunCommandLogGeneration,
+  type RunCommandGroupAbortEvent,
+} from '@shared/run-command-types';
 
 const mocks = vi.hoisted(() => ({
+  exec: vi.fn((...args: unknown[]) => {
+    const callback = args.at(-1);
+    if (typeof callback === 'function') {
+      callback(null, { stdout: '', stderr: '' });
+    }
+    return { kill: vi.fn() };
+  }),
+  execFileSync: vi.fn(() =>
+    Array.from({ length: 10_000 }, (_, index) => `${index + 1} 1 ${index + 1}`).join('\n'),
+  ),
   findCommandById: vi.fn(),
   spawn: vi.fn(),
 }));
 
 vi.mock('node-pty', () => ({ spawn: mocks.spawn }));
+vi.mock('child_process', () => ({
+  exec: mocks.exec,
+  execFileSync: mocks.execFileSync,
+}));
 vi.mock('../database/repositories/project-commands', () => ({
   ProjectCommandRepository: { findById: mocks.findCommandById },
 }));
@@ -237,6 +254,59 @@ describe('run command process signaling', () => {
 
     expect(kill).toHaveBeenNthCalledWith(1, -123, 'SIGTERM');
     expect(kill).toHaveBeenNthCalledWith(2, 123, 'SIGTERM');
+  });
+
+  it('waits for descendants to exit before escalating to SIGKILL', async () => {
+    mocks.execFileSync.mockReturnValueOnce('123 1 123\n124 123 123');
+    let resolveExit!: () => void;
+    let descendantChecks = 0;
+    const exitPromise = new Promise<void>((resolve) => {
+      resolveExit = resolve;
+    });
+    const commands = new Map([
+      [
+        'command-1',
+        {
+          commandId: 'command-1',
+          name: null,
+          command: 'pnpm dev',
+          pty: {},
+          pid: 123,
+          status: 'running' as const,
+          pendingLogBatches: { stdout: '', stderr: '' },
+          logFlushTimer: null,
+          logGeneration: 0,
+          exited: false,
+          exitPromise,
+        },
+      ],
+    ]);
+    (
+      testService.runningProcesses as Map<string, Map<string, unknown>>
+    ).set('task-1', commands);
+    const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === -123 && signal === 'SIGINT') {
+        resolveExit();
+      }
+      if (pid === 124 && signal === 0 && descendantChecks++ > 0) {
+        throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+      }
+      return true;
+    });
+
+    const stopCommandWithoutLock = (
+      runCommandService as unknown as {
+        stopCommandWithoutLock: (params: {
+          taskId: string;
+          runCommandId: string;
+        }) => Promise<boolean>;
+      }
+    ).stopCommandWithoutLock.bind(runCommandService);
+
+    await expect(
+      stopCommandWithoutLock({ taskId: 'task-1', runCommandId: 'command-1' }),
+    ).resolves.toBe(true);
+    expect(kill).not.toHaveBeenCalledWith(124, 'SIGKILL');
   });
 
   it('rejects and retains tracking when process-group signaling returns EPERM', async () => {
@@ -615,7 +685,7 @@ describe('RunCommandService stopCommandsForTask', () => {
     } finally {
       kill.mockRestore();
     }
-  }, 10_000);
+  }, 20_000);
 });
 
 describe('runCommandService.resetTaskAfterReactivation', () => {
@@ -1268,5 +1338,406 @@ describe('runCommandService staged group runs', () => {
     expect(spawned).toHaveLength(1);
     ptyFor('slow').exit(0);
     await stop;
+  });
+});
+
+describe('runCommandService synthetic log markers', () => {
+  type FakePty = {
+    pid: number;
+    onData: (listener: (data: string) => void) => void;
+    onExit: (
+      listener: (event: { exitCode: number; signal?: number }) => void,
+    ) => void;
+    write: () => void;
+    kill: () => void;
+    resize: () => void;
+    emit: (data: string) => void;
+    exit: (event: { exitCode: number; signal?: number }) => void;
+  };
+
+  let spawned: FakePty[];
+  let patchedInternals: Record<string, unknown>;
+  let logEvents: Array<{
+    runCommandId: string;
+    stream: string;
+    text: string;
+    generation: number;
+  }>;
+  let unsubscribe: () => void;
+  let stopResult: boolean;
+  let portsInUse: unknown[];
+
+  const taskId = 'task-logs';
+  const startParams = {
+    taskId,
+    projectId: 'project-1',
+    workingDir: '/tmp/worktree',
+  };
+
+  function makeCommand(id: string, overrides: Record<string, unknown> = {}) {
+    return {
+      id,
+      projectId: 'project-1',
+      name: id,
+      command: `run ${id}`,
+      ports: [],
+      portConflictStrategy: 'prompt' as const,
+      portOverrideProvider: 'env' as const,
+      portOverrideEnvVar: null,
+      portOverrideArgs: null,
+      envVars: [],
+      confirmBeforeRun: false,
+      confirmMessage: null,
+      isFavorite: false,
+      isHidden: false,
+      sortOrder: 0,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  /**
+   * Lines the renderer would actually keep, given its generation filter.
+   *
+   * Calls the same `acceptsRunCommandLogGeneration` predicate the renderer
+   * store uses in `appendRunCommandLogBatch`, so there is exactly one
+   * definition of the rule: a marker emitted below the current generation is
+   * dropped, and the feature silently does nothing.
+   */
+  function acceptedLines(currentGeneration: number): string[] {
+    return logEvents
+      .filter((event) =>
+        acceptsRunCommandLogGeneration({
+          generation: event.generation,
+          currentGeneration,
+        }),
+      )
+      .flatMap((event) => event.text.split('\n'))
+      .filter((line) => line.length > 0);
+  }
+
+  /** Lines a given member's tab would keep, given the renderer's filter. */
+  function acceptedLinesFor(
+    runCommandId: string,
+    currentGeneration: number,
+  ): string[] {
+    return logEvents
+      .filter(
+        (event) =>
+          event.runCommandId === runCommandId &&
+          acceptsRunCommandLogGeneration({
+            generation: event.generation,
+            currentGeneration,
+          }),
+      )
+      .flatMap((event) => event.text.split('\n'))
+      .filter((line) => line.length > 0);
+  }
+
+  beforeEach(() => {
+    spawned = [];
+    logEvents = [];
+    stopResult = true;
+    portsInUse = [];
+    testService.runningProcesses.clear();
+    mocks.findCommandById.mockImplementation(async (id: string) =>
+      makeCommand(id),
+    );
+
+    let nextPid = 2000;
+    mocks.spawn.mockImplementation(() => {
+      let exitListener: (event: { exitCode: number; signal?: number }) => void =
+        () => {};
+      let dataListener: (data: string) => void = () => {};
+      const pty: FakePty = {
+        pid: nextPid++,
+        onData: (listener) => {
+          dataListener = listener;
+        },
+        onExit: (listener) => {
+          exitListener = listener;
+        },
+        write: () => {},
+        kill: () => {},
+        resize: () => {},
+        emit: (data: string) => dataListener(data),
+        exit: (event) => exitListener(event),
+      };
+      spawned.push(pty);
+      return pty;
+    });
+
+    const internals = runCommandService as unknown as Record<string, unknown>;
+    patchedInternals = {
+      getPortsInUse: internals.getPortsInUse,
+      getPortOverrides: internals.getPortOverrides,
+      getRunCommandContext: internals.getRunCommandContext,
+      getCommandEnv: internals.getCommandEnv,
+      stopCommandWithoutLock: internals.stopCommandWithoutLock,
+    };
+    internals.getPortsInUse = async () => portsInUse;
+    internals.getPortOverrides = async () => new Map();
+    internals.getRunCommandContext = async () => ({});
+    internals.getCommandEnv = async () => ({});
+    const realStopWithoutLock = internals.stopCommandWithoutLock as (
+      args: unknown,
+    ) => Promise<boolean>;
+    internals.stopCommandWithoutLock = async (args: unknown) =>
+      stopResult ? realStopWithoutLock.call(runCommandService, args) : false;
+
+    unsubscribe = runCommandService.onLog(
+      (id, runCommandId, stream, text, generation) => {
+        if (id !== taskId) return;
+        logEvents.push({ runCommandId, stream, text, generation });
+      },
+    );
+  });
+
+  afterEach(async () => {
+    unsubscribe();
+    const internals = runCommandService as unknown as Record<string, unknown>;
+    for (const [key, value] of Object.entries(patchedInternals)) {
+      internals[key] = value;
+    }
+    vi.restoreAllMocks();
+    testService.runningProcesses.clear();
+  });
+
+  it('emits an exit marker when a silent command fails', async () => {
+    await runCommandService.startCommand({
+      ...startParams,
+      runCommandId: 'silent-fail',
+    });
+    spawned[0].exit({ exitCode: 1, signal: 0 });
+
+    // The regression: no program output at all, yet the log is non-empty.
+    expect(acceptedLines(0)).toEqual(['[process exited with code 1]']);
+    expect(logEvents.every((event) => event.stream === 'stdout')).toBe(true);
+  });
+
+  it('emits an exit marker for a clean exit', async () => {
+    await runCommandService.startCommand({
+      ...startParams,
+      runCommandId: 'clean',
+    });
+    spawned[0].exit({ exitCode: 0, signal: 0 });
+
+    expect(acceptedLines(0)).toEqual(['[process exited with code 0]']);
+  });
+
+  it('emits a signal marker when the process is killed', async () => {
+    await runCommandService.startCommand({
+      ...startParams,
+      runCommandId: 'killed',
+    });
+    spawned[0].exit({ exitCode: 0, signal: 9 });
+
+    expect(acceptedLines(0)).toEqual(['[process terminated by signal 9]']);
+  });
+
+  it('keeps the exit marker on its own line after partial output', async () => {
+    await runCommandService.startCommand({
+      ...startParams,
+      runCommandId: 'partial',
+    });
+    spawned[0].emit('no trailing newline');
+    spawned[0].exit({ exitCode: 127, signal: 0 });
+
+    expect(acceptedLines(0)).toEqual([
+      'no trailing newline',
+      '[process exited with code 127]',
+    ]);
+  });
+
+  it.each([
+    [
+      'a missing command',
+      async () => {
+        mocks.findCommandById.mockResolvedValue(undefined);
+      },
+      '[command not found in this project - it may have been deleted]',
+    ],
+    [
+      'a hidden command',
+      async () => {
+        mocks.findCommandById.mockImplementation(async (id: string) =>
+          makeCommand(id, { isHidden: true }),
+        );
+      },
+      '[command "refused" is hidden - not started]',
+    ],
+    [
+      'a previous instance that would not stop',
+      async () => {
+        stopResult = false;
+      },
+      '[could not stop the previous instance of this command - not restarted]',
+    ],
+    [
+      'ports already in use',
+      async () => {
+        portsInUse = [
+          { port: 3000, commandId: 'refused', command: 'run refused' },
+          { port: 9229, commandId: 'refused', command: 'run refused' },
+        ];
+      },
+      '[ports 3000, 9229 are already in use - not started]',
+    ],
+  ])('explains a refusal caused by %s', async (_label, setup, expected) => {
+    await setup();
+
+    await runCommandService.startCommand({
+      ...startParams,
+      runCommandId: 'refused',
+    });
+
+    expect(spawned).toHaveLength(0);
+    expect(acceptedLines(0)).toEqual([expected]);
+  });
+
+  it('explains an ad hoc refusal caused by ports in use', async () => {
+    portsInUse = [
+      { port: 8081, commandId: 'ad-hoc', command: 'metro' },
+    ];
+
+    await runCommandService.startAdHocCommand({
+      ...startParams,
+      runCommandId: 'ad-hoc',
+      name: 'Mobile dev server',
+      command: 'metro',
+      ports: [8081],
+    });
+
+    expect(spawned).toHaveLength(0);
+    expect(acceptedLines(0)).toEqual([
+      '[port 8081 is already in use - not started]',
+    ]);
+  });
+
+  it('writes refusal markers at the generation the preceding reset installed', async () => {
+    // Mirrors the renderer's stop -> resetLogs -> start ordering.
+    const generation = runCommandService.resetLogs({
+      taskId,
+      runCommandId: 'refused',
+      generation: 1,
+    });
+    portsInUse = [{ port: 3000, commandId: 'refused', command: 'run refused' }];
+
+    await runCommandService.startCommand({
+      ...startParams,
+      runCommandId: 'refused',
+    });
+
+    expect(logEvents).toHaveLength(1);
+    expect(logEvents[0].generation).toBe(generation);
+    // Not discarded by the reset that ran immediately before the start.
+    expect(acceptedLines(generation)).toEqual([
+      '[port 3000 is already in use - not started]',
+    ]);
+  });
+
+  it('explains a group refusal when a member cannot be stopped', async () => {
+    // The renderer resets every member's log right before starting a group.
+    const apiGeneration = runCommandService.resetLogs({
+      taskId,
+      runCommandId: 'api',
+      generation: 1,
+    });
+    const webGeneration = runCommandService.resetLogs({
+      taskId,
+      runCommandId: 'web',
+      generation: 1,
+    });
+    stopResult = false;
+
+    await runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['api', 'web'],
+    });
+
+    expect(spawned).toHaveLength(0);
+    expect(acceptedLinesFor('api', apiGeneration)).toEqual([
+      '[could not stop the previous instance of this command - not restarted]',
+    ]);
+    expect(acceptedLinesFor('web', webGeneration)).toEqual([
+      '[could not stop the previous instance of this command - not restarted]',
+    ]);
+    expect(logEvents.every((event) => event.stream === 'stdout')).toBe(true);
+  });
+
+  it('explains a group refusal when every member is hidden', async () => {
+    const apiGeneration = runCommandService.resetLogs({
+      taskId,
+      runCommandId: 'api',
+      generation: 1,
+    });
+    const webGeneration = runCommandService.resetLogs({
+      taskId,
+      runCommandId: 'web',
+      generation: 1,
+    });
+    mocks.findCommandById.mockImplementation(async (id: string) =>
+      makeCommand(id, { isHidden: true }),
+    );
+
+    await runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['api', 'web'],
+    });
+
+    expect(spawned).toHaveLength(0);
+    expect(acceptedLinesFor('api', apiGeneration)).toEqual([
+      '[command "api" is hidden - not started]',
+    ]);
+    expect(acceptedLinesFor('web', webGeneration)).toEqual([
+      '[command "web" is hidden - not started]',
+    ]);
+  });
+
+  it('explains a group refusal caused by ports in use, per member', async () => {
+    const apiGeneration = runCommandService.resetLogs({
+      taskId,
+      runCommandId: 'api',
+      generation: 1,
+    });
+    const webGeneration = runCommandService.resetLogs({
+      taskId,
+      runCommandId: 'web',
+      generation: 1,
+    });
+    portsInUse = [
+      { port: 3000, commandId: 'api', command: 'run api' },
+      { port: 9229, commandId: 'api', command: 'run api' },
+    ];
+
+    await runCommandService.startGroup({
+      ...startParams,
+      runCommandIds: ['api', 'web'],
+    });
+
+    expect(spawned).toHaveLength(0);
+    // Only the member whose ports are taken is blamed.
+    expect(acceptedLinesFor('api', apiGeneration)).toEqual([
+      '[ports 3000, 9229 are already in use - not started]',
+    ]);
+    expect(acceptedLinesFor('web', webGeneration)).toEqual([]);
+  });
+
+  it('writes the exit marker at the current generation after a mid-run clear', async () => {
+    await runCommandService.startCommand({
+      ...startParams,
+      runCommandId: 'cleared',
+    });
+    const generation = runCommandService.resetLogs({
+      taskId,
+      runCommandId: 'cleared',
+      generation: 1,
+    });
+    logEvents = [];
+
+    spawned[0].exit({ exitCode: 2, signal: 0 });
+
+    expect(logEvents[0].generation).toBe(generation);
+    expect(acceptedLines(generation)).toEqual(['[process exited with code 2]']);
   });
 });

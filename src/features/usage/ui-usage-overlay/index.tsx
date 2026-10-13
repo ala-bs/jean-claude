@@ -16,6 +16,9 @@ import { useProjects } from '@/hooks/use-projects';
 
 type Range = 'today' | '7d' | '30d' | 'all';
 
+const UNATTRIBUTED_KEY = '__unattributed__';
+const UNATTRIBUTED_COLOR = '#6b7280';
+
 const MODEL_COLORS = [
   '#a78bfa',
   '#38bdf8',
@@ -783,6 +786,37 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
       label: day.date,
       value: day.requests ? day.estimatedCostUsd / day.requests : 0,
     })) ?? [];
+  const projectRows = useMemo(
+    () =>
+      (data?.byProject ?? []).map((row, index) => ({
+        ...row,
+        key: row.projectId ?? UNATTRIBUTED_KEY,
+        // Usage with no project (inline autocomplete) gets a neutral swatch so
+        // it reads as an aggregate bucket rather than another project.
+        color:
+          row.projectId === null
+            ? UNATTRIBUTED_COLOR
+            : MODEL_COLORS[index % MODEL_COLORS.length],
+        label:
+          row.projectId === null
+            ? 'Unattributed'
+            : (row.projectName ?? 'Unknown project'),
+      })),
+    [data?.byProject],
+  );
+  const namedProjectCount = useMemo(
+    () => projectRows.filter((row) => row.projectId !== null).length,
+    [projectRows],
+  );
+  const topCostProjects = useMemo(() => projectRows.slice(0, 8), [projectRows]);
+  const maxProjectCost = maxOf(
+    topCostProjects.map((row) => row.estimatedCostUsd),
+  );
+  // Share is measured against total dashboard spend, not the sum of project
+  // rows: events without a projectId (e.g. autocomplete) never reach byProject,
+  // so a row-sum denominator would renormalize project shares to 100% and
+  // contradict the header cost tile.
+  const projectCostTotal = data?.totals.estimatedCostUsd ?? 0;
   const maxModelCost = maxOf(topCostModels.map((row) => row.estimatedCostUsd));
   const maxFeatureTokens = maxOf(
     data?.byFeature.map((row) => inputOutputTokens(row)) ?? [],
@@ -1118,6 +1152,97 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                   />
                 </Panel>
               </div>
+
+              <Panel
+                title="Cost by project"
+                right={`${namedProjectCount} project${namedProjectCount === 1 ? '' : 's'}${projectRows.length > 8 ? ' · top 8' : ''}`}
+              >
+                <div className="space-y-2.5">
+                  {topCostProjects.length === 0 ? (
+                    <div className="text-ink-3 py-10 text-center text-sm">
+                      No project data yet.
+                    </div>
+                  ) : (
+                    topCostProjects.map((row) => (
+                      <div
+                        key={row.key}
+                        className="grid grid-cols-[minmax(0,180px)_1fr_70px_70px] items-center gap-3"
+                      >
+                        <div
+                          className={`truncate text-xs ${row.projectId === null ? 'text-ink-4 italic' : 'text-ink-2'}`}
+                        >
+                          {row.label}
+                        </div>
+                        <GraphTooltip
+                          rows={[
+                            {
+                              label: 'Input + output',
+                              value: formatTokenTooltip(inputOutputTokens(row)),
+                            },
+                            {
+                              label: 'Input',
+                              value: formatTokenTooltip(row.inputTokens),
+                            },
+                            {
+                              label: 'Output',
+                              value: formatTokenTooltip(row.outputTokens),
+                            },
+                            {
+                              label: 'Cache',
+                              value: formatTokenTooltip(cacheTokens(row)),
+                            },
+                            {
+                              label: 'Total tokens',
+                              value: formatTokenTooltip(row.totalTokens),
+                            },
+                            {
+                              label: 'Est. API',
+                              value: formatCost(row.estimatedCostUsd),
+                            },
+                            {
+                              label: 'Provider API',
+                              value: formatOptionalCost(row.providerApiCostUsd),
+                            },
+                            {
+                              label: 'Share of spend',
+                              value: `${projectCostTotal > 0 ? ((row.estimatedCostUsd / projectCostTotal) * 100).toFixed(1) : '0.0'}%`,
+                            },
+                            ...(row.projectId === null
+                              ? [{ label: 'Not tied to a project', value: '—' }]
+                              : [
+                                  {
+                                    label: 'Tasks',
+                                    value: formatNumber(row.taskCount),
+                                  },
+                                ]),
+                            {
+                              label: 'Requests',
+                              value: formatNumber(row.requests),
+                            },
+                          ]}
+                          title={row.label}
+                        >
+                          <div className="h-2 overflow-hidden rounded-full bg-white/6">
+                            <div
+                              className="h-full rounded-full"
+                              style={{
+                                width: `${Math.max((row.estimatedCostUsd / maxProjectCost) * 100, row.estimatedCostUsd > 0 ? 1 : 0)}%`,
+                                background: row.color,
+                              }}
+                            />
+                          </div>
+                        </GraphTooltip>
+                        <div className="text-ink-4 text-right text-xs tabular-nums">
+                          {formatTokenCount(inputOutputTokens(row))}
+                        </div>
+                        <div className="text-ink-1 text-right text-sm font-medium tabular-nums">
+                          {formatCost(row.estimatedCostUsd)}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </Panel>
 
               <Panel
                 title="Usage by feature"

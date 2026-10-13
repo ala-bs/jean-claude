@@ -436,6 +436,15 @@ export function applyCacheEvent(event: CacheEvent) {
   switch (event.type) {
     case 'project.upsert': {
       const previousProject = cache$.projects[event.project.id].get();
+      const workItemFeedChanged =
+        previousProject === undefined ||
+        previousProject.workItemDisplayConfig !==
+          event.project.workItemDisplayConfig ||
+        previousProject.workItemProviderId !== event.project.workItemProviderId ||
+        previousProject.workItemProjectId !== event.project.workItemProjectId ||
+        previousProject.workItemProjectName !==
+          event.project.workItemProjectName ||
+        previousProject.showWorkItemsInFeed !== event.project.showWorkItemsInFeed;
       markResourceChanged(projectResourceKey(event.project.id));
       ingestProject(event.project);
       if (previousProject === undefined) {
@@ -449,6 +458,10 @@ export function applyCacheEvent(event: CacheEvent) {
         markTaskListsStale(event.project.id);
         markTaskFeedStale();
         markResourceStale('feed:pullRequests');
+        markResourceStale('feed:workItems');
+      }
+      if (workItemFeedChanged) {
+        markTaskFeedStale();
         markResourceStale('feed:workItems');
       }
       break;

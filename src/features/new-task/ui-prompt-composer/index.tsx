@@ -31,6 +31,11 @@ import {
   shouldAttachPastedPromptContent,
 } from '@/lib/file-attachment-utils';
 import {
+  getDescriptionHtml,
+  getReproStepsHtml,
+  getTitle,
+} from '@shared/work-item-field-types';
+import {
   isVideoFile,
   VideoGifConverter,
 } from '@/features/common/ui-video-gif-converter';
@@ -187,7 +192,8 @@ export function extractWorkItemImageUrls(
   const urls = new Set<string>();
 
   for (const workItem of workItems) {
-    const { description, reproSteps } = workItem.fields;
+    const description = getDescriptionHtml(workItem);
+    const reproSteps = getReproStepsHtml(workItem);
 
     for (const html of [description, reproSteps]) {
       if (!html) continue;
@@ -459,8 +465,10 @@ function expandWorkItem(
   workItem: AzureDevOpsWorkItem,
   comments?: WorkItemComment[],
 ): string {
-  const { id, fields } = workItem;
-  const { title, description, reproSteps } = fields;
+  const { id } = workItem;
+  const title = getTitle(workItem);
+  const description = getDescriptionHtml(workItem);
+  const reproSteps = getReproStepsHtml(workItem);
 
   const cleanDescription = description ? simplifyHtml(description) : null;
   const cleanReproSteps = reproSteps ? simplifyHtml(reproSteps) : null;
@@ -545,27 +553,28 @@ export function buildWorkItemSnippetContext({
     }>
   >;
 }) {
-  return workItems.map((wi) => ({
-    id: wi.id.toString(),
-    title: wi.fields.title,
-    description: wi.fields.description
-      ? simplifyHtml(wi.fields.description)
-      : '',
-    comments: comments
-      .filter((comment) => comment.workItemId === wi.id)
-      .map((comment) => ({
-        author: comment.createdBy,
-        date: comment.createdDate,
-        body: simplifyHtml(comment.text),
+  return workItems.map((wi) => {
+    const descriptionHtml = getDescriptionHtml(wi);
+    return {
+      id: wi.id.toString(),
+      title: getTitle(wi),
+      description: descriptionHtml ? simplifyHtml(descriptionHtml) : '',
+      comments: comments
+        .filter((comment) => comment.workItemId === wi.id)
+        .map((comment) => ({
+          author: comment.createdBy,
+          date: comment.createdDate,
+          body: simplifyHtml(comment.text),
+        })),
+      testCases: (testCasesByWorkItem?.[wi.id] ?? []).map((testCase) => ({
+        ...testCase,
+        steps: testCase.steps?.map((step) => ({
+          action: simplifyHtml(step.action),
+          expectedResult: simplifyHtml(step.expectedResult),
+        })),
       })),
-    testCases: (testCasesByWorkItem?.[wi.id] ?? []).map((testCase) => ({
-      ...testCase,
-      steps: testCase.steps?.map((step) => ({
-        action: simplifyHtml(step.action),
-        expectedResult: simplifyHtml(step.expectedResult),
-      })),
-    })),
-  }));
+    };
+  });
 }
 
 export function PromptComposer({
@@ -1362,6 +1371,7 @@ export function ImagePreviewDialog({
         src: previewUrls[index],
         alt: img.filename || 'Image preview',
         fallbackLabel: img.filename ?? img.mimeType,
+        sizeBytes: img.sizeBytes,
       }))}
       initialIndex={initialIndex}
       onClose={onClose}

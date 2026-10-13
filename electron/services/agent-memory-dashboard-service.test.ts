@@ -18,7 +18,19 @@ import {
   getAgentMemoryProjectPaths,
   readAgentMemoryRunIndex,
 } from './agent-memory-storage';
+import type { ResolvedModel } from '@shared/model-profiles';
+
 import { createAgentMemoryDashboardService } from './agent-memory-dashboard-service';
+
+function resolvedModel(overrides: Partial<ResolvedModel> = {}): ResolvedModel {
+  return {
+    backend: 'claude-code',
+    model: 'haiku',
+    thinkingEffort: 'low',
+    source: 'profile',
+    ...overrides,
+  };
+}
 
 const tempDirectories: string[] = [];
 
@@ -314,6 +326,7 @@ describe('AgentMemoryDashboardService', () => {
         extractionModel: 'haiku',
         extractionThinkingEffort: 'low',
       }),
+      resolveMemoryModel: vi.fn().mockResolvedValue(resolvedModel()),
       findProjectById: vi.fn().mockResolvedValue({ id: 'project-1', name: 'One' }),
       findProjects: vi.fn().mockResolvedValue([
         { id: 'project-1', name: 'One' },
@@ -342,6 +355,7 @@ describe('AgentMemoryDashboardService', () => {
     const extractProjectMemory = vi.fn();
     const service = createAgentMemoryDashboardService({
       getSetting,
+      resolveMemoryModel: vi.fn().mockResolvedValue(resolvedModel()),
       findProjectById: vi.fn().mockResolvedValue({ id: 'project-1', name: 'One' }),
       extractProjectMemory,
     });
@@ -367,6 +381,7 @@ describe('AgentMemoryDashboardService', () => {
     const mergeGlobalMemory = vi.fn();
     const service = createAgentMemoryDashboardService({
       getSetting,
+      resolveMemoryModel: vi.fn().mockResolvedValue(resolvedModel()),
       findProjectById: vi.fn().mockResolvedValue({ id: 'project-1', name: 'One' }),
       findProjects: vi.fn().mockResolvedValue([{ id: 'project-1', name: 'One' }]),
       extractProjectMemory: vi.fn().mockResolvedValue({
@@ -408,6 +423,7 @@ describe('AgentMemoryDashboardService', () => {
         extractionModel: 'haiku',
         extractionThinkingEffort: 'low',
       }),
+      resolveMemoryModel: vi.fn().mockResolvedValue(resolvedModel()),
       findProjectById,
       extractProjectMemory,
       mergeGlobalMemory,
@@ -418,6 +434,72 @@ describe('AgentMemoryDashboardService', () => {
     );
 
     expect(findProjectById).toHaveBeenCalledTimes(2);
+    expect(mergeGlobalMemory).not.toHaveBeenCalled();
+  });
+
+  it('builds the manual extraction config from the memory role', async () => {
+    const resolveMemoryModel = vi.fn().mockResolvedValue(
+      resolvedModel({
+        backend: 'opencode',
+        model: 'gpt-5.5',
+        thinkingEffort: 'high',
+      }),
+    );
+    const extractProjectMemory = vi
+      .fn()
+      .mockResolvedValue({ processed: true, run: null });
+    const mergeGlobalMemory = vi
+      .fn()
+      .mockResolvedValue({ processed: true, run: null });
+    const service = createAgentMemoryDashboardService({
+      getSetting: vi.fn().mockResolvedValue({ enabled: true }),
+      resolveMemoryModel,
+      findProjectById: vi.fn().mockResolvedValue({ id: 'project-1', name: 'One' }),
+      findProjects: vi.fn().mockResolvedValue([{ id: 'project-1', name: 'One' }]),
+      extractProjectMemory,
+      mergeGlobalMemory,
+    });
+
+    await service.extractNow('project-1');
+
+    expect(resolveMemoryModel).toHaveBeenCalledWith({ projectId: 'project-1' });
+    expect(resolveMemoryModel).toHaveBeenCalledWith({ projectId: null });
+    expect(extractProjectMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {
+          backend: 'opencode',
+          model: 'gpt-5.5',
+          thinkingEffort: 'high',
+          trigger: 'manual',
+        },
+      }),
+    );
+    expect(mergeGlobalMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({ backend: 'opencode' }),
+      }),
+    );
+  });
+
+  it('skips manual extraction when the memory role is off', async () => {
+    const extractProjectMemory = vi.fn();
+    const mergeGlobalMemory = vi.fn();
+    const service = createAgentMemoryDashboardService({
+      getSetting: vi.fn().mockResolvedValue({ enabled: true }),
+      resolveMemoryModel: vi
+        .fn()
+        .mockResolvedValue(resolvedModel({ off: true })),
+      findProjectById: vi.fn().mockResolvedValue({ id: 'project-1', name: 'One' }),
+      findProjects: vi.fn().mockResolvedValue([{ id: 'project-1', name: 'One' }]),
+      extractProjectMemory,
+      mergeGlobalMemory,
+    });
+
+    await expect(service.extractNow('project-1')).resolves.toEqual({
+      processed: false,
+      run: null,
+    });
+    expect(extractProjectMemory).not.toHaveBeenCalled();
     expect(mergeGlobalMemory).not.toHaveBeenCalled();
   });
 
@@ -442,6 +524,7 @@ describe('AgentMemoryDashboardService', () => {
         extractionModel: 'haiku',
         extractionThinkingEffort: 'default',
       }),
+      resolveMemoryModel: vi.fn().mockResolvedValue(resolvedModel()),
       findProjectById: vi.fn().mockResolvedValue({ id: 'project-1', name: 'One' }),
       extractProjectMemory,
     });

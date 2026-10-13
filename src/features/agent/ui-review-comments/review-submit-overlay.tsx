@@ -8,16 +8,13 @@ import {
   useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
 import type { ModelPreference, TaskStep } from '@shared/types';
-import {
-  useBackendDefaultModelsSetting,
-  useBackendsSetting,
-} from '@/hooks/use-settings';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
-import { getDefaultModelForBackend } from '@/lib/default-models';
 import { getModelsForBackend } from '@/features/agent/ui-backend-selector';
 import type { ReviewComment } from '@/stores/review-comments';
 import { synthesizeReviewPrompt } from '@/stores/review-comments';
 import { useBackendModels } from '@/hooks/use-backend-models';
+import { useBackendsSetting } from '@/hooks/use-settings';
+import { useResolvedModelForRole } from '@/hooks/use-model-profiles';
 
 
 
@@ -30,6 +27,7 @@ export function ReviewSubmitOverlay(props: {
   comments: ReviewComment[];
   steps?: TaskStep[];
   activeStepId?: string | null;
+  projectId?: string | null;
   onSubmit: (
     parts: PromptPart[],
     targetStepId: string | null,
@@ -49,12 +47,14 @@ function ReviewSubmitOverlayContent({
   comments,
   steps,
   activeStepId,
+  projectId,
   onSubmit,
   onClose,
 }: {
   comments: ReviewComment[];
   steps?: TaskStep[];
   activeStepId?: string | null;
+  projectId?: string | null;
   onSubmit: (
     parts: PromptPart[],
     targetStepId: string | null,
@@ -85,9 +85,13 @@ function ReviewSubmitOverlayContent({
         ? targetSelection.stepId
         : null;
   const backendsSettingQuery = useBackendsSetting();
-  const backendDefaultModelsQuery = useBackendDefaultModelsSetting();
   const backendsSetting = backendsSettingQuery.data;
-  const backendDefaultModels = backendDefaultModelsQuery.data;
+  // Submitting review comments into a *new* step follows the active profile /
+  // project policy, not the legacy per-backend default model.
+  const { data: resolvedAgentModel } = useResolvedModelForRole(
+    'agent',
+    projectId ?? null,
+  );
   const enabledBackends = useMemo(
     () =>
       backendsSetting?.enabledBackends ??
@@ -95,13 +99,14 @@ function ReviewSubmitOverlayContent({
     [activeStep?.agentBackend, backendsSetting?.enabledBackends],
   );
   const defaultNewStepBackend = useMemo(() => {
-    const activeBackend = activeStep?.agentBackend ?? 'claude-code';
-    if (enabledBackends.includes(activeBackend)) {
-      return activeBackend;
+    const preferredBackend =
+      resolvedAgentModel?.backend ?? activeStep?.agentBackend ?? 'claude-code';
+    if (enabledBackends.includes(preferredBackend)) {
+      return preferredBackend;
     }
 
     return enabledBackends[0] ?? 'claude-code';
-  }, [activeStep?.agentBackend, enabledBackends]);
+  }, [activeStep?.agentBackend, enabledBackends, resolvedAgentModel?.backend]);
   const effectiveNewStepBackend =
     newStepBackendOverride ?? defaultNewStepBackend;
   const backendModelsQuery = useBackendModels(effectiveNewStepBackend);
@@ -111,16 +116,11 @@ function ReviewSubmitOverlayContent({
     [dynamicModels, effectiveNewStepBackend],
   );
   const defaultNewStepModel =
-    effectiveNewStepBackend === defaultNewStepBackend
-      ? (activeStep?.modelPreference ??
-        getDefaultModelForBackend({
-          backend: effectiveNewStepBackend,
-          backendDefaultModels,
-        }))
-      : getDefaultModelForBackend({
-          backend: effectiveNewStepBackend,
-          backendDefaultModels,
-        });
+    resolvedAgentModel?.backend === effectiveNewStepBackend
+      ? resolvedAgentModel.model
+      : effectiveNewStepBackend === activeStep?.agentBackend
+        ? (activeStep.modelPreference ?? 'default')
+        : 'default';
   const effectiveNewStepModel = newStepModelOverride ?? defaultNewStepModel;
   useEffect(() => {
     const hasResolvedModels =
@@ -293,6 +293,7 @@ function ReviewSubmitOverlayContent({
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <BackendModelPresetPicker
+                projectId={projectId}
                 backend={effectiveNewStepBackend}
                 model={effectiveNewStepModel}
                 selectedPresetId={newStepPresetId}

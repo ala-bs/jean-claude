@@ -4,7 +4,6 @@ import {
   type AiSkillSlotsSetting,
   DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
   type MobilePreviewProjectConfig,
-  type ModelPreference,
   type ProjectFeatureMap,
   type ProjectFeatureMapItem,
   type ProjectLogoHistoryItem,
@@ -40,6 +39,11 @@ import {
   ListPane,
 } from '@/common/ui/list-detail-layout';
 import {
+  PROJECT_MODEL_POLICY_QUERY_KEY,
+  RESOLVED_MODEL_QUERY_KEY,
+  useModelProfilesSetting,
+} from '@/hooks/use-model-profiles';
+import {
   type ReactElement,
   startTransition,
   useCallback,
@@ -54,9 +58,6 @@ import {
 } from '@/features/common/ui-ai-skill-slot';
 import {
   useAiGenerationSetting,
-  useBackendDefaultModelsSetting,
-  useBackendModelPresetsSetting,
-  useBackendsSetting,
   useProjectPromptPrefaceSetting,
   usePromptPrefaceSetting,
   useUpdateProjectPromptPrefaceSetting,
@@ -79,15 +80,10 @@ import {
   useUploadProjectLogo,
 } from '@/hooks/use-projects';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AgentBackendType } from '@shared/agent-backend-types';
 import { api } from '@/lib/api';
-import { AVAILABLE_BACKENDS } from '@/features/agent/ui-backend-selector';
-import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { FavoriteBranchesInput } from './favorite-branches-input';
-import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
-import { getDefaultModelForBackend } from '@/lib/default-models';
 import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
 import { Input } from '@/common/ui/input';
 import isEqual from 'lodash-es/isEqual';
@@ -99,6 +95,8 @@ import { ProjectLogo } from '@/features/project/ui-project-logo';
 import { ProjectLogoSuggestions } from '@/features/project/ui-project-logo-suggestions';
 import { ProjectMcpSettings } from '@/features/project/ui-project-mcp-settings';
 import { ProjectMobilePreviewIntegration } from '@/features/project/ui-mobile-preview-settings';
+import type { ProjectModelPolicy } from '@shared/model-profiles';
+import { ProjectModelPolicyEditor } from '@/features/project/ui-project-model-policy';
 import { ProjectPermissionsSettings } from '@/features/project/ui-project-permissions-settings';
 import { ProjectPipelineSettings } from '@/features/project/ui-project-pipeline-settings';
 import type { ProjectPriority } from '@shared/feed-types';
@@ -116,6 +114,8 @@ import { useNavigationStore } from '@/stores/navigation';
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { useToastStore } from '@/stores/toasts';
+import type { WorkItemDisplayConfig } from '@shared/work-item-display-config-types';
+import { WorkItemDisplaySettings } from '@/features/project/ui-work-item-display-settings';
 import { WorkItemsLink } from '@/features/project/ui-work-items-link';
 import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
 
@@ -795,13 +795,6 @@ export function ProjectSettings({
   const [queuePrAutoComplete, setQueuePrAutoComplete] = useState(false);
   const [autoAcceptOnTaskCreation, setAutoAcceptOnTaskCreation] =
     useState(false);
-  const [defaultAgentBackend, setDefaultAgentBackend] =
-    useState<AgentBackendType | null>(null);
-  const [defaultAgentModelPreference, setDefaultAgentModelPreference] =
-    useState<ModelPreference | null>(null);
-  const [defaultAgentPresetId, setDefaultAgentPresetId] = useState<
-    string | null
-  >(null);
   const [worktreesPath, setWorktreesPath] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [completionContext, setCompletionContext] = useState('');
@@ -813,6 +806,8 @@ export function ProjectSettings({
     useState<ProjectPriority>('normal');
   const [workItemTitleParser, setWorkItemTitleParser] =
     useState<WorkItemTitleParserSetting | null>(null);
+  const [workItemDisplayConfig, setWorkItemDisplayConfig] =
+    useState<WorkItemDisplayConfig | null>(null);
   const [aiSkillSlots, setAiSkillSlots] = useState<AiSkillSlotsSetting | null>(
     null,
   );
@@ -824,13 +819,10 @@ export function ProjectSettings({
   const [isLogoPreviewOpen, setIsLogoPreviewOpen] = useState(false);
   const initializedProjectIdRef = useRef<string | null>(null);
 
-  const { data: backendsSetting } = useBackendsSetting();
   const {
     data: aiGenerationSetting,
     isPending: isAiGenerationSettingPending,
   } = useAiGenerationSetting();
-  const { data: backendModelPresets = [] } = useBackendModelPresetsSetting();
-  const enabledBackends = useEnabledBackends();
   const canGenerateLogoWithOpenAi =
     !!aiGenerationSetting?.openAiApiKey &&
     aiGenerationSetting.openAiImageGenerationEnabled === true;
@@ -860,11 +852,10 @@ export function ProjectSettings({
       commitWithNoVerify: project.commitWithNoVerify,
       queuePrAutoComplete: project.queuePrAutoComplete,
       autoAcceptOnTaskCreation: project.autoAcceptOnTaskCreation,
-      defaultAgentBackend: project.defaultAgentBackend,
-      defaultAgentModelPreference: project.defaultAgentModelPreference,
       prPriority: project.prPriority ?? 'normal',
       workItemPriority: project.workItemPriority ?? 'normal',
       workItemTitleParser: project.workItemTitleParser,
+      workItemDisplayConfig: project.workItemDisplayConfig,
       completionContext: project.completionContext ?? null,
       summary: project.summary ?? null,
       worktreesPath: project.worktreesPath ?? null,
@@ -886,11 +877,10 @@ export function ProjectSettings({
       commitWithNoVerify,
       queuePrAutoComplete,
       autoAcceptOnTaskCreation,
-      defaultAgentBackend,
-      defaultAgentModelPreference,
       prPriority,
       workItemPriority,
       workItemTitleParser,
+      workItemDisplayConfig,
       completionContext: completionContext || null,
       summary: summary || null,
       worktreesPath: worktreesPath || null,
@@ -907,8 +897,6 @@ export function ProjectSettings({
       autoAcceptOnTaskCreation,
       color,
       completionContext,
-      defaultAgentBackend,
-      defaultAgentModelPreference,
       defaultBranch,
       favoriteBranches,
       mobilePreviewConfig,
@@ -919,6 +907,7 @@ export function ProjectSettings({
       summary,
       workItemPriority,
       workItemTitleParser,
+      workItemDisplayConfig,
       worktreesPath,
     ],
   );
@@ -964,18 +953,10 @@ export function ProjectSettings({
       setCommitWithNoVerify(project.commitWithNoVerify);
       setQueuePrAutoComplete(project.queuePrAutoComplete);
       setAutoAcceptOnTaskCreation(project.autoAcceptOnTaskCreation);
-      setDefaultAgentBackend(project.defaultAgentBackend);
-      setDefaultAgentModelPreference(project.defaultAgentModelPreference);
-      setDefaultAgentPresetId(
-        findMatchingBackendModelPresetId({
-          presets: backendModelPresets,
-          backend: project.defaultAgentBackend,
-          model: project.defaultAgentModelPreference,
-        }),
-      );
       setPrPriority(project.prPriority ?? 'normal');
       setWorkItemPriority(project.workItemPriority ?? 'normal');
       setWorkItemTitleParser(project.workItemTitleParser);
+      setWorkItemDisplayConfig(project.workItemDisplayConfig);
       setCompletionContext(project.completionContext ?? '');
       setSummary(project.summary ?? '');
       dirtyFieldsRef.current.clear();
@@ -989,7 +970,7 @@ export function ProjectSettings({
       );
       initializedProjectIdRef.current = project.id;
     }
-  }, [backendModelPresets, project]);
+  }, [project]);
 
   const saveQueueRef = useRef<ReturnType<
     typeof createProjectSettingsSaveQueue
@@ -1675,63 +1656,7 @@ export function ProjectSettings({
             </p>
           </div>
 
-          <div>
-            <label className="text-ink-1 mb-1 block text-sm font-medium">
-              Default coding agent
-            </label>
-            <Select
-              value={defaultAgentBackend === null ? 'global' : 'project'}
-              options={[
-                {
-                  value: 'global',
-                  label: `Use global default${backendsSetting?.defaultBackend ? ` (${AVAILABLE_BACKENDS.find((b) => b.value === backendsSetting.defaultBackend)?.label ?? backendsSetting.defaultBackend})` : ''}`,
-                },
-                { value: 'project', label: 'Use project default' },
-              ]}
-              onChange={(value) => {
-                markFieldDirty('defaultAgentBackend');
-                markFieldDirty('defaultAgentModelPreference');
-                if (value === 'global') {
-                  setDefaultAgentBackend(null);
-                  setDefaultAgentModelPreference(null);
-                  setDefaultAgentPresetId(null);
-                  return;
-                }
-
-                setDefaultAgentBackend(
-                  defaultAgentBackend ??
-                    enabledBackends[0]?.value ??
-                    'claude-code',
-                );
-                setDefaultAgentModelPreference(
-                  defaultAgentModelPreference ?? 'default',
-                );
-              }}
-              className="w-full justify-between"
-            />
-            {defaultAgentBackend !== null && (
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <BackendModelPresetPicker
-                  backend={defaultAgentBackend}
-                  model={defaultAgentModelPreference ?? 'default'}
-                  selectedPresetId={defaultAgentPresetId}
-                  enabledBackends={enabledBackends.map((b) => b.value)}
-                  className="w-full justify-between sm:w-auto"
-                  modelClassName="w-full justify-between sm:w-auto"
-                  onChange={(selection) => {
-                    markFieldDirty('defaultAgentBackend');
-                    markFieldDirty('defaultAgentModelPreference');
-                    setDefaultAgentBackend(selection.backend);
-                    setDefaultAgentModelPreference(selection.model);
-                    setDefaultAgentPresetId(selection.presetId);
-                  }}
-                />
-              </div>
-            )}
-            <p className="text-ink-3 mt-1 text-xs">
-              Used to prefill backend and model for new tasks in this project.
-            </p>
-          </div>
+          <ProjectModelPolicySection projectId={projectId} />
 
           <div>
             <label className="text-ink-1 mb-1 block text-sm font-medium">
@@ -1859,6 +1784,14 @@ export function ProjectSettings({
               setWorkItemTitleParser(setting);
             }}
           />
+          <WorkItemDisplaySettings
+            project={project}
+            value={workItemDisplayConfig}
+            onChange={(next) => {
+              markFieldDirty('workItemDisplayConfig');
+              setWorkItemDisplayConfig(next);
+            }}
+          />
         </div>
       );
       break;
@@ -1880,6 +1813,7 @@ export function ProjectSettings({
       content = (
         <ProjectAiGenerationSettings
           aiSkillSlots={aiSkillSlots}
+          projectId={project.id}
           projectPath={project.path}
           onUpdate={(value) => {
             markFieldDirty('aiSkillSlots');
@@ -2085,20 +2019,67 @@ function GeneratedLogoHistoryItem({
   );
 }
 
+// --- Model policy (project-level constraint) ---
+
+/**
+ * Wires `ProjectModelPolicyEditor` to the effective-policy query and the
+ * dedicated `setModelPolicy` IPC. It is not part of the autosave draft: the
+ * policy is an object column that `UpdateProject` cannot carry.
+ */
+function ProjectModelPolicySection({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient();
+  const enabledBackends = useEnabledBackends();
+  const { profiles } = useModelProfilesSetting();
+
+  const effectivePolicyQueryKey = useMemo(
+    // Must match PROJECT_MODEL_POLICY_QUERY_KEY exactly. A differently
+    // ordered key meant `setModelPolicy` never invalidated the one the
+    // switcher and composer read, so they kept offering profiles the new
+    // policy had just disallowed.
+    () => [...PROJECT_MODEL_POLICY_QUERY_KEY, projectId] as const,
+    [projectId],
+  );
+  const { data: effective } = useQuery({
+    queryKey: effectivePolicyQueryKey,
+    queryFn: () => api.projects.getEffectivePolicy(projectId),
+  });
+
+  const setModelPolicy = useMutation({
+    mutationFn: (policy: ProjectModelPolicy) =>
+      api.projects.setModelPolicy(projectId, policy),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: effectivePolicyQueryKey });
+      queryClient.invalidateQueries({ queryKey: RESOLVED_MODEL_QUERY_KEY });
+    },
+  });
+
+  if (!effective) return null;
+
+  return (
+    <ProjectModelPolicyEditor
+      policy={effective.policy}
+      source={effective.source}
+      filePath={effective.filePath}
+      profiles={profiles}
+      enabledBackends={enabledBackends}
+      onChange={(policy) => setModelPolicy.mutate(policy)}
+    />
+  );
+}
+
 // --- AI Generation Settings (project-level overrides) ---
 
 function ProjectAiGenerationSettings({
   aiSkillSlots,
+  projectId,
   projectPath,
   onUpdate,
 }: {
   aiSkillSlots: AiSkillSlotsSetting | null;
+  projectId: string;
   projectPath: string;
   onUpdate: (slots: AiSkillSlotsSetting | null) => void;
 }) {
-  const enabledBackends = useEnabledBackends();
-  const { data: backendsSetting } = useBackendsSetting();
-  const { data: backendDefaultModels } = useBackendDefaultModelsSetting();
   const [selectedSlotKey, setSelectedSlotKey] = useState<AiSkillSlotKey>(
     SLOT_DEFINITIONS[0].key,
   );
@@ -2120,17 +2101,6 @@ function ProjectAiGenerationSettings({
   const selectedSlot = SLOT_DEFINITIONS.find(
     (slot) => slot.key === selectedSlotKey,
   );
-  const globalDefaultBackend = backendsSetting?.defaultBackend ?? null;
-  const fallbackBackend =
-    globalDefaultBackend &&
-    enabledBackends.some((backend) => backend.value === globalDefaultBackend)
-      ? globalDefaultBackend
-      : (enabledBackends[0]?.value ?? 'claude-code');
-  const fallbackModel = getDefaultModelForBackend({
-    backend: fallbackBackend,
-    backendDefaultModels,
-  });
-
   return (
     <ListDetailLayout
       list={
@@ -2144,13 +2114,12 @@ function ProjectAiGenerationSettings({
         selectedSlot ? (
           <SlotDetail
             key={selectedSlot.key}
+            slotKey={selectedSlot.key}
             label={selectedSlot.label}
             description={selectedSlot.description}
             config={aiSkillSlots?.[selectedSlot.key] ?? null}
-            enabledBackends={enabledBackends}
+            projectId={projectId}
             projectPath={projectPath}
-            fallbackBackend={fallbackBackend}
-            fallbackModel={fallbackModel}
             emptySummary="Using global default"
             emptyBadgeLabel="Global default"
             toggleLabel="Project override"

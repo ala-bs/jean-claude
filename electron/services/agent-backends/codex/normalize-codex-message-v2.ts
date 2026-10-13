@@ -4,6 +4,12 @@ import type {
   NormalizedResult,
   TokenUsage,
 } from '@shared/normalized-message-v2';
+import type {
+  NormalizedQuestion,
+  NormalizedQuestionOption,
+  NormalizedQuestionRequest,
+} from '@shared/agent-backend-types';
+import type { InteractionMode } from '@shared/types';
 
 type UserPromptEntry = NormalizedEntry & { type: 'user-prompt' };
 type AssistantEntry = NormalizedEntry & { type: 'assistant-message' };
@@ -22,6 +28,7 @@ export type CodexNotification = {
 };
 
 export type CodexNormalizationContext = {
+  interactionMode?: InteractionMode;
   emittedSessionIds: Set<string>;
   itemEntries: Map<string, NormalizedEntry>;
   itemText: Map<string, string>;
@@ -29,8 +36,167 @@ export type CodexNormalizationContext = {
   subagentToolIdsByThreadId: Map<string, string>;
 };
 
-export function createCodexNormalizationContext(): CodexNormalizationContext {
+export function normalizeCodexQuestionRequest({
+  requestId,
+  params,
+}: {
+  requestId: string;
+  params: Record<string, unknown>;
+}): NormalizedQuestionRequest | undefined {
+  const questions = Array.isArray(params.questions)
+    ? params.questions
+        .map((question) => normalizeCodexQuestion(question))
+        .filter((question): question is NormalizedQuestion => question !== undefined)
+    : [];
+
+  if (questions.length === 0) return undefined;
+
+  return { requestId, questions };
+}
+
+export type CodexMcpElicitation = {
+  request: NormalizedQuestionRequest;
+  schema: Record<string, unknown>;
+};
+
+export function normalizeCodexMcpElicitation({
+  requestId,
+  params,
+}: {
+  requestId: string;
+  params: Record<string, unknown>;
+}): CodexMcpElicitation | undefined {
+  if (params.mode !== 'form') return undefined;
+  const schema = record(params.requestedSchema);
+  const properties = record(schema?.properties);
+  if (!schema || !properties) return undefined;
+
+  const required = new Set(stringArray(schema.required));
+  const questions = Object.entries(properties).flatMap(([id, value]) => {
+    const property = record(value);
+    if (!property) return [];
+    const options = elicitationOptions(property);
+    const isMulti = property.type === 'array';
+    return [{
+      id,
+      type: isMulti
+        ? 'multi_choice'
+        : options.length > 0
+          ? 'single_choice'
+          : 'text',
+      question: str(property.description) ?? str(property.title) ?? id,
+      header: str(property.title) ?? id,
+      options,
+      multiSelect: isMulti,
+      required: required.has(id),
+    } satisfies NormalizedQuestion];
+  });
+
+  return questions.length === 0
+    ? undefined
+    : {
+        request: {
+          requestId,
+          ...(nonEmptyString(params.message)
+            ? { contextReminder: nonEmptyString(params.message) }
+            : {}),
+          questions,
+        },
+        schema,
+      };
+}
+
+export function codexMcpElicitationContentFromAnswers({
+  schema,
+  answers,
+}: {
+  schema: Record<string, unknown>;
+  answers: Record<string, string>;
+}): Record<string, unknown> {
+  const properties = record(schema.properties) ?? {};
+  const content: Record<string, unknown> = {};
+  for (const [id, value] of Object.entries(properties)) {
+    const property = record(value);
+    const answer = answers[id];
+    if (!property || answer === undefined) continue;
+    if (property.type === 'array') {
+      try {
+        const parsed: unknown = JSON.parse(answer);
+        content[id] = Array.isArray(parsed)
+          ? parsed.filter((item): item is string => typeof item === 'string')
+          : answer.split(',').map((item) => item.trim()).filter(Boolean);
+      } catch {
+        content[id] = answer.split(',').map((item) => item.trim()).filter(Boolean);
+      }
+    } else if (property.type === 'number') {
+      content[id] = Number(answer);
+    } else if (property.type === 'integer') {
+      content[id] = Number.parseInt(answer, 10);
+    } else if (property.type === 'boolean') {
+      content[id] = answer === 'true';
+    } else {
+      content[id] = answer;
+    }
+  }
+  return content;
+}
+
+function elicitationOptions(
+  property: Record<string, unknown>,
+): NormalizedQuestionOption[] {
+  const values = Array.isArray(property.enum)
+    ? property.enum.filter((value): value is string => typeof value === 'string')
+    : [];
+  const item = record(property.items);
+  const itemValues = Array.isArray(item?.enum)
+    ? item.enum.filter((value): value is string => typeof value === 'string')
+    : [];
+  return (values.length > 0 ? values : itemValues).map((label) => ({
+    label,
+    description: '',
+  }));
+}
+
+function normalizeCodexQuestion(value: unknown): NormalizedQuestion | undefined {
+  const question = record(value);
+  const id = str(question?.id);
+  const text = str(question?.question);
+  if (id === undefined || text === undefined) return undefined;
+
+  const options = Array.isArray(question?.options)
+    ? question.options
+        .map((option) => normalizeCodexQuestionOption(option))
+        .filter((option): option is NormalizedQuestionOption => option !== undefined)
+    : [];
+
   return {
+    id,
+    question: text,
+    header: str(question?.header) ?? 'Question',
+    options,
+    multiSelect: false,
+    type: options.length > 0 ? 'single_choice' : 'text',
+    allowFreeform: question?.isOther === true,
+  };
+}
+
+function normalizeCodexQuestionOption(
+  value: unknown,
+): NormalizedQuestionOption | undefined {
+  const option = record(value);
+  const label = str(option?.label);
+  if (label === undefined) return undefined;
+  return {
+    label,
+    description: str(option?.description) ?? '',
+  };
+}
+
+export function createCodexNormalizationContext({
+  interactionMode,
+}: { interactionMode?: InteractionMode } = {}): CodexNormalizationContext {
+  return {
+    interactionMode,
     emittedSessionIds: new Set(),
     itemEntries: new Map(),
     itemText: new Map(),
@@ -170,7 +336,10 @@ function normalizeItemStarted(
     return [{ type: 'entry', entry: entryWithParent }];
   }
 
-  const entry = createToolEntry(item, itemId, dateFromParams(params));
+  const entry = addCodexPermissionMetadata(
+    createToolEntry(item, itemId, dateFromParams(params)),
+    ctx,
+  );
   if (entry === undefined) return [];
 
   const entryWithParent = withParentToolId(
@@ -298,7 +467,10 @@ function normalizeItemCompleted(
     return [{ type: 'entry-update', entry }];
   }
 
-  const entry = createToolEntry(item, itemId, dateFromParams(params));
+  const entry = addCodexPermissionMetadata(
+    createToolEntry(item, itemId, dateFromParams(params)),
+    ctx,
+  );
   if (entry === undefined) return [];
 
   const entryWithResult =
@@ -461,6 +633,23 @@ function createToolEntry(
     toolId: itemId,
     name: 'codex-tool',
     input: { originalType: type, item: { ...item } },
+  };
+}
+
+function addCodexPermissionMetadata(
+  entry: ItemEntry | undefined,
+  ctx: CodexNormalizationContext,
+): ItemEntry | undefined {
+  if (entry?.type !== 'tool-use' || ctx.interactionMode !== 'ask') {
+    return entry;
+  }
+
+  return {
+    ...entry,
+    permission: {
+      allowedBy: 'system',
+      source: 'sandbox',
+    },
   };
 }
 

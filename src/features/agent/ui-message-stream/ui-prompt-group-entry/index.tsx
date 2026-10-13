@@ -74,11 +74,14 @@ type RunningActivityMessage =
 
 function getAssistantPreviewMessage(
   dm: DisplayMessage,
+  /** Assistant entries already rendered in full elsewhere — never previewed */
+  excludedEntryIds?: ReadonlySet<string>,
 ): RunningActivityMessage | null {
   if (
     dm.kind !== 'entry' ||
     dm.entry.type !== 'assistant-message' ||
-    !dm.entry.value.trim()
+    !dm.entry.value.trim() ||
+    excludedEntryIds?.has(dm.entry.id)
   ) {
     return null;
   }
@@ -92,8 +95,9 @@ function getAssistantPreviewMessage(
 
 function getLatestActivityMessage(
   dm: DisplayMessage,
+  excludedEntryIds?: ReadonlySet<string>,
 ): RunningActivityMessage | null {
-  const assistantMessage = getAssistantPreviewMessage(dm);
+  const assistantMessage = getAssistantPreviewMessage(dm, excludedEntryIds);
   if (assistantMessage) return assistantMessage;
 
   if (dm.kind === 'entry' && dm.entry.type === 'tool-use') {
@@ -120,7 +124,14 @@ function getLatestActivityMessage(
  * Get live activity for a running prompt group:
  * active subagents, active skills, latest todo, recent messages.
  */
-function getRunningActivity(childMessages: DisplayMessage[]): {
+export function getRunningActivity(
+  childMessages: DisplayMessage[],
+  /**
+   * Assistant entries already rendered in full above the summary (the
+   * question-pending case). Previewing them again shows the same text twice.
+   */
+  excludedAssistantEntryIds?: ReadonlySet<string>,
+): {
   subagents: Array<{
     id: string;
     name: string;
@@ -228,7 +239,10 @@ function getRunningActivity(childMessages: DisplayMessage[]): {
   let latestMessage: RunningActivityMessage | null = null;
   let latestMessageIndex = -1;
   for (let i = childMessages.length - 1; i >= 0; i--) {
-    const message = getLatestActivityMessage(childMessages[i]);
+    const message = getLatestActivityMessage(
+      childMessages[i],
+      excludedAssistantEntryIds,
+    );
     if (message) {
       latestMessage = message;
       latestMessageIndex = i;
@@ -238,7 +252,10 @@ function getRunningActivity(childMessages: DisplayMessage[]): {
 
   if (latestMessage) {
     for (let i = latestMessageIndex - 1; i >= 0; i--) {
-      const message = getAssistantPreviewMessage(childMessages[i]);
+      const message = getAssistantPreviewMessage(
+        childMessages[i],
+        excludedAssistantEntryIds,
+      );
       if (message) {
         recentMessages.unshift(message);
         if (recentMessages.length >= RECENT_RUNNING_MESSAGE_COUNT - 1) break;
@@ -437,7 +454,7 @@ function getLastAssistantMessage(
 }
 
 /** All substantial assistant messages, in order (used for collapsed view) */
-function getLongAssistantMessages(
+export function getLongAssistantMessages(
   childMessages: DisplayMessage[],
 ): Array<{ text: string; entryId: string }> {
   const messages: Array<{ text: string; entryId: string }> = [];
@@ -1385,9 +1402,16 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   onOpenFileInReview,
   onOpenFileInEditor,
   backgroundJobsStepId = null,
+  hasPendingQuestion = false,
 }: {
   group: PromptGroup;
   isLast?: boolean;
+  /**
+   * The agent is waiting on an ask-question banner for this group. The turn is
+   * still "running", but it is paused on the user — so surface the turn's
+   * assistant messages (same as a completed group) to give the question context.
+   */
+  hasPendingQuestion?: boolean;
   /** Step whose background jobs belong to this group (last group only) */
   backgroundJobsStepId?: string | null;
   /** Whether the parent task is currently running */
@@ -1464,7 +1488,10 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   const shownResultEntryId = resultSummary?.entryId;
   const shownResultText = resultSummary?.text;
   const precedingLongMessages = useMemo(() => {
-    if (isActiveGroup || detailsExpanded) return EMPTY_LONG_MESSAGES;
+    if (detailsExpanded) return EMPTY_LONG_MESSAGES;
+    // Active groups normally hide these (the live summary covers them), except
+    // while paused on a question, where the turn's messages are the context.
+    if (isActiveGroup && !hasPendingQuestion) return EMPTY_LONG_MESSAGES;
     const shownText = shownResultText?.trim();
     const messages = getLongAssistantMessages(group.childMessages).filter(
       (m) => m.entryId !== shownResultEntryId && m.text !== shownText,
@@ -1472,6 +1499,7 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
     return messages.length > 0 ? messages : EMPTY_LONG_MESSAGES;
   }, [
     isActiveGroup,
+    hasPendingQuestion,
     detailsExpanded,
     group.childMessages,
     shownResultEntryId,
@@ -1487,11 +1515,17 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
     return formatDuration(durationMs);
   }, [group.durationMs, group.resultEntry?.durationMs, isActiveGroup]);
 
-  // Activity for running state
+  // Activity for running state. Any assistant message already rendered in full
+  // above (question-pending case) is dropped from the "recent" preview rows —
+  // otherwise the same text appears twice, once whole and once truncated.
   const activity = useMemo(() => {
     if (!isActiveGroup) return null;
-    return getRunningActivity(group.childMessages);
-  }, [isActiveGroup, group.childMessages]);
+    const shownEntryIds =
+      precedingLongMessages.length > 0
+        ? new Set(precedingLongMessages.map((m) => m.entryId))
+        : undefined;
+    return getRunningActivity(group.childMessages, shownEntryIds);
+  }, [isActiveGroup, group.childMessages, precedingLongMessages]);
 
   const visibleChildMessages = useMemo(
     () =>
@@ -1731,8 +1765,21 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
                 )}
               </div>
             ) : isActiveGroup && activity ? (
-              /* Collapsed running: live summary */
-              <RunningSummary activity={activity} />
+              /* Collapsed running: turn messages (when paused on a question)
+                 then the live summary */
+              <div className="flex flex-col gap-2.5">
+                {precedingLongMessages.map((m, i) => (
+                  <AssistantMessageBlock
+                    key={m.entryId}
+                    text={m.text}
+                    entryId={m.entryId}
+                    taskId={taskId}
+                    onFilePathClick={onFilePathClick}
+                    index={i + 1}
+                  />
+                ))}
+                <RunningSummary activity={activity} />
+              </div>
             ) : (
               /* Collapsed done/interrupted: todos then result */
               <div className="flex flex-col gap-2.5">

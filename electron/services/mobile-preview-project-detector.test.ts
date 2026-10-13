@@ -111,6 +111,109 @@ describe('detectMobilePreviewProjectConfig', () => {
     expect(config.detectedApps[0]?.detectedIosBundleId).toBeNull();
   });
 
+  it('detects quoted iOS bundle IDs and skips test targets', async () => {
+    await writeJson(path.join(tempDir, 'package.json'), {
+      dependencies: { 'react-native': '^0.76.0' },
+    });
+    await fs.mkdir(path.join(tempDir, 'ios/App.xcodeproj'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, 'ios/App.xcodeproj/project.pbxproj'),
+      [
+        'PRODUCT_BUNDLE_IDENTIFIER = "com.example.app.AppTests";',
+        'PRODUCT_BUNDLE_IDENTIFIER = "com.example.app";',
+      ].join('\n'),
+    );
+
+    const config = await detectMobilePreviewProjectConfig(tempDir);
+
+    expect(config.iosBundleId).toBe('com.example.app');
+    expect(config.detectedApps[0]?.detectedIosBundleId).toBe('com.example.app');
+  });
+
+  it('keeps the app config bundle ID when the pbxproj value is a build variable', async () => {
+    await writeJson(path.join(tempDir, 'package.json'), {
+      dependencies: { expo: '^52.0.0' },
+    });
+    await writeJson(path.join(tempDir, 'app.json'), {
+      expo: { ios: { bundleIdentifier: 'com.example.fromconfig' } },
+    });
+    await fs.mkdir(path.join(tempDir, 'ios/App.xcodeproj'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, 'ios/App.xcodeproj/project.pbxproj'),
+      'PRODUCT_BUNDLE_IDENTIFIER = "org.reactjs.native.example.$(PRODUCT_NAME:rfc1034identifier)";',
+    );
+
+    const config = await detectMobilePreviewProjectConfig(tempDir);
+
+    expect(config.iosBundleId).toBe('com.example.fromconfig');
+  });
+
+  it('keeps scanning sibling xcodeproj dirs when the first has only templated ids', async () => {
+    await writeJson(path.join(tempDir, 'package.json'), {
+      dependencies: { expo: '^52.0.0' },
+    });
+    await writeJson(path.join(tempDir, 'app.json'), {
+      expo: { ios: { bundleIdentifier: 'com.example.stale' } },
+    });
+    // Names chosen so `readdir` yields the templated-only project FIRST
+    // (`Pods` < `ZenApp`); otherwise the loop reads the real project first and
+    // the assertion would hold even with the break mis-gated.
+    await fs.mkdir(path.join(tempDir, 'ios/Pods.xcodeproj'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, 'ios/Pods.xcodeproj/project.pbxproj'),
+      'PRODUCT_BUNDLE_IDENTIFIER = org.cocoapods.${PRODUCT_NAME:rfc1034identifier};',
+    );
+    await fs.mkdir(path.join(tempDir, 'ios/ZenApp.xcodeproj'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, 'ios/ZenApp.xcodeproj/project.pbxproj'),
+      'PRODUCT_BUNDLE_IDENTIFIER = "com.example.native";',
+    );
+    expect(await fs.readdir(path.join(tempDir, 'ios'))).toEqual([
+      'Pods.xcodeproj',
+      'ZenApp.xcodeproj',
+    ]);
+
+    const config = await detectMobilePreviewProjectConfig(tempDir);
+
+    expect(config.iosBundleId).toBe('com.example.native');
+  });
+
+  it('does not let a test-target id overwrite the app config bundle ID', async () => {
+    await writeJson(path.join(tempDir, 'package.json'), {
+      dependencies: { expo: '^52.0.0' },
+    });
+    await writeJson(path.join(tempDir, 'app.json'), {
+      expo: { ios: { bundleIdentifier: 'com.example.fromconfig' } },
+    });
+    await fs.mkdir(path.join(tempDir, 'ios/App.xcodeproj'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, 'ios/App.xcodeproj/project.pbxproj'),
+      [
+        'PRODUCT_BUNDLE_IDENTIFIER = "com.example.app.AppTests";',
+        'PRODUCT_BUNDLE_IDENTIFIER = "org.reactjs.native.example.$(PRODUCT_NAME:rfc1034identifier)";',
+      ].join('\n'),
+    );
+
+    const config = await detectMobilePreviewProjectConfig(tempDir);
+
+    expect(config.iosBundleId).toBe('com.example.fromconfig');
+  });
+
+  it('still accepts an app bundle ID that ends in "tests"', async () => {
+    await writeJson(path.join(tempDir, 'package.json'), {
+      dependencies: { 'react-native': '^0.76.0' },
+    });
+    await fs.mkdir(path.join(tempDir, 'ios/App.xcodeproj'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, 'ios/App.xcodeproj/project.pbxproj'),
+      'PRODUCT_BUNDLE_IDENTIFIER = "com.acme.contests";',
+    );
+
+    const config = await detectMobilePreviewProjectConfig(tempDir);
+
+    expect(config.iosBundleId).toBe('com.acme.contests');
+  });
+
   it('detects Metro and Android prebuild commands from package scripts first', async () => {
     await fs.writeFile(path.join(tempDir, 'pnpm-lock.yaml'), '');
     await writeJson(path.join(tempDir, 'package.json'), {

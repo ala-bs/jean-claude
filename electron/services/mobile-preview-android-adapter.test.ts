@@ -255,6 +255,25 @@ RECOV003 recovery usb:1-3 transport_id:3
     ]);
   });
 
+  it('captures a PNG screenshot through the resolved adb serial', async () => {
+    runCommandMock.mockResolvedValue({
+      stdout:
+        'List of devices attached\nemulator-5554 device model:Pixel_8\n',
+      stderr: '',
+    });
+    const screenshot = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    runBinaryCommandMock.mockResolvedValue({ stdout: screenshot, stderr: '' });
+
+    await expect(androidAdapter.captureScreenshot('emulator-5554')).resolves.toBe(
+      screenshot,
+    );
+    expect(runBinaryCommandMock).toHaveBeenCalledWith(
+      expect.any(String),
+      ['-s', 'emulator-5554', 'exec-out', 'screencap', '-p'],
+      { timeoutMs: 5_000 },
+    );
+  });
+
   it('keeps the adb serial in connectionId when a booted emulator is renamed to its AVD name', async () => {
     runCommandMock.mockImplementation(async (command, args) => {
       if (command === 'adb' && args.join(' ') === 'devices -l') {

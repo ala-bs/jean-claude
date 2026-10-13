@@ -1,3 +1,5 @@
+import type { WorkItemStatusChipMatch } from './work-item-status-chip-types';
+
 export type FeedItemSource = 'task' | 'pull-request' | 'note' | 'work-item';
 
 export type FeedItemAttention =
@@ -58,6 +60,7 @@ export interface FeedItem {
   workItemState?: string;
   workItemSummary?: string;
   workItemSummaryStale?: boolean;
+  workItemStatusChips?: WorkItemStatusChipMatch[];
   workItemPrId?: number;
   workItemPrStatus?: 'active' | 'completed' | 'abandoned';
   workItemPrUrl?: string;

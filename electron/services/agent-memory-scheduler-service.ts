@@ -1,5 +1,12 @@
-import type { AgentMemorySetting, Project } from '@shared/types';
+import type {
+  AgentMemorySetting,
+  ModelPreference,
+  Project,
+  ThinkingEffort,
+} from '@shared/types';
+import type { AgentBackendType } from '@shared/agent-backend-types';
 import type { AgentMemoryExtractionRun } from '@shared/agent-memory-types';
+import type { ResolvedModel } from '@shared/model-profiles';
 
 import {
   extractProjectMemory,
@@ -38,9 +45,9 @@ type SchedulerDependencies = {
     recheckProjectExists?: () => Promise<boolean>;
     signal?: AbortSignal;
     config: {
-      backend: AgentMemorySetting['extractionBackend'];
-      model: string;
-      thinkingEffort?: AgentMemorySetting['extractionThinkingEffort'];
+      backend: AgentBackendType;
+      model: ModelPreference;
+      thinkingEffort?: ThinkingEffort;
       trigger: 'backlog' | 'scheduled';
     };
   }) => ExtractionResult;
@@ -48,9 +55,9 @@ type SchedulerDependencies = {
     projectIds: readonly string[];
     signal?: AbortSignal;
     config: {
-      backend: AgentMemorySetting['extractionBackend'];
-      model: string;
-      thinkingEffort?: AgentMemorySetting['extractionThinkingEffort'];
+      backend: AgentBackendType;
+      model: ModelPreference;
+      thinkingEffort?: ThinkingEffort;
       trigger: 'backlog' | 'scheduled';
     };
   }) => ExtractionResult;
@@ -64,6 +71,14 @@ type SchedulerDependencies = {
     attemptedAt: string;
     succeeded: boolean;
   }) => Promise<void>;
+  /**
+   * Resolves the model for the `memory` role (real impl:
+   * `getModelProfileService().resolveForRole`). `projectId` is `null` for the
+   * global merge.
+   */
+  resolveMemoryModel?: (params: {
+    projectId: string | null;
+  }) => Promise<ResolvedModel>;
   logFailure?: (failure: AgentMemorySchedulerFailure) => void;
   logSweepFailure?: (error: unknown) => void;
   setInterval?: (
@@ -131,6 +146,10 @@ export function createAgentMemorySchedulerService({
   mergeGlobalMemory: mergeGlobal = mergeGlobalMemory,
   readRunTiming = readAgentMemoryRunTiming,
   recordRunTiming = recordAgentMemoryRunTiming,
+  resolveMemoryModel = async ({ projectId }) =>
+    (await import('./model-profile-service'))
+      .getModelProfileService()
+      .resolveForRole({ role: 'memory', projectId }),
   logFailure = (failure) =>
     debug('Agent Memory operation failed: %O', failure),
   logSweepFailure = (error) =>
@@ -207,17 +226,42 @@ export function createAgentMemorySchedulerService({
         intervalMs,
       }),
     );
+    // A profile may bind the `memory` role to `off`, and an `enforce` policy
+    // may block it: those projects are skipped, not failed.
+    const projectModels = new Map<string, ResolvedModel>();
+    await Promise.all(
+      dueProjects.map(async (project) => {
+        try {
+          projectModels.set(
+            project.id,
+            await resolveMemoryModel({ projectId: project.id }),
+          );
+        } catch (error) {
+          failures.push({
+            scope: 'project',
+            projectId: project.id,
+            phase: 'extraction',
+            error,
+          });
+        }
+      }),
+    );
+    const runnableProjects = dueProjects.filter((project) => {
+      const resolved = projectModels.get(project.id);
+      return Boolean(resolved) && !resolved!.off && !resolved!.blocked;
+    });
+
     const projectResults = await Promise.allSettled(
-      dueProjects.map((project) =>
+      runnableProjects.map((project) =>
         extractProject({
           project,
           signal,
           recheckProjectExists: async () =>
             Boolean(await findProjectById(project.id)),
           config: {
-            backend: setting.extractionBackend,
-            model: setting.extractionModel,
-            thinkingEffort: setting.extractionThinkingEffort,
+            backend: projectModels.get(project.id)!.backend,
+            model: projectModels.get(project.id)!.model,
+            thinkingEffort: projectModels.get(project.id)!.thinkingEffort,
             trigger:
               projectTiming.get(project.id)!.lastSuccessAt !== null &&
               calendarDate(
@@ -230,11 +274,11 @@ export function createAgentMemorySchedulerService({
       ),
     );
     signal.throwIfAborted();
-    for (const project of dueProjects) {
+    for (const project of runnableProjects) {
       projectTiming.get(project.id)!.lastAttemptAt = timestamp;
     }
     for (const [index, result] of projectResults.entries()) {
-      const project = dueProjects[index];
+      const project = runnableProjects[index];
       if (result.status === 'fulfilled') {
         projectTiming.get(project.id)!.lastSuccessAt = timestamp;
         if (result.value.run === null) {
@@ -284,7 +328,15 @@ export function createAgentMemorySchedulerService({
       date,
       intervalMs,
     });
+    let globalModel: ResolvedModel | null = null;
     if (globalDue) {
+      try {
+        globalModel = await resolveMemoryModel({ projectId: null });
+      } catch (error) {
+        failures.push({ scope: 'global', phase: 'merge', error });
+      }
+    }
+    if (globalDue && globalModel && !globalModel.off && !globalModel.blocked) {
       signal.throwIfAborted();
       const globalProjectLookups = await Promise.allSettled(
         currentProjects.map(({ id }) => findProjectById(id)),
@@ -306,9 +358,9 @@ export function createAgentMemorySchedulerService({
           projectIds: globalProjectIds,
           signal,
           config: {
-            backend: setting.extractionBackend,
-            model: setting.extractionModel,
-            thinkingEffort: setting.extractionThinkingEffort,
+            backend: globalModel.backend,
+            model: globalModel.model,
+            thinkingEffort: globalModel.thinkingEffort,
             trigger:
               globalTiming.lastSuccessAt !== null &&
               calendarDate(new Date(globalTiming.lastSuccessAt)) === date

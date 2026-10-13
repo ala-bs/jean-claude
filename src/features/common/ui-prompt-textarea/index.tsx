@@ -2018,6 +2018,7 @@ function ImagePreviewDialog({
       images={images.map((img) => ({
         src: `data:${img.mimeType};base64,${img.data}`,
         alt: img.filename || 'Image preview',
+        sizeBytes: img.sizeBytes,
       }))}
       initialIndex={initialIndex}
       onClose={onClose}

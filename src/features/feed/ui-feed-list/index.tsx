@@ -15,6 +15,7 @@ import {
   MessageSquare,
   Plus,
   Save,
+  Search,
   Settings2,
   Trash2,
 } from 'lucide-react';
@@ -28,6 +29,8 @@ import type React from 'react';
 
 import { Dropdown, DropdownDivider, DropdownItem } from '@/common/ui/dropdown';
 import type { FeedItem } from '@shared/feed-types';
+import type { MobilePreviewDeviceAssignment } from '@shared/mobile-simulator-types';
+import { matchesFeedSearch } from '@/lib/feed-search';
 import { Modal } from '@/common/ui/modal';
 import { openPrLinkOnModifiedClick } from '@/lib/open-pr-link';
 import { ProjectLogo } from '@/features/project/ui-project-logo';
@@ -37,6 +40,7 @@ import { useCachedPullRequest } from '@/hooks/use-pull-requests';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useFeed } from '@/hooks/use-feed';
 import { useFeedStore } from '@/stores/feed';
+import { useMobilePreviewDeviceAssignments } from '@/hooks/use-mobile-preview';
 import { useNavigationStore } from '@/stores/navigation';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useUIStore } from '@/stores/ui';
@@ -251,6 +255,7 @@ function FeedCard({
   onDragOver,
   onDropItem,
   onDrop,
+  mobileDeviceAssignments,
   ...props
 }: {
   item: FeedItem;
@@ -266,6 +271,7 @@ function FeedCard({
   onDragLeave?: () => void;
   onDropItem?: (event: React.DragEvent, id: string) => void;
   onDrop?: (e: React.DragEvent) => void;
+  mobileDeviceAssignments?: readonly MobilePreviewDeviceAssignment[];
   onDragEnd?: () => void;
 }) {
   const handleDragStart = useCallback(() => {
@@ -310,6 +316,7 @@ function FeedCard({
       currentTaskId={selection.currentTaskId}
       currentWorkItemId={selection.currentWorkItemId}
       currentPrId={selection.currentPrId}
+      mobileDeviceAssignments={mobileDeviceAssignments}
       onDragStart={onDragStartItem ? handleDragStart : undefined}
       onDragOver={onDragOverItem || onDragOver ? handleDragOver : undefined}
       onDrop={onDropItem || onDrop ? handleDrop : undefined}
@@ -320,6 +327,7 @@ function FeedCard({
 const MemoFeedCard = memo(FeedCard, (prev, next) => {
   if (
     prev.item !== next.item ||
+    prev.mobileDeviceAssignments !== next.mobileDeviceAssignments ||
     prev.isDraggable !== next.isDraggable ||
     prev.onDragStartItem !== next.onDragStartItem ||
     prev.onDragOverItem !== next.onDragOverItem ||
@@ -343,6 +351,7 @@ function StackableZone({
   selection,
   onDragStart,
   onDragEnd,
+  mobileDeviceAssignments,
   sticky,
   collapsedOverlap = 28,
 }: {
@@ -353,6 +362,7 @@ function StackableZone({
   sticky?: boolean;
   /** Pixel amount stacked cards overlap when collapsed (default 28 ≈ Tailwind mt-7). */
   collapsedOverlap?: number;
+  mobileDeviceAssignments?: readonly MobilePreviewDeviceAssignment[];
 }) {
   const [expanded, setExpanded] = useState(false);
   const collapseTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -394,6 +404,7 @@ function StackableZone({
           <MemoFeedCard
             item={item}
             selection={selection}
+            mobileDeviceAssignments={mobileDeviceAssignments}
             isSelected={isFeedItemSelected(item, selection)}
             isDraggable
             onDragStartItem={onDragStart}
@@ -1121,6 +1132,8 @@ export function FeedList() {
     filteredOutCount,
     isFetching,
   } = useFeed();
+  const { data: mobileDeviceAssignments } =
+    useMobilePreviewDeviceAssignments();
   const reorderPinned = useFeedStore((s) => s.reorderPinned);
   const pinned = useFeedStore((s) => s.pinned);
   const openOverlay = useOverlaysStore((s) => s.open);
@@ -1156,23 +1169,76 @@ export function FeedList() {
     () => new Set(pinned.map((item) => item.id)),
     [pinned],
   );
-  const hasUnpinnedItems =
-    prWorkspaceItems.length > 0 ||
-    completedPrItems.length > 0 ||
-    autoCompletingPrItems.length > 0 ||
-    actionNeededItems.length > 0 ||
-    prReviewItems.length > 0 ||
-    activeTaskItems.length > 0 ||
-    highPriorityItems.length > 0 ||
-    normalItems.length > 0 ||
-    lowPriorityItems.length > 0;
-
   const [lowPriorityExpanded, setLowPriorityExpanded] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [_dragOverId, setDragOverId] = useState<string | null>(null);
   const [dragOverPinZone, setDragOverPinZone] = useState(false);
   const [savePresetModalOpen, setSavePresetModalOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+
+  const filteredItems = useMemo(() => {
+    const filter = (items: FeedItem[]) =>
+      items.filter((item) => matchesFeedSearch(item, searchQuery));
+
+    return {
+      pinned: filter(pinnedItems),
+      prWorkspace: filter(prWorkspaceItems),
+      completedPr: filter(completedPrItems),
+      autoCompletingPr: filter(autoCompletingPrItems),
+      actionNeeded: filter(actionNeededItems),
+      prReview: filter(prReviewItems),
+      activeTasks: filter(activeTaskItems),
+      highPriority: filter(highPriorityItems),
+      normal: filter(normalItems),
+      lowPriority: filter(lowPriorityItems),
+      allVisible: allVisibleItems.filter((item) =>
+        matchesFeedSearch(item, searchQuery),
+      ),
+    };
+  }, [
+    actionNeededItems,
+    activeTaskItems,
+    allVisibleItems,
+    autoCompletingPrItems,
+    completedPrItems,
+    highPriorityItems,
+    lowPriorityItems,
+    normalItems,
+    pinnedItems,
+    prReviewItems,
+    prWorkspaceItems,
+    searchQuery,
+  ]);
+
+  const {
+    pinned: filteredPinnedItems,
+    prWorkspace: filteredPrWorkspaceItems,
+    completedPr: filteredCompletedPrItems,
+    autoCompletingPr: filteredAutoCompletingPrItems,
+    actionNeeded: filteredActionNeededItems,
+    prReview: filteredPrReviewItems,
+    activeTasks: filteredActiveTaskItems,
+    highPriority: filteredHighPriorityItems,
+    normal: filteredNormalItems,
+    lowPriority: filteredLowPriorityItems,
+    allVisible: filteredAllVisibleItems,
+  } = filteredItems;
+  const hasSearchQuery = searchQuery.trim().length > 0;
+  const filteredTotalCount = Object.values(filteredItems).reduce(
+    (count, items) => count + items.length,
+    0,
+  );
+  const hasFilteredUnpinnedItems =
+    filteredPrWorkspaceItems.length > 0 ||
+    filteredCompletedPrItems.length > 0 ||
+    filteredAutoCompletingPrItems.length > 0 ||
+    filteredActionNeededItems.length > 0 ||
+    filteredPrReviewItems.length > 0 ||
+    filteredActiveTaskItems.length > 0 ||
+    filteredHighPriorityItems.length > 0 ||
+    filteredNormalItems.length > 0 ||
+    filteredLowPriorityItems.length > 0;
 
   useEffect(() => {
     setLastLocation({ type: 'all', taskId: currentTaskId ?? null });
@@ -1295,7 +1361,7 @@ export function FeedList() {
 
   const navigateToItem = useCallback(
     (index: number) => {
-      const item = allVisibleItems[index];
+      const item = filteredAllVisibleItems[index];
       if (!item) return;
       if (item.source === 'note' && item.noteId) {
         navigate({
@@ -1323,7 +1389,7 @@ export function FeedList() {
         navigate({ to: '/all/$taskId', params: { taskId: item.taskId } });
       }
     },
-    [allVisibleItems, currentTaskId, navigate],
+    [filteredAllVisibleItems, currentTaskId, navigate],
   );
 
   const navigateToFeedItem = useCallback(
@@ -1359,29 +1425,30 @@ export function FeedList() {
 
   const navigateRelative = useCallback(
     (direction: 'prev' | 'next') => {
-      if (allVisibleItems.length === 0) return;
-      const currentIndex = allVisibleItems.findIndex((item) =>
+      if (filteredAllVisibleItems.length === 0) return;
+      const currentIndex = filteredAllVisibleItems.findIndex((item) =>
         isItemSelected(item),
       );
       let newIndex: number;
       if (currentIndex === -1) {
-        newIndex = direction === 'next' ? 0 : allVisibleItems.length - 1;
+        newIndex =
+          direction === 'next' ? 0 : filteredAllVisibleItems.length - 1;
       } else {
         newIndex =
           direction === 'next'
-            ? (currentIndex + 1) % allVisibleItems.length
-            : (currentIndex - 1 + allVisibleItems.length) %
-              allVisibleItems.length;
+            ? (currentIndex + 1) % filteredAllVisibleItems.length
+            : (currentIndex - 1 + filteredAllVisibleItems.length) %
+              filteredAllVisibleItems.length;
       }
       navigateToItem(newIndex);
     },
-    [allVisibleItems, isItemSelected, navigateToItem],
+    [filteredAllVisibleItems, isItemSelected, navigateToItem],
   );
 
   // Find the currently selected item for dismiss/low-priority shortcuts
   const currentItem = useMemo(
-    () => allVisibleItems.find((item) => isItemSelected(item)),
-    [allVisibleItems, isItemSelected],
+    () => filteredAllVisibleItems.find((item) => isItemSelected(item)),
+    [filteredAllVisibleItems, isItemSelected],
   );
 
   useEffect(() => {
@@ -1496,7 +1563,7 @@ export function FeedList() {
     },
   ]);
 
-  const totalCount =
+  const unfilteredTotalCount =
     pinnedItems.length +
     prWorkspaceItems.length +
     completedPrItems.length +
@@ -1507,6 +1574,7 @@ export function FeedList() {
     activeTaskItems.length +
     normalItems.length +
     lowPriorityItems.length;
+  const totalCount = filteredTotalCount;
 
   return (
     <div
@@ -1518,12 +1586,24 @@ export function FeedList() {
       }}
     >
       {/* Section header with + button */}
-      {(totalCount > 0 || projectOptions.length > 0) && (
+      {(unfilteredTotalCount > 0 || projectOptions.length > 0) && (
         <div className="bg-bg-0 border-glass-border sticky top-0 z-20 flex items-center justify-between border-b px-3 pb-1">
-          <span className="text-ink-3 text-[10px] font-semibold tracking-wider uppercase">
-            {pinnedItems.length > 0 ? 'Pinned' : 'Feed'}
-          </span>
+          {filteredPinnedItems.length > 0 && (
+            <span className="text-ink-3 text-[10px] font-semibold tracking-wider uppercase">
+              Pinned
+            </span>
+          )}
           <div className="flex items-center gap-1">
+            <div className="border-line-soft text-ink-2 flex h-6 min-w-0 items-center gap-1.5 rounded border px-1.5">
+              <Search className="text-ink-3 h-3 w-3 shrink-0" />
+              <input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search work items..."
+                aria-label="Search feed by work item ID or title"
+                className="min-w-0 w-28 bg-transparent text-[10px] outline-none placeholder:text-[10px] placeholder:text-[var(--color-ink-4)]"
+              />
+            </div>
             {isFetching && totalCount > 0 && (
               <Loader2
                 className="text-ink-3 h-3 w-3 animate-spin"
@@ -1676,11 +1756,21 @@ export function FeedList() {
           <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12 text-center">
             <ListTodo className="text-ink-3 h-6 w-6" />
             <span className="text-ink-2 text-sm">
-              {filteredOutCount > 0
+              {hasSearchQuery
+                ? 'No feed items match your search'
+                : filteredOutCount > 0
                 ? 'No feed items match filters'
                 : 'No active tasks or notes'}
             </span>
-            {filteredOutCount > 0 && (
+            {hasSearchQuery ? (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="text-acc-ink hover:text-acc-ink/80 text-xs font-medium transition-colors"
+              >
+                Clear search
+              </button>
+            ) : filteredOutCount > 0 ? (
               <button
                 type="button"
                 onClick={clearHiddenProjects}
@@ -1688,12 +1778,12 @@ export function FeedList() {
               >
                 Clear project filters
               </button>
-            )}
+            ) : null}
           </div>
         )}
 
       {/* Pinned zone - visible when items are pinned or when dragging */}
-      {(pinnedItems.length > 0 || draggedId) && (
+      {(filteredPinnedItems.length > 0 || draggedId) && (
         <div
           onDragOver={handlePinZoneDragOver}
           onDragLeave={handlePinZoneDragLeave}
@@ -1703,11 +1793,12 @@ export function FeedList() {
             dragOverPinZone && 'bg-acc/10',
           )}
         >
-          {pinnedItems.map((item) => (
+          {filteredPinnedItems.map((item) => (
             <MemoFeedCard
               key={item.id}
               item={item}
               selection={selection}
+              mobileDeviceAssignments={mobileDeviceAssignments}
               isSelected={isFeedItemSelected(item, selection)}
               isDraggable
               onDragStartItem={handlePinnedDragStart}
@@ -1721,14 +1812,14 @@ export function FeedList() {
       )}
 
       {/* Slightly stronger divider between pinned and rest of feed */}
-      {pinnedItems.length > 0 && hasUnpinnedItems && (
+      {filteredPinnedItems.length > 0 && hasFilteredUnpinnedItems && (
         <div className="border-acc/20 border-t-4" />
       )}
 
       {/* PR review zone - horizontal stack, priority sorted */}
-      {prReviewItems.length > 0 && (
+      {filteredPrReviewItems.length > 0 && (
         <MemoHorizontalPrReviewStack
-          items={prReviewItems}
+          items={filteredPrReviewItems}
           selection={selection}
           onOpen={navigateToFeedItem}
           onMarkLowPriority={handleMarkPrLowPriority}
@@ -1736,13 +1827,14 @@ export function FeedList() {
       )}
 
       {/* PR workspace zone - kept at the top of the vertical feed */}
-      {prWorkspaceItems.length > 0 && (
+      {filteredPrWorkspaceItems.length > 0 && (
         <div className="flex flex-col">
-          {prWorkspaceItems.map((item) => (
+          {filteredPrWorkspaceItems.map((item) => (
             <MemoFeedCard
               key={item.id}
               item={item}
               selection={selection}
+              mobileDeviceAssignments={mobileDeviceAssignments}
               isSelected={isFeedItemSelected(item, selection)}
             />
           ))}
@@ -1750,16 +1842,17 @@ export function FeedList() {
       )}
 
       {/* Completed-PR tasks - promoted right below the PR workspace zone */}
-      {completedPrItems.length > 0 && (
+      {filteredCompletedPrItems.length > 0 && (
         <div className="flex flex-col">
           <div className="text-ink-3 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wider uppercase">
             Merged
           </div>
-          {completedPrItems.map((item) => (
+          {filteredCompletedPrItems.map((item) => (
             <MemoFeedCard
               key={item.id}
               item={item}
               selection={selection}
+              mobileDeviceAssignments={mobileDeviceAssignments}
               isSelected={isFeedItemSelected(item, selection)}
               isDraggable
               onDragStartItem={setDraggedId}
@@ -1770,16 +1863,17 @@ export function FeedList() {
       )}
 
       {/* PRs queued/armed for auto-complete - pinned next to merged ones */}
-      {autoCompletingPrItems.length > 0 && (
+      {filteredAutoCompletingPrItems.length > 0 && (
         <div className="flex flex-col">
           <div className="text-ink-3 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wider uppercase">
             Auto-completing
           </div>
-          {autoCompletingPrItems.map((item) => (
+          {filteredAutoCompletingPrItems.map((item) => (
             <MemoFeedCard
               key={item.id}
               item={item}
               selection={selection}
+              mobileDeviceAssignments={mobileDeviceAssignments}
               isSelected={isFeedItemSelected(item, selection)}
               isDraggable
               onDragStartItem={setDraggedId}
@@ -1826,10 +1920,11 @@ export function FeedList() {
       )}
 
       {/* Action needed zone - permissions, questions, errors (sticky + stacked) */}
-      {actionNeededItems.length > 0 && (
+      {filteredActionNeededItems.length > 0 && (
         <StackableZone
-          items={actionNeededItems}
+          items={filteredActionNeededItems}
           selection={selection}
+          mobileDeviceAssignments={mobileDeviceAssignments}
           onDragStart={setDraggedId}
           onDragEnd={handleDragEnd}
           sticky
@@ -1838,23 +1933,25 @@ export function FeedList() {
       )}
 
       {/* Active tasks zone - stacked, spreads on hover */}
-      {activeTaskItems.length > 0 && (
+      {filteredActiveTaskItems.length > 0 && (
         <StackableZone
-          items={activeTaskItems}
+          items={filteredActiveTaskItems}
           selection={selection}
+          mobileDeviceAssignments={mobileDeviceAssignments}
           onDragStart={setDraggedId}
           onDragEnd={handleDragEnd}
         />
       )}
 
       {/* High priority zone */}
-      {highPriorityItems.length > 0 && (
+      {filteredHighPriorityItems.length > 0 && (
         <div className="flex flex-col">
-          {highPriorityItems.map((item) => (
+          {filteredHighPriorityItems.map((item) => (
             <MemoFeedCard
               key={item.id}
               item={item}
               selection={selection}
+              mobileDeviceAssignments={mobileDeviceAssignments}
               isSelected={isFeedItemSelected(item, selection)}
               isDraggable
               onDragStartItem={setDraggedId}
@@ -1865,18 +1962,19 @@ export function FeedList() {
       )}
 
       {/* Divider between active tasks/high-priority and auto-sorted */}
-      {(activeTaskItems.length > 0 || highPriorityItems.length > 0) &&
-        normalItems.length > 0 && (
+      {(filteredActiveTaskItems.length > 0 || filteredHighPriorityItems.length > 0) &&
+        filteredNormalItems.length > 0 && (
           <div className="border-line-soft my-1 border-t border-dashed" />
         )}
 
       {/* Auto-sorted zone */}
       <div className="flex flex-col">
-        {normalItems.map((item) => (
+        {filteredNormalItems.map((item) => (
           <MemoFeedCard
             key={item.id}
             item={item}
             selection={selection}
+            mobileDeviceAssignments={mobileDeviceAssignments}
             isSelected={isFeedItemSelected(item, selection)}
             isDraggable
             onDragStartItem={setDraggedId}
@@ -1886,7 +1984,7 @@ export function FeedList() {
       </div>
 
       {/* Low priority collapsed section */}
-      {lowPriorityItems.length > 0 && (
+      {filteredLowPriorityItems.length > 0 && (
         <div className="mt-2">
           <button
             onClick={() => setLowPriorityExpanded((prev) => !prev)}
@@ -1897,15 +1995,16 @@ export function FeedList() {
             ) : (
               <ChevronRight size={12} />
             )}
-            {lowPriorityItems.length} low priority
+            {filteredLowPriorityItems.length} low priority
           </button>
-          {lowPriorityExpanded && (
+          {(lowPriorityExpanded || hasSearchQuery) && (
             <div className="flex flex-col pt-1 opacity-60">
-              {lowPriorityItems.map((item) => (
+              {filteredLowPriorityItems.map((item) => (
                 <MemoFeedCard
                   key={item.id}
                   item={item}
                   selection={selection}
+                  mobileDeviceAssignments={mobileDeviceAssignments}
                   isSelected={isFeedItemSelected(item, selection)}
                 />
               ))}

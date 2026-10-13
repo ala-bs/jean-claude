@@ -1,7 +1,7 @@
 import { dirname, join, relative } from 'path';
 import { mkdir, readFile, stat, writeFile } from 'fs/promises';
 import { createServer } from 'net';
-import { exec } from 'child_process';
+import { exec, execFileSync } from 'child_process';
 import { promisify } from 'util';
 
 
@@ -47,6 +47,7 @@ const execAsync = promisify(exec);
 // still rejects, which is what unblocks the caller.
 const PORT_PROBE_TIMEOUT_MS = 3000;
 const PORT_PROBE_SLOW_WARN_MS = 500;
+const PROCESS_TREE_PROBE_TIMEOUT_MS = 1000;
 
 /**
  * True when a probe was aborted by our own timeout rather than exiting with a
@@ -87,8 +88,8 @@ const RUN_COMMAND_ENV_SOURCE_KEYS = new Set(
 type ProcessSignal = 'SIGINT' | 'SIGTERM' | 'SIGKILL';
 
 /**
- * How long a process gets to shut down cleanly after SIGTERM before we escalate
- * to SIGKILL. Dev servers and build tools often need a couple of seconds to
+ * How long a process gets to shut down cleanly after a graceful signal before
+ * we escalate. Dev servers and build tools often need a couple of seconds to
  * flush state and tear down child processes.
  */
 const SIGTERM_GRACE_MS = 5000;
@@ -269,34 +270,161 @@ function dedupeSuggestionCommands(
  * This is needed because complex apps (e.g. Electron) spawn child processes
  * that may escape the process group and survive a group kill.
  */
-async function getDescendantPids(parentPid: number): Promise<number[]> {
+interface DescendantScan {
+  pids: number[];
+  complete: boolean;
+}
+
+interface ProcessSnapshotEntry {
+  pid: number;
+  ppid: number;
+  pgid: number;
+}
+
+interface ProcessCleanupSnapshot {
+  pids: number[];
+  processGroupId: number | null;
+  complete: boolean;
+}
+
+/**
+ * Takes one bounded, pre-signal snapshot of the POSIX process table. Unlike
+ * `pgrep -P`, this preserves the relationship before the PTY shell exits and
+ * also captures children that moved into a different process group.
+ */
+function getProcessCleanupSnapshot(pid: number): ProcessCleanupSnapshot {
+  if (process.platform === 'win32') {
+    return { pids: [], processGroupId: null, complete: true };
+  }
+
+  try {
+    const output = String(
+      execFileSync('ps', ['-axo', 'pid=,ppid=,pgid='], {
+        encoding: 'utf8',
+        timeout: PROCESS_TREE_PROBE_TIMEOUT_MS,
+      }),
+    );
+    let hasMalformedRows = false;
+    const entries = output
+      .split('\n')
+      .map((line): ProcessSnapshotEntry | null => {
+        if (line.trim() === '') return null;
+        const [rawPid, rawPpid, rawPgid] = line.trim().split(/\s+/);
+        const entry = {
+          pid: Number(rawPid),
+          ppid: Number(rawPpid),
+          pgid: Number(rawPgid),
+        };
+        const valid =
+          Number.isInteger(entry.pid) &&
+          entry.pid > 0 &&
+          Number.isInteger(entry.ppid) &&
+          entry.ppid >= 0 &&
+          Number.isInteger(entry.pgid) &&
+          entry.pgid > 0;
+        if (!valid) hasMalformedRows = true;
+        return valid ? entry : null;
+      })
+      .filter((entry): entry is ProcessSnapshotEntry => entry !== null);
+    const byPid = new Map(entries.map((entry) => [entry.pid, entry]));
+    const root = byPid.get(pid);
+    if (!root) {
+      dbg.runCommand(
+        'Pre-signal process snapshot did not contain PTY process %d',
+        pid,
+      );
+      return { pids: [], processGroupId: null, complete: false };
+    }
+
+    const childrenByParent = new Map<number, number[]>();
+    for (const entry of entries) {
+      const children = childrenByParent.get(entry.ppid) ?? [];
+      children.push(entry.pid);
+      childrenByParent.set(entry.ppid, children);
+    }
+
+    const pids = new Set<number>();
+    const pending = [...(childrenByParent.get(pid) ?? [])];
+    while (pending.length > 0) {
+      const childPid = pending.pop()!;
+      if (pids.has(childPid)) continue;
+      pids.add(childPid);
+      pending.push(...(childrenByParent.get(childPid) ?? []));
+    }
+    for (const entry of entries) {
+      if (entry.pgid === root.pgid && entry.pid !== pid) pids.add(entry.pid);
+    }
+
+    return {
+      pids: [...pids],
+      processGroupId: root.pgid,
+      complete: !hasMalformedRows,
+    };
+  } catch (error) {
+    dbg.runCommand(
+      'Pre-signal process snapshot failed for PTY process %d: %O',
+      pid,
+      error,
+    );
+    return { pids: [], processGroupId: null, complete: false };
+  }
+}
+
+async function getDescendantPids(
+  parentPid: number,
+  deadline = Number.POSITIVE_INFINITY,
+): Promise<DescendantScan> {
+  if (Date.now() >= deadline) return { pids: [], complete: false };
+
+  const timeout = Number.isFinite(deadline)
+    ? Math.max(1, deadline - Date.now())
+    : undefined;
+  const execOptions = timeout
+    ? { timeout, killSignal: 'SIGKILL' as const }
+    : undefined;
+
   if (process.platform === 'win32') {
     try {
       const { stdout } = await execAsync(
         `wmic process where (ParentProcessId=${parentPid}) get ProcessId`,
+        execOptions,
       );
-      const childPids = stdout
+      const childPids = String(stdout)
         .split('\n')
         .map((line) => line.trim())
         .filter((line) => /^\d+$/.test(line))
         .map(Number);
 
       const allDescendants: number[] = [];
+      let complete = true;
       for (const childPid of childPids) {
+        if (Date.now() >= deadline) {
+          complete = false;
+          break;
+        }
         allDescendants.push(childPid);
-        const grandchildren = await getDescendantPids(childPid);
-        allDescendants.push(...grandchildren);
+        const grandchildren = await getDescendantPids(childPid, deadline);
+        allDescendants.push(...grandchildren.pids);
+        complete &&= grandchildren.complete;
       }
-      return allDescendants;
-    } catch {
-      return [];
+      return { pids: allDescendants, complete };
+    } catch (error) {
+      dbg.runCommand(
+        'Descendant scan failed for process %d: %O',
+        parentPid,
+        error,
+      );
+      return { pids: [], complete: false };
     }
   }
 
   // macOS / Linux: use pgrep -P
   try {
-    const { stdout } = await execAsync(`pgrep -P ${parentPid}`);
-    const childPids = stdout
+    const { stdout } = await execAsync(
+      `pgrep -P ${parentPid}`,
+      execOptions,
+    );
+    const childPids = String(stdout)
       .trim()
       .split('\n')
       .filter(Boolean)
@@ -304,15 +432,34 @@ async function getDescendantPids(parentPid: number): Promise<number[]> {
       .filter(Number.isFinite);
 
     const allDescendants: number[] = [];
+    let complete = true;
     for (const childPid of childPids) {
+      if (Date.now() >= deadline) {
+        complete = false;
+        break;
+      }
       allDescendants.push(childPid);
-      const grandchildren = await getDescendantPids(childPid);
-      allDescendants.push(...grandchildren);
+      const grandchildren = await getDescendantPids(childPid, deadline);
+      allDescendants.push(...grandchildren.pids);
+      complete &&= grandchildren.complete;
     }
-    return allDescendants;
-  } catch {
-    // pgrep returns exit code 1 when no processes found
-    return [];
+    return { pids: allDescendants, complete };
+  } catch (error) {
+    // pgrep returns exit code 1 when no processes are found.
+    if (
+      (typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        (error.code === 1 || error.code === '1'))
+    ) {
+      return { pids: [], complete: true };
+    }
+    dbg.runCommand(
+      'Descendant scan failed for process %d: %O',
+      parentPid,
+      error,
+    );
+    return { pids: [], complete: false };
   }
 }
 
@@ -327,7 +474,7 @@ async function killProcessTree(
   const descendants = await getDescendantPids(pid);
 
   // Kill descendants in reverse order (deepest children first)
-  for (const descendantPid of descendants.reverse()) {
+  for (const descendantPid of descendants.pids.reverse()) {
     try {
       process.kill(descendantPid, signal);
     } catch {
@@ -350,15 +497,43 @@ function getErrnoCode(error: unknown): string | undefined {
   return typeof error.code === 'string' ? error.code : undefined;
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = getErrnoCode(error);
+    if (code === 'ESRCH') return false;
+    if (code === 'EPERM') return true;
+    throw error;
+  }
+}
+
+async function waitForProcessesExit(
+  pids: number[],
+  timeoutMs: number,
+): Promise<number[]> {
+  const deadline = Date.now() + timeoutMs;
+  let remaining = pids.filter(isProcessAlive);
+
+  while (remaining.length > 0 && Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    remaining = remaining.filter(isProcessAlive);
+  }
+
+  return remaining;
+}
+
 export function signalProcessGroupOrProcess(
   pid: number,
   signal: ProcessSignal,
+  processGroupId = pid,
 ): void {
   if (pid <= 0) return;
 
   if (process.platform !== 'win32') {
     try {
-      process.kill(-pid, signal);
+      process.kill(-processGroupId, signal);
       return;
     } catch (error) {
       if (getErrnoCode(error) !== 'ESRCH') throw error;
@@ -395,6 +570,11 @@ interface TrackedProcess {
   pendingLogBatches: Record<RunCommandLogStream, string>;
   logFlushTimer: ReturnType<typeof setTimeout> | null;
   logGeneration: number;
+  /**
+   * Whether the last emitted stdout chunk ended on a line break. Synthetic
+   * markers use this to avoid gluing themselves onto a partial line.
+   */
+  lastLogEndedWithNewline: boolean;
   /** Set to true once the 'exit' event fires */
   exited: boolean;
   /** Resolves when the process exits */
@@ -471,6 +651,30 @@ interface GroupRunCancellation {
   cancelled: boolean;
   cancel: () => void;
   cancelled$: Promise<void>;
+}
+
+/**
+ * Bracketed marker written into the log when a process ends, so the run always
+ * leaves something readable behind even when the command printed nothing.
+ */
+export function formatProcessExitLogLine({
+  exitCode,
+  signal,
+}: {
+  exitCode: number;
+  signal?: number;
+}): string {
+  if (signal) {
+    return `[process terminated by signal ${signal}]`;
+  }
+  return `[process exited with code ${exitCode}]`;
+}
+
+/** "[port 3000 is already in use - not started]" */
+export function formatPortsInUseLogLine(ports: number[]): string {
+  const label = ports.length > 1 ? 'ports' : 'port';
+  const verb = ports.length > 1 ? 'are' : 'is';
+  return `[${label} ${ports.join(', ')} ${verb} already in use - not started]`;
 }
 
 export class RunCommandService {
@@ -744,6 +948,9 @@ export class RunCommandService {
     chunk: string;
   }): void {
     tracked.pendingLogBatches[stream] += chunk;
+    if (stream === 'stdout' && chunk.length > 0) {
+      tracked.lastLogEndedWithNewline = chunk.endsWith('\n');
+    }
 
     if (
       tracked.pendingLogBatches[stream].length >= RUN_COMMAND_LOG_FLUSH_BYTES
@@ -757,6 +964,49 @@ export class RunCommandService {
         this.flushLogBatches({ taskId, tracked });
       }, RUN_COMMAND_LOG_FLUSH_INTERVAL_MS);
     }
+  }
+
+  /**
+   * Emits one bracketed, app-generated line into the command's normal log
+   * stream. This is what keeps a log (and therefore its tab) non-empty when a
+   * command fails without printing anything, or is refused before it ever
+   * spawns.
+   *
+   * It must carry the *current* log generation, otherwise `resetLogs` (which
+   * bumps the generation, and always runs just before a start) makes the
+   * renderer discard it on arrival.
+   */
+  private appendSyntheticLogLine({
+    taskId,
+    runCommandId,
+    text,
+  }: {
+    taskId: string;
+    runCommandId: string;
+    text: string;
+  }): void {
+    const tracked = this.runningProcesses.get(taskId)?.get(runCommandId);
+
+    // The PTY merges stderr into stdout, so synthetic lines use 'stdout' too.
+    if (tracked) {
+      const prefix = tracked.lastLogEndedWithNewline ? '' : '\n';
+      this.appendLogChunk({
+        taskId,
+        tracked,
+        stream: 'stdout',
+        chunk: `${prefix}${text}\n`,
+      });
+      this.flushLogBatches({ taskId, tracked });
+      return;
+    }
+
+    this.notifyLog(
+      taskId,
+      runCommandId,
+      'stdout',
+      `${text}\n`,
+      this.getLogGeneration(taskId, runCommandId),
+    );
   }
 
   private async getPortsInUse(
@@ -1043,6 +1293,7 @@ export class RunCommandService {
       pendingLogBatches: { stdout: '', stderr: '' },
       logFlushTimer: null,
       logGeneration: this.getLogGeneration(taskId, command.id),
+      lastLogEndedWithNewline: true,
       exited: false,
       exitPromise,
     };
@@ -1096,6 +1347,13 @@ export class RunCommandService {
         signal,
       );
       this.flushLogBatches({ taskId, tracked: trackedProcess });
+      // A command that fails without printing anything would otherwise leave an
+      // empty log, and an empty log means no tab to read the failure in.
+      this.appendSyntheticLogLine({
+        taskId,
+        runCommandId: trackedProcess.commandId,
+        text: formatProcessExitLogLine({ exitCode, signal }),
+      });
       trackedProcess.exited = true;
       trackedProcess.status = exitCode === 0 ? 'stopped' : 'errored';
       exitResolve!({ exitCode, signal });
@@ -1307,17 +1565,32 @@ export class RunCommandService {
         runCommandId,
         projectId,
       );
+      this.appendSyntheticLogLine({
+        taskId,
+        runCommandId,
+        text: '[command not found in this project - it may have been deleted]',
+      });
       return this.getRunStatus(taskId);
     }
     // A renderer holding a stale command cache can still ask for a command that
     // has since been hidden, so visibility is enforced here too.
     if (command.isHidden) {
       dbg.runCommand('Command %s is hidden, refusing to start', runCommandId);
+      this.appendSyntheticLogLine({
+        taskId,
+        runCommandId,
+        text: `[command "${command.name ?? runCommandId}" is hidden - not started]`,
+      });
       return this.getRunStatus(taskId);
     }
 
     const didStop = await this.stopCommandWithoutLock({ taskId, runCommandId });
     if (!didStop) {
+      this.appendSyntheticLogLine({
+        taskId,
+        runCommandId,
+        text: '[could not stop the previous instance of this command - not restarted]',
+      });
       return this.getRunStatus(taskId);
     }
     await options.afterStop?.();
@@ -1328,6 +1601,11 @@ export class RunCommandService {
 
     if (blockingPortsInUse.length > 0) {
       dbg.runCommand('Ports in use, cannot start: %o', blockingPortsInUse);
+      this.appendSyntheticLogLine({
+        taskId,
+        runCommandId,
+        text: formatPortsInUseLogLine(blockingPortsInUse.map((p) => p.port)),
+      });
       return {
         type: 'PortsInUseError',
         message: `Ports in use: ${blockingPortsInUse.map((p) => p.port).join(', ')}`,
@@ -1468,6 +1746,16 @@ export class RunCommandService {
               'All commands in group are hidden, refusing to start: %o',
               runCommandIds,
             );
+            // The renderer resets every member's log right before starting a
+            // group, so returning silently here would leave every member empty
+            // (no line -> no tab -> the group looks like it did nothing).
+            for (const command of commands as ProjectCommand[]) {
+              this.appendSyntheticLogLine({
+                taskId,
+                runCommandId: command.id,
+                text: `[command "${command.name ?? command.id}" is hidden - not started]`,
+              });
+            }
             return this.getRunStatus(taskId);
           }
           return this.startGroupWithoutLock({
@@ -1546,6 +1834,16 @@ export class RunCommandService {
       ),
     );
     if (stopResults.some((didStop) => !didStop)) {
+      // Same reason as the hidden case: the member's log was just reset, so it
+      // needs a line or its tab never appears.
+      for (const [index, didStop] of stopResults.entries()) {
+        if (didStop) continue;
+        this.appendSyntheticLogLine({
+          taskId,
+          runCommandId: validCommands[index].id,
+          text: '[could not stop the previous instance of this command - not restarted]',
+        });
+      }
       const status = this.getRunStatus(taskId);
       onStarted(status);
       return status;
@@ -1559,6 +1857,19 @@ export class RunCommandService {
     );
     if (blockingPortsInUse.length > 0) {
       dbg.runCommand('Group ports in use, cannot start: %o', blockingPortsInUse);
+      const blockedPortsByCommandId = new Map<string, number[]>();
+      for (const portInUse of blockingPortsInUse) {
+        const ports = blockedPortsByCommandId.get(portInUse.commandId) ?? [];
+        ports.push(portInUse.port);
+        blockedPortsByCommandId.set(portInUse.commandId, ports);
+      }
+      for (const [commandId, ports] of blockedPortsByCommandId) {
+        this.appendSyntheticLogLine({
+          taskId,
+          runCommandId: commandId,
+          text: formatPortsInUseLogLine(ports),
+        });
+      }
       const portsError: PortsInUseErrorData = {
         type: 'PortsInUseError',
         message: `Ports in use: ${blockingPortsInUse.map((p) => p.port).join(', ')}`,
@@ -1778,13 +2089,27 @@ export class RunCommandService {
             taskId,
             runCommandId,
           });
-          if (!didStop) return this.getRunStatus(taskId);
+          if (!didStop) {
+            this.appendSyntheticLogLine({
+              taskId,
+              runCommandId,
+              text: '[could not stop the previous instance of this command - not restarted]',
+            });
+            return this.getRunStatus(taskId);
+          }
 
           const portsInUse = await this.getPortsInUse([adHocCommand]);
           const blockingPortsInUse = this.getBlockingPortsInUse(portsInUse, [
             adHocCommand,
           ]);
           if (blockingPortsInUse.length > 0) {
+            this.appendSyntheticLogLine({
+              taskId,
+              runCommandId,
+              text: formatPortsInUseLogLine(
+                blockingPortsInUse.map((p) => p.port),
+              ),
+            });
             return {
               type: 'PortsInUseError',
               message: `Ports in use: ${blockingPortsInUse.map((p) => p.port).join(', ')}`,
@@ -1891,6 +2216,7 @@ export class RunCommandService {
       tracked.logFlushTimer = null;
     }
     tracked.pendingLogBatches = { stdout: '', stderr: '' };
+    tracked.lastLogEndedWithNewline = true;
     tracked.logGeneration = nextGeneration;
     return nextGeneration;
   }
@@ -1942,17 +2268,56 @@ export class RunCommandService {
       let exited = false;
       const pid = tracked.pid;
 
-      // Collect descendant PIDs before killing, since the tree may become
-      // partially orphaned after the signal
-      const descendantPids = await getDescendantPids(pid);
+      // Capture the process tree before signaling. Once the PTY shell exits,
+      // its children can be reparented and a post-signal descendant scan can
+      // falsely report an empty tree while pnpm/node is still running.
+      const preSignalSnapshot = getProcessCleanupSnapshot(pid);
+      dbg.runCommand(
+        'Pre-signal snapshot for PTY process %d found group %s and %d process(es); complete=%s',
+        pid,
+        preSignalSnapshot.processGroupId ?? 'unknown',
+        preSignalSnapshot.pids.length,
+        preSignalSnapshot.complete,
+      );
+
+      // Keep the asynchronous scan as a fallback when the synchronous POSIX
+      // snapshot is unavailable, and retain it on Windows where ps is not
+      // available. It is intentionally not used as the primary POSIX scan.
+      const descendantScanPromises =
+        process.platform === 'win32' || !preSignalSnapshot.complete
+          ? [
+              getDescendantPids(
+                pid,
+                Date.now() + PROCESS_TREE_PROBE_TIMEOUT_MS,
+              ),
+            ]
+          : [];
 
       try {
         dbg.runCommand(
-          'Sending SIGTERM to PTY process %d (%s)',
+          'Sending SIGINT to PTY process %d (%s)',
           pid,
           tracked.command,
         );
-        signalProcessGroupOrProcess(pid, 'SIGTERM');
+        signalProcessGroupOrProcess(
+          pid,
+          'SIGINT',
+          preSignalSnapshot.processGroupId ?? pid,
+        );
+        dbg.runCommand(
+          'SIGINT sent to PTY process group %d',
+          preSignalSnapshot.processGroupId ?? pid,
+        );
+        // A command can create an escaped helper in its signal handler. Scan
+        // again while the PTY may still exist so late helpers are included in
+        // the cleanup set; the pre-signal snapshot remains the race-resistant
+        // baseline for children that disappear with the shell.
+        descendantScanPromises.push(
+          getDescendantPids(
+            pid,
+            Date.now() + PROCESS_TREE_PROBE_TIMEOUT_MS,
+          ),
+        );
         exited = await this.waitForExit({
           tracked,
           timeoutMs: SIGTERM_GRACE_MS,
@@ -1960,10 +2325,30 @@ export class RunCommandService {
 
         if (!exited) {
           dbg.runCommand(
+            'SIGINT timeout for PTY process %d, sending SIGTERM',
+            pid,
+          );
+          signalProcessGroupOrProcess(
+            pid,
+            'SIGTERM',
+            preSignalSnapshot.processGroupId ?? pid,
+          );
+          exited = await this.waitForExit({
+            tracked,
+            timeoutMs: SIGTERM_GRACE_MS,
+          });
+        }
+
+        if (!exited) {
+          dbg.runCommand(
             'SIGTERM timeout for PTY process %d, sending SIGKILL',
             pid,
           );
-          signalProcessGroupOrProcess(pid, 'SIGKILL');
+          signalProcessGroupOrProcess(
+            pid,
+            'SIGKILL',
+            preSignalSnapshot.processGroupId ?? pid,
+          );
           exited = await this.waitForExit({ tracked, timeoutMs: 1500 });
         }
       } catch (error) {
@@ -1972,24 +2357,102 @@ export class RunCommandService {
         exited = true;
       }
 
-      // Kill any remaining descendant processes that survived.
-      if (descendantPids.length > 0) {
+      const descendantScans = await Promise.all(descendantScanPromises);
+      const descendantPids = [
+        ...new Set([
+          ...preSignalSnapshot.pids,
+          ...descendantScans.flatMap((scan) => scan.pids),
+        ]),
+      ];
+      const descendantScanComplete =
+        preSignalSnapshot.complete &&
+        descendantScans.every((scan) => scan.complete);
+      dbg.runCommand(
+        'Descendant scan for PTY process %d found %d process(es); complete=%s',
+        pid,
+        descendantPids.length,
+        descendantScanComplete,
+      );
+
+      // The PTY shell can exit before its children finish handling SIGINT.
+      // Give the descendants their own grace period before escalating; waiting
+      // only on the PTY would otherwise turn every clean child shutdown into
+      // an immediate SIGKILL.
+      const remainingDescendantPids = await waitForProcessesExit(
+        descendantPids,
+        SIGTERM_GRACE_MS,
+      );
+      if (remainingDescendantPids.length > 0) {
         dbg.runCommand(
-          'Killing %d remaining descendant processes of %d',
-          descendantPids.length,
+          'Descendants of PTY process %d still running after SIGINT grace; sending SIGTERM to %d process(es)',
           pid,
+          remainingDescendantPids.length,
         );
-        for (const descendantPid of descendantPids.reverse()) {
+        for (const descendantPid of remainingDescendantPids) {
           try {
-            process.kill(descendantPid, 'SIGKILL');
+            process.kill(descendantPid, 'SIGTERM');
           } catch (error) {
             if (getErrnoCode(error) !== 'ESRCH') throw error;
           }
         }
 
-        if (!exited) {
-          exited = await this.waitForExit({ tracked, timeoutMs: 1500 });
+        const termRemainingDescendantPids = await waitForProcessesExit(
+          remainingDescendantPids,
+          SIGTERM_GRACE_MS,
+        );
+        if (termRemainingDescendantPids.length === 0) {
+          dbg.runCommand(
+            'All descendants of PTY process %d exited after SIGTERM',
+            pid,
+          );
         }
+
+        const pidsToKill = termRemainingDescendantPids;
+        if (pidsToKill.length === 0) {
+          if (!exited) {
+            exited = await this.waitForExit({ tracked, timeoutMs: 1500 });
+          }
+          if (!exited) {
+            dbg.runCommand(
+              'Process %d did not exit; keeping tracked as running',
+              pid,
+            );
+            this.notifyStatusChange(taskId);
+            return false;
+          }
+        } else {
+          dbg.runCommand(
+            'Descendants of PTY process %d still running after SIGTERM grace; sending SIGKILL to %d process(es)',
+            pid,
+            pidsToKill.length,
+          );
+          for (const descendantPid of pidsToKill.reverse()) {
+            try {
+              process.kill(descendantPid, 'SIGKILL');
+            } catch (error) {
+              if (getErrnoCode(error) !== 'ESRCH') throw error;
+            }
+          }
+
+          dbg.runCommand(
+            'Killed %d remaining descendant processes of %d',
+            pidsToKill.length,
+            pid,
+          );
+
+          if (!exited) {
+            exited = await this.waitForExit({ tracked, timeoutMs: 1500 });
+          }
+        }
+      }
+
+      if (!descendantScanComplete) {
+        dbg.runCommand(
+          'Could not verify all descendants of PTY process %d; keeping command tracked',
+          pid,
+        );
+        this.notifyStatusChange(taskId);
+        return false;
       }
 
       if (!exited) {

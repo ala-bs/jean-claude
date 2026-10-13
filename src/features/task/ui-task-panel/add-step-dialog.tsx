@@ -60,7 +60,6 @@ import {
 } from '@/features/common/ui-review-pills';
 import { Select, type SelectOption } from '@/common/ui/select';
 import {
-  useBackendDefaultModelsSetting,
   useBackendsSetting,
   usePromptSnippetsSetting,
 } from '@/hooks/use-settings';
@@ -73,17 +72,18 @@ import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
 import { getDefaultInteractionMode } from '@/lib/default-interaction-mode';
-import { getDefaultModelForBackend } from '@/lib/default-models';
 import { IconButton } from '@/common/ui/icon-button';
 import { Input } from '@/common/ui/input';
 import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
+import { ModelProfileSwitcher } from '@/features/agent/ui-model-profile-switcher';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import { Textarea } from '@/common/ui/textarea';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useRelatedTestCasesForWorkItems } from '@/hooks/use-work-items';
+import { useResolvedModelForRole } from '@/hooks/use-model-profiles';
 import { useSkills } from '@/hooks/use-skills';
 import { useTask } from '@/hooks/use-tasks';
 import { useWorkItemsByIds } from '@/hooks/use-work-items';
@@ -474,8 +474,13 @@ export function AddStepDialog({
   }, []);
 
   const { data: backendsSetting } = useBackendsSetting();
-  const { data: backendDefaultModelsSetting } =
-    useBackendDefaultModelsSetting();
+  // Defaults for any backend the user picks by hand come from the resolver
+  // (active profile / project policy), never from the legacy per-backend
+  // default-model setting.
+  const { data: resolvedAgentModel } = useResolvedModelForRole(
+    'agent',
+    projectId ?? null,
+  );
   const enabledBackends =
     backendsSetting?.enabledBackends ??
     ([defaultBackend] as AgentBackendType[]);
@@ -989,12 +994,10 @@ export function AddStepDialog({
                                 ? {
                                     ...r,
                                     backend: value as AgentBackendType,
-                                    model: getDefaultModelForBackend({
-                                      backend: value as AgentBackendType,
-                                      project: stepProject,
-                                      backendDefaultModels:
-                                        backendDefaultModelsSetting,
-                                    }),
+                                    model:
+                                      resolvedAgentModel?.backend === value
+                                        ? resolvedAgentModel.model
+                                        : 'default',
                                   }
                                 : r,
                             ),
@@ -1064,8 +1067,16 @@ export function AddStepDialog({
               side="top"
               layer={layer}
             />
-            <BackendModelPresetPicker
-              backend={backend}
+            {/* Design §5: profiles first, raw pickers behind
+                "Override this step only…". */}
+            <ModelProfileSwitcher
+              projectId={projectId}
+              side="top"
+              overrideContent={
+                <div className="flex flex-wrap items-center gap-2">
+                  <BackendModelPresetPicker
+                    projectId={projectId}
+                    backend={backend}
               model={model}
               selectedPresetId={backendModelPresetId}
               enabledBackends={enabledBackends}
@@ -1089,22 +1100,25 @@ export function AddStepDialog({
                     effort: selection.thinkingEffort ?? 'default',
                     capabilities: nextCapabilities,
                   }),
-                );
-              }}
+                      );
+                    }}
+                  />
+                  {!backendModelPresetId && (
+                    <ThinkingSelector
+                      value={normalizedThinkingEffort}
+                      onChange={(nextThinkingEffort) => {
+                        markUserTouchedSelection();
+                        setThinkingEffort(nextThinkingEffort);
+                      }}
+                      options={thinkingOptions}
+                      disabled={thinkingOptions.length <= 1}
+                      side="top"
+                      layer={layer}
+                    />
+                  )}
+                </div>
+              }
             />
-            {!backendModelPresetId && (
-              <ThinkingSelector
-                value={normalizedThinkingEffort}
-                onChange={(nextThinkingEffort) => {
-                  markUserTouchedSelection();
-                  setThinkingEffort(nextThinkingEffort);
-                }}
-                options={thinkingOptions}
-                disabled={thinkingOptions.length <= 1}
-                side="top"
-                layer={layer}
-              />
-            )}
             {presetType !== 'review-changes' && (
               <RateLimitSwapPreview
                 requestedBackend={backend}

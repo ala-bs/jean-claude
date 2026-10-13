@@ -49,6 +49,7 @@ import {
   DropdownItem,
 } from '@/common/ui/dropdown';
 import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
+import type { WorkItemStatusChipMatch } from '@shared/work-item-status-chip-types';
 import {
   getPrStateColor,
   getPrStatusLabel,
@@ -65,6 +66,7 @@ import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-
 import { FeedItemDeviceBadge } from './feed-item-device-badge';
 import { formatRelativeTime } from '@/lib/time';
 import { getRunCommandDisplayName } from '@shared/run-command-types';
+import type { MobilePreviewDeviceAssignment } from '@shared/mobile-simulator-types';
 import { PrAutoComplete } from '@/features/pull-request/ui-pr-auto-complete';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
 import { useFeedStore } from '@/stores/feed';
@@ -115,6 +117,42 @@ function FeedProjectLabel({ item }: { item: FeedItem }) {
     <span className="min-w-0">
       <span className="text-ink-3 text-[11px]">{project.name}</span>
     </span>
+  );
+}
+
+const STATUS_CHIP_CLASSES: Record<WorkItemStatusChipMatch['tone'], string> = {
+  warning: 'border-status-run/30 bg-status-run/10 text-status-run',
+  danger: 'border-status-fail/30 bg-status-fail/10 text-status-fail',
+  info: 'border-status-azure/30 bg-status-azure/10 text-status-azure',
+  success: 'border-status-done/30 bg-status-done/10 text-status-done',
+  neutral: 'border-glass-border bg-glass-medium text-ink-2',
+};
+
+function WorkItemStatusChips({
+  matches,
+}: {
+  matches?: WorkItemStatusChipMatch[];
+}) {
+  if (!matches?.length) return null;
+  return (
+    <>
+      {matches.map((match) => {
+        const ids = match.workItemIds.map((id) => `#${id}`).join(', ');
+        return (
+          <span
+            key={match.ruleId}
+            aria-label={match.label}
+            title={`${match.label} · matching work items: ${ids}`}
+            className={clsx(
+              'mt-px shrink-0 rounded border px-1 py-0.5 text-[10px] font-medium leading-none',
+              STATUS_CHIP_CLASSES[match.tone],
+            )}
+          >
+            {match.label}
+          </span>
+        );
+      })}
+    </>
   );
 }
 
@@ -466,6 +504,7 @@ export function FeedItemCard({
   onDragLeave,
   onDrop,
   onDragEnd,
+  mobileDeviceAssignments,
 }: {
   item: FeedItem;
   isSelected?: boolean;
@@ -479,6 +518,7 @@ export function FeedItemCard({
   onDragLeave?: () => void;
   onDrop?: (e: React.DragEvent) => void;
   onDragEnd?: () => void;
+  mobileDeviceAssignments?: readonly MobilePreviewDeviceAssignment[];
 }) {
   const navigate = useNavigate();
   const pin = useFeedStore((s) => s.pin);
@@ -496,6 +536,10 @@ export function FeedItemCard({
     [runCommandStatus],
   );
   const hasRunningCommand = runningCommands.length > 0;
+  const mobileBuildStatus = useTaskMessagesStore((s) =>
+    item.taskId ? s.mobileBuildStatuses?.[item.taskId] : undefined,
+  );
+  const isMobileBuildRunning = mobileBuildStatus?.status === 'running';
   const runningBgJobs = useRunningBackgroundJobsForTask(item.taskId ?? null);
   const { data: cachedPr } = useCachedPullRequest(
     item.projectId,
@@ -768,13 +812,14 @@ export function FeedItemCard({
             className={clsx(
               'group/row relative flex cursor-pointer overflow-hidden transition-colors',
               !showRail && 'border-b',
-              isRunning
+              isRunning || isMobileBuildRunning
                 ? [
                     'feed-running-row border-transparent',
-                    hasRunningCommand && 'feed-command-running-row',
+                    (hasRunningCommand || isMobileBuildRunning) &&
+                      'feed-command-running-row',
                     isSelected && 'feed-running-row-focused',
                     isSelected &&
-                      hasRunningCommand &&
+                      (hasRunningCommand || isMobileBuildRunning) &&
                       'feed-command-running-row-focused',
                   ]
                   : needsPermission
@@ -791,6 +836,7 @@ export function FeedItemCard({
                 : 'border-l-[3px] border-l-transparent',
               !isSelected &&
                 !isRunning &&
+                !isMobileBuildRunning &&
                 !needsAttention &&
                 !hasUnread &&
                 'hover:bg-glass-light',
@@ -798,7 +844,7 @@ export function FeedItemCard({
             style={{ minHeight: isSubtask ? 36 : 50 }}
           >
             {!isSubtask && <FeedProjectBackgroundLogo item={item} />}
-            {hasRunningCommand && (
+            {(hasRunningCommand || isMobileBuildRunning) && (
               <div className="feed-command-running-bottom-border" />
             )}
             {/* ─ Rail column (tasks) ─ */}
@@ -868,6 +914,7 @@ export function FeedItemCard({
                       }
                     />
                   ))}
+                  <WorkItemStatusChips matches={item.workItemStatusChips} />
                 </div>
               )}
 
@@ -894,7 +941,7 @@ export function FeedItemCard({
                 )}
                 <span
                   className={clsx(
-                    'min-w-0 flex-1 truncate leading-snug',
+                    'order-first basis-full truncate leading-snug',
                     isSubtask
                       ? 'text-ink-2 text-[11.5px]'
                       : isSelected
@@ -904,7 +951,38 @@ export function FeedItemCard({
                 >
                   {itemTitle}
                 </span>
-                {isTask && <FeedItemDeviceBadge taskId={item.taskId} />}
+                {isTask && (
+                  <FeedItemDeviceBadge
+                    taskId={item.taskId}
+                    assignments={mobileDeviceAssignments}
+                  />
+                )}
+                {isTask && mobileBuildStatus && (
+                  <span
+                    className={clsx(
+                      'mt-px flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ring-1',
+                      mobileBuildStatus.status === 'running'
+                        ? 'bg-status-run/10 text-status-run ring-status-run/25'
+                        : mobileBuildStatus.status === 'succeeded'
+                          ? 'bg-status-done/10 text-status-done ring-status-done/25'
+                          : 'bg-status-fail/10 text-status-fail ring-status-fail/25',
+                    )}
+                    aria-label={`Mobile build ${mobileBuildStatus.status}`}
+                  >
+                    {mobileBuildStatus.status === 'running' ? (
+                      <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                    ) : mobileBuildStatus.status === 'succeeded' ? (
+                      <CheckCircle2 className="h-2.5 w-2.5" />
+                    ) : (
+                      <XCircle className="h-2.5 w-2.5" />
+                    )}
+                    {mobileBuildStatus.status === 'running'
+                      ? 'Build ongoing'
+                      : mobileBuildStatus.status === 'succeeded'
+                        ? 'Build succeeded'
+                        : 'Build failed'}
+                  </span>
+                )}
                 {item.source === 'task' && needsAttention && (
                   <span
                     className={clsx(
@@ -1086,6 +1164,7 @@ export function FeedItemCard({
                 currentWorkItemId={currentWorkItemId}
                 isRunning={child.attention === 'running'}
                 isSelected={child.taskId === currentTaskId}
+                mobileDeviceAssignments={mobileDeviceAssignments}
               />
             ))}
 
@@ -1278,16 +1357,22 @@ function SubtaskRow({
   currentWorkItemId,
   isRunning,
   isSelected,
+  mobileDeviceAssignments,
 }: {
   child: FeedItem;
   currentWorkItemId?: string;
   isRunning: boolean;
   isSelected?: boolean;
+  mobileDeviceAssignments?: readonly MobilePreviewDeviceAssignment[];
 }) {
   const navigate = useNavigate();
   const childRunCommandStatus = useTaskMessagesStore((s) =>
     child.taskId ? s.runCommandRunning[child.taskId] : undefined,
   );
+  const childMobileBuildStatus = useTaskMessagesStore((s) =>
+    child.taskId ? s.mobileBuildStatuses?.[child.taskId] : undefined,
+  );
+  const childIsMobileBuildRunning = childMobileBuildStatus?.status === 'running';
   const childRunningCommands = useMemo(
     () =>
       childRunCommandStatus?.commands.filter((c) => c.status === 'running') ??
@@ -1337,15 +1422,17 @@ function SubtaskRow({
       onClick={handleClick}
       className={clsx(
         'relative flex cursor-pointer transition-colors',
-        isRunning && 'feed-running-row',
-        isRunning && childHasRunningCommand && 'feed-command-running-row',
+        (isRunning || childIsMobileBuildRunning) && 'feed-running-row',
+        (isRunning || childIsMobileBuildRunning) &&
+          (childHasRunningCommand || childIsMobileBuildRunning) &&
+          'feed-command-running-row',
         isRunning && isSelected && 'feed-running-row-focused',
         isRunning &&
           isSelected &&
           childHasRunningCommand &&
           'feed-command-running-row-focused',
-        !isRunning && childNeedsPermission && 'feed-permission-row',
-        !isRunning && childHasQuestion && 'feed-question-row',
+        !isRunning && !childIsMobileBuildRunning && childNeedsPermission && 'feed-permission-row',
+        !isRunning && !childIsMobileBuildRunning && childHasQuestion && 'feed-question-row',
         !isRunning &&
           !childNeedsAttention &&
           !child.hasUnread &&
@@ -1363,6 +1450,20 @@ function SubtaskRow({
     >
       {childHasRunningCommand && (
         <div className="feed-command-running-bottom-border" />
+      )}
+      {childMobileBuildStatus && (
+        <span
+          className={clsx(
+            'absolute right-2 top-2 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1',
+            childMobileBuildStatus.status === 'running'
+              ? 'bg-status-run/10 text-status-run ring-status-run/25'
+              : childMobileBuildStatus.status === 'succeeded'
+                ? 'bg-status-done/10 text-status-done ring-status-done/25'
+                : 'bg-status-fail/10 text-status-fail ring-status-fail/25',
+          )}
+        >
+          {childMobileBuildStatus.status === 'running' ? 'Build ongoing' : childMobileBuildStatus.status === 'succeeded' ? 'Build succeeded' : 'Build failed'}
+        </span>
       )}
       {/* Rail with branch SVG */}
       <div className="relative shrink-0" style={{ width: RAIL_W }}>
@@ -1403,7 +1504,10 @@ function SubtaskRow({
           <span className="text-ink-2 min-w-0 flex-1 truncate text-[11.5px]">
             {child.title}
           </span>
-          <FeedItemDeviceBadge taskId={child.taskId} />
+          <FeedItemDeviceBadge
+            taskId={child.taskId}
+            assignments={mobileDeviceAssignments}
+          />
           {childNeedsAttention && (
             <span
               className={clsx(
@@ -1442,7 +1546,7 @@ function SubtaskRow({
         {/* Sub-task work items */}
         {child.workItemIds && child.workItemIds.length > 0 && (
           <div className="mt-0.5 flex flex-wrap gap-1">
-            {child.workItemIds.map((wiId, index) => (
+          {child.workItemIds.map((wiId, index) => (
               <WorkItemChip
                 key={wiId}
                 label={`#${wiId}`}
@@ -1453,6 +1557,7 @@ function SubtaskRow({
                 }
               />
             ))}
+            <WorkItemStatusChips matches={child.workItemStatusChips} />
           </div>
         )}
       </div>

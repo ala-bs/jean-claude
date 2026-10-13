@@ -40,10 +40,12 @@ beforeEach(() => {
 function Footer({
   onSend,
   isRunning = false,
+  promptSteering = false,
   disabled = false,
 }: {
   onSend: (parts: PromptPart[]) => Promise<void>;
   isRunning?: boolean;
+  promptSteering?: boolean;
   disabled?: boolean;
 }) {
   const {
@@ -76,6 +78,7 @@ function Footer({
       onQueue={handleSend}
       onStop={() => {}}
       isRunning={isRunning}
+      promptSteering={promptSteering}
       disabled={disabled}
       value={promptDraft}
       onValueChange={setPromptDraft}
@@ -93,6 +96,8 @@ function draftState() {
 async function runScenario({
   label,
   isRunning = false,
+  promptSteering = false,
+  disabled = false,
   attachFile = true,
   typeDuringFlight = false,
   typeViaDom = false,
@@ -101,6 +106,8 @@ async function runScenario({
 }: {
   label: string;
   isRunning?: boolean;
+  promptSteering?: boolean;
+  disabled?: boolean;
   attachFile?: boolean;
   typeDuringFlight?: boolean;
   typeViaDom?: boolean;
@@ -132,7 +139,12 @@ async function runScenario({
           new QueryClient({ defaultOptions: { queries: { retry: false } } })
         }
       >
-        <Footer onSend={onSend} isRunning={isRunning} />
+        <Footer
+          onSend={onSend}
+          isRunning={isRunning}
+          promptSteering={promptSteering}
+          disabled={disabled}
+        />
       </QueryClientProvider>,
     );
   });
@@ -170,7 +182,11 @@ async function runScenario({
 
   const button = Array.from(container.querySelectorAll('button')).find((b) => {
     const l = b.getAttribute('aria-label');
-    return l === 'Send message' || l === 'Queue this message';
+    return (
+      l === 'Send message' ||
+      l === 'Queue this message' ||
+      l === 'Steer the running agent'
+    );
   });
 
   await act(async () => {
@@ -228,6 +244,17 @@ async function runScenario({
 }
 
 describe('MessageInput controlled submit', () => {
+  it('steers a running prompt when the backend supports prompt steering', async () => {
+    const r = await runScenario({
+      label: 'running steering',
+      isRunning: true,
+      promptSteering: true,
+      disabled: true,
+    });
+    expect(r.sentCount).toBe(1);
+    await r.cleanup();
+  });
+
   it('fully clears the composer after a successful async send', async () => {
     const r = await runScenario({ label: 'baseline text+file' });
     expect(r.sentCount).toBe(1);

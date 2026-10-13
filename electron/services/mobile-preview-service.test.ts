@@ -230,6 +230,7 @@ function createAdapter(
         },
       ),
       openDeeplink: vi.fn(async () => {}),
+      captureScreenshot: vi.fn(async () => Buffer.from('png')),
       forwardPort: platform === 'android' ? vi.fn(async () => {}) : undefined,
       setTextSize: vi.fn(async () => {}),
       setColorScheme: vi.fn(
@@ -313,6 +314,19 @@ describe('mobile preview service', () => {
     taskRepository.findById.mockReset();
     taskRepository.toggleUserCompleted.mockReset();
     resetBeforeQuitRegistration();
+  });
+
+  it('delegates screenshot capture and returns PNG metadata', async () => {
+    const { service, ios } = createService();
+
+    await expect(
+      service.captureScreenshot({ platform: 'ios', deviceId: 'ios-device' }),
+    ).resolves.toEqual({
+      content: Buffer.from('png'),
+      mimeType: 'image/png',
+      extension: 'png',
+    });
+    expect(ios.adapter.captureScreenshot).toHaveBeenCalledWith('ios-device');
   });
 
   it('launches Expo URL through selected platform adapter and exact device', async () => {

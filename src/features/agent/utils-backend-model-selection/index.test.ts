@@ -1,41 +1,63 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  isBackendModelPresetSelectable,
+  getQuickPresets,
+  isProfilePresetSelectable,
   resolveBackendModelSelection,
 } from './index';
-import type { BackendModelPreset } from '@shared/types';
+import type { ModelProfile, ProfilePreset } from '@shared/model-profiles';
 
-const sonnet: BackendModelPreset = {
+const sonnet: ProfilePreset = {
   id: 'sonnet',
   name: 'Sonnet',
   backend: 'claude-code',
   model: 'sonnet',
+  thinkingEffort: 'default',
 };
-const opus: BackendModelPreset = {
+const opus: ProfilePreset = {
   id: 'opus',
   name: 'Opus',
   backend: 'claude-code',
   model: 'opus',
+  thinkingEffort: 'default',
 };
-const ocFast: BackendModelPreset = {
+const ocFast: ProfilePreset = {
   id: 'oc-fast',
   name: 'OC Fast',
   backend: 'opencode',
   model: 'openai/gpt-5-mini',
+  thinkingEffort: 'default',
 };
-const hidden: BackendModelPreset = {
+/** Exists in the profile, but is not pinned to the quick list. */
+const deep: ProfilePreset = {
   id: 'deep',
   name: 'Deep',
   backend: 'claude-code',
   model: 'opus',
-  showInQuickSwitcher: false,
+  thinkingEffort: 'high',
 };
 
 const presets = [sonnet, opus, ocFast];
 
+const anthropicProfile: ModelProfile = {
+  id: 'anthropic',
+  name: 'Anthropic',
+  presets: [sonnet, opus, deep],
+  quickPresetIds: ['sonnet', 'opus'],
+  roles: { agent: { ...sonnet } },
+};
+
+const codexProfile: ModelProfile = {
+  id: 'codex',
+  name: 'Codex fallback',
+  presets: [ocFast],
+  quickPresetIds: ['oc-fast'],
+  roles: { agent: { ...ocFast } },
+};
+
 const base = {
   presets,
+  quickPresetIds: ['sonnet', 'opus', 'oc-fast'],
   backend: 'claude-code' as const,
   defaultModel: 'default' as const,
   enabledBackends: ['claude-code' as const, 'opencode' as const],
@@ -43,48 +65,93 @@ const base = {
   areModelsFetched: true,
 };
 
-describe('isBackendModelPresetSelectable', () => {
+describe('isProfilePresetSelectable', () => {
   it('rejects a preset whose backend is disabled', () => {
     expect(
-      isBackendModelPresetSelectable({
+      isProfilePresetSelectable({
         preset: ocFast,
         enabledBackends: ['claude-code'],
       }),
     ).toBe(false);
   });
 
-  it('rejects a quick-switcher-hidden preset while the quick switcher is on', () => {
-    expect(
-      isBackendModelPresetSelectable({
-        preset: hidden,
-        quickSwitcherEnabled: true,
-      }),
-    ).toBe(false);
-  });
-
-  it('accepts a hidden preset when the quick switcher is off', () => {
-    expect(
-      isBackendModelPresetSelectable({
-        preset: hidden,
-        quickSwitcherEnabled: false,
-      }),
-    ).toBe(true);
-  });
-
   it('accepts any backend when the enabled list is unknown', () => {
-    expect(isBackendModelPresetSelectable({ preset: ocFast })).toBe(true);
+    expect(isProfilePresetSelectable({ preset: ocFast })).toBe(true);
+  });
+});
+
+describe('getQuickPresets', () => {
+  it('offers the active profile quick presets, in the profile order', () => {
+    expect(
+      getQuickPresets({ profile: anthropicProfile }).map(
+        (preset) => preset.id,
+      ),
+    ).toEqual(['sonnet', 'opus']);
+  });
+
+  it('changes the chips when the active profile changes', () => {
+    expect(
+      getQuickPresets({ profile: codexProfile }).map((preset) => preset.id),
+    ).toEqual(['oc-fast']);
+  });
+
+  it('omits a profile preset that is not pinned to the quick list', () => {
+    expect(
+      getQuickPresets({ profile: anthropicProfile }).map(
+        (preset) => preset.id,
+      ),
+    ).not.toContain('deep');
+  });
+
+  it('omits a quick preset whose backend is disabled', () => {
+    expect(
+      getQuickPresets({
+        profile: codexProfile,
+        enabledBackends: ['claude-code'],
+      }),
+    ).toEqual([]);
+  });
+
+  it('ignores a quick id with no matching preset', () => {
+    expect(
+      getQuickPresets({
+        profile: { ...anthropicProfile, quickPresetIds: ['gone', 'opus'] },
+      }).map((preset) => preset.id),
+    ).toEqual(['opus']);
+  });
+
+  it('returns nothing when there is no active profile', () => {
+    expect(getQuickPresets({ profile: null })).toEqual([]);
   });
 });
 
 describe('resolveBackendModelSelection', () => {
-  it('defaults an empty draft to the first quick preset when the quick switcher is on', () => {
+  it('defaults an empty draft to the first quick preset of the profile', () => {
     const result = resolveBackendModelSelection({
       ...base,
-      quickSwitcherEnabled: true,
+      presets: anthropicProfile.presets,
+      quickPresetIds: anthropicProfile.quickPresetIds,
+      profiles: [anthropicProfile],
+      activeProfileId: 'anthropic',
     });
 
     expect(result.presetId).toBe('sonnet');
     expect(result.model).toBe('sonnet');
+  });
+
+  it('follows the newly active profile after a profile switch', () => {
+    const result = resolveBackendModelSelection({
+      ...base,
+      backend: 'opencode',
+      presets: codexProfile.presets,
+      quickPresetIds: codexProfile.quickPresetIds,
+      profiles: [anthropicProfile, codexProfile],
+      activeProfileId: 'codex',
+      availableModels: ['default', 'openai/gpt-5-mini'],
+    });
+
+    expect(result.presetId).toBe('oc-fast');
+    expect(result.model).toBe('openai/gpt-5-mini');
   });
 
   it('never picks a quick preset for a different backend', () => {
@@ -92,17 +159,16 @@ describe('resolveBackendModelSelection', () => {
       ...base,
       backend: 'opencode',
       availableModels: ['default', 'openai/gpt-5-mini'],
-      quickSwitcherEnabled: true,
     });
 
     expect(result.preset?.backend).toBe('opencode');
     expect(result.model).toBe('openai/gpt-5-mini');
   });
 
-  it('falls back to Custom when the quick switcher is off', () => {
+  it('falls back to Custom when the profile pins no quick presets', () => {
     const result = resolveBackendModelSelection({
       ...base,
-      quickSwitcherEnabled: false,
+      quickPresetIds: [],
     });
 
     expect(result.presetId).toBeNull();
@@ -113,11 +179,26 @@ describe('resolveBackendModelSelection', () => {
     const result = resolveBackendModelSelection({
       ...base,
       draftModelPreference: 'opus',
-      quickSwitcherEnabled: true,
     });
 
     expect(result.presetId).toBe('opus');
     expect(result.model).toBe('opus');
+  });
+
+  it('lets a per-task override win over the active profile', () => {
+    const result = resolveBackendModelSelection({
+      ...base,
+      presets: anthropicProfile.presets,
+      quickPresetIds: anthropicProfile.quickPresetIds,
+      profiles: [anthropicProfile],
+      activeProfileId: 'anthropic',
+      draftAgentBackend: 'opencode',
+      draftModelPreference: 'openai/gpt-5-mini',
+      availableModels: ['default', 'openai/gpt-5-mini'],
+    });
+
+    expect(result.presetId).toBeNull();
+    expect(result.model).toBe('openai/gpt-5-mini');
   });
 
   it('keeps the draft model and shows Custom when nothing matches', () => {
@@ -125,7 +206,6 @@ describe('resolveBackendModelSelection', () => {
       ...base,
       presets: [ocFast],
       draftModelPreference: 'opus',
-      quickSwitcherEnabled: true,
     });
 
     expect(result.presetId).toBeNull();
@@ -195,20 +275,6 @@ describe('resolveBackendModelSelection', () => {
     expect(result.model).toBe('default');
   });
 
-  it('drops a selected preset that was hidden from the quick switcher', () => {
-    const result = resolveBackendModelSelection({
-      ...base,
-      presets: [hidden, sonnet],
-      draftPresetId: 'deep',
-      draftModelPreference: 'opus',
-      shouldAutoSelectPreset: false,
-      quickSwitcherEnabled: true,
-    });
-
-    expect(result.presetId).toBeNull();
-    expect(result.model).toBe('opus');
-  });
-
   it('drops a selected preset that no longer exists', () => {
     const result = resolveBackendModelSelection({
       ...base,
@@ -229,7 +295,6 @@ describe('resolveBackendModelSelection', () => {
       draftModelPreference: 'sonnet',
       draftAgentBackend: 'claude-code',
       shouldAutoSelectPreset: false,
-      quickSwitcherEnabled: true,
     });
 
     expect(result.presetId).toBeNull();
@@ -241,7 +306,6 @@ describe('resolveBackendModelSelection', () => {
       ...base,
       draftPresetId: 'opus',
       draftModelPreference: 'opus',
-      quickSwitcherEnabled: true,
     });
 
     expect(result.presetId).toBe('opus');
@@ -277,7 +341,7 @@ describe('resolveBackendModelSelection', () => {
     const result = resolveBackendModelSelection({
       ...base,
       presets: [ocFast, sonnet],
-      quickSwitcherEnabled: true,
+      quickPresetIds: ['oc-fast', 'sonnet'],
     });
 
     expect(result.presetId).toBe('sonnet');
@@ -287,7 +351,6 @@ describe('resolveBackendModelSelection', () => {
     const result = resolveBackendModelSelection({
       ...base,
       draftAgentBackend: 'claude-code',
-      quickSwitcherEnabled: true,
     });
 
     expect(result.presetId).toBeNull();

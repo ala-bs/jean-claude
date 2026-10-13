@@ -19,7 +19,11 @@ function makeWorkItem(
   return {
     id,
     url: `https://dev.azure.com/example/_workitems/edit/${id}`,
-    fields: { title, workItemType: 'Bug', state },
+    fields: {
+      'System.Title': title,
+      'System.WorkItemType': 'Bug',
+      'System.State': state,
+    },
   };
 }
 

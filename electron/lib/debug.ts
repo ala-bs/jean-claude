@@ -22,6 +22,60 @@ import type { DebugLogEntry } from '@shared/debug-log-types';
 
 const BASE = 'jc';
 
+/**
+ * Electron dev processes can receive SIGTERM after their parent has already
+ * closed the terminal/socket used by console.debug. Node reports the resulting
+ * write EIO asynchronously on stdout, which otherwise becomes an uncaught
+ * exception and opens Electron's main-process error dialog.
+ */
+function isOutputClosed(stream: NodeJS.WriteStream): boolean {
+  return stream.destroyed || stream.writableEnded || !stream.writable;
+}
+
+function isClosedOutputError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return (
+    code === 'EIO' ||
+    code === 'EPIPE' ||
+    code === 'EBADF' ||
+    code === 'ERR_STREAM_DESTROYED' ||
+    code === 'ERR_STREAM_WRITE_AFTER_END'
+  );
+}
+
+function handleOutputError(error: NodeJS.ErrnoException): void {
+  // A terminal/socket disappearing during dev shutdown reports asynchronously,
+  // after console.debug has already returned.
+  if (isClosedOutputError(error)) return;
+
+  // Preserve Node's normal uncaught-error behavior for unexpected stream
+  // failures instead of silently hiding them behind this safety listener.
+  process.nextTick(() => {
+    throw error;
+  });
+}
+
+// Without an error listener, Node turns a late stdout/stderr write failure into
+// an uncaught exception. The logger is best-effort, so output failures must not
+// affect the Electron process itself.
+process.stdout.on('error', handleOutputError);
+process.stderr.on('error', handleOutputError);
+
+function logToConsoleSafely(
+  original: (...args: [string, ...unknown[]]) => void,
+  fmt: string,
+  args: unknown[],
+): void {
+  if (isOutputClosed(process.stdout)) return;
+
+  try {
+    original(fmt, ...args);
+  } catch (error) {
+    if (!isClosedOutputError(error)) throw error;
+  }
+}
+
 // Enable all jc:* logs by default if DEBUG is not set
 if (!process.env.DEBUG) {
   createDebug.enable(`${BASE}:*`);
@@ -93,7 +147,7 @@ function createLogger(
   const instance = createDebug(`${BASE}:${name}`);
   const original = instance.log || console.debug;
   instance.log = (fmt: string, ...args: unknown[]) => {
-    original(fmt, ...args);
+    logToConsoleSafely(original, fmt, args);
     const formatted = args.length > 0 ? format(fmt, ...args) : String(fmt);
     broadcastLog(instance.namespace, level, stripAnsi(formatted));
   };

@@ -132,6 +132,41 @@ describe('CodexJsonRpcClient', () => {
     ]);
   });
 
+  it('emits server requests separately from responses', async () => {
+    const proc = createFakeProcess();
+    const client = new CodexJsonRpcClient({ process: proc });
+    const seen: unknown[] = [];
+    client.onRequest((message) => seen.push(message));
+
+    proc.stdout.write(
+      '{"id":42,"method":"item/commandExecution/requestApproval","params":{"itemId":"item-1"}}\n',
+    );
+
+    await nextTick();
+    expect(seen).toEqual([
+      {
+        id: 42,
+        method: 'item/commandExecution/requestApproval',
+        params: { itemId: 'item-1' },
+      },
+    ]);
+  });
+
+  it('writes successful and error responses to server requests', async () => {
+    const proc = createFakeProcess();
+    const client = new CodexJsonRpcClient({ process: proc });
+    const written: string[] = [];
+    proc.stdin.on('data', (chunk: Buffer) => written.push(chunk.toString()));
+
+    await client.respond(7, { decision: 'accept' });
+    await client.respondError(8, -32601, 'Method not found');
+
+    expect(written).toEqual([
+      '{"jsonrpc":"2.0","id":7,"result":{"decision":"accept"}}\n',
+      '{"jsonrpc":"2.0","id":8,"error":{"code":-32601,"message":"Method not found"}}\n',
+    ]);
+  });
+
   it('isolates notification subscriber errors', async () => {
     const proc = createFakeProcess();
     const client = new CodexJsonRpcClient({ process: proc });

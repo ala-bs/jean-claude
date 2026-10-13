@@ -89,6 +89,12 @@ import * as m087 from './migrations/087_project_command_group_stages';
 import * as m088 from './migrations/088_message_query_indexes';
 import * as m089 from './migrations/089_project_command_group_favorites';
 import * as m090 from './migrations/090_project_auto_accept_on_task_creation';
+import * as m091 from './migrations/091_project_work_item_display_config';
+import * as m092 from './migrations/092_model_profiles_and_project_policy';
+import * as m093 from './migrations/093_drop_project_default_backend';
+import * as m094 from './migrations/094_mobile_build_store';
+import * as m095 from './migrations/095_mobile_build_artifact_names';
+import * as m096 from './migrations/096_mobile_build_artifact_repository';
 
 const migrations: Record<string, Migration> = {
   '001_initial': m001,
@@ -180,6 +186,12 @@ const migrations: Record<string, Migration> = {
   '088_message_query_indexes': m088,
   '089_project_command_group_favorites': m089,
   '090_project_auto_accept_on_task_creation': m090,
+  '091_project_work_item_display_config': m091,
+  '092_model_profiles_and_project_policy': m092,
+  '093_drop_project_default_backend': m093,
+  '094_mobile_build_store': m094,
+  '095_mobile_build_artifact_names': m095,
+  '096_mobile_build_artifact_repository': m096,
 };
 
 export const migrationProvider: MigrationProvider = {

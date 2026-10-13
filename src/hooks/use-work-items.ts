@@ -1,3 +1,4 @@
+import { useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -12,11 +13,60 @@ import {
   type WorkItemCommentReactionType,
   type WorkItemHistoryEntry,
 } from '@/lib/api';
+import {
+  type AzureFieldRefName,
+  CORE_FIELD_METADATA,
+  FIELD_BOARD_COLUMN,
+  FIELD_BOARD_COLUMN_DONE,
+  FIELD_STATE,
+  getTitle,
+  type WorkItemFieldMetadata,
+} from '@shared/work-item-field-types';
+import { hashRefNames } from '@shared/work-item-display-config-types';
 import { markDocumentStale } from '@/cache/cache-actions';
 import { useToastStore } from '@/stores/toasts';
 
 let boardColumnMutationSequence = 0;
 const boardColumnUpdateQueues = new Map<string, Promise<unknown>>();
+
+/**
+ * Reported once per distinct refName set for the lifetime of the renderer:
+ * every work item in a rejected response carries the same marker, and the
+ * queries refetch, so without this the user would get a toast per item per
+ * refetch.
+ */
+const reportedPartialFieldFailures = new Set<string>();
+
+/**
+ * Design failure mode F3: Azure rejected one or more configured extra fields
+ * and the service retried without them. The rows are silently absent from the
+ * panel (the F2 skip path), so without this the degradation is invisible.
+ */
+function usePartialFieldFailureToast(
+  data: AzureDevOpsWorkItem[] | AzureDevOpsWorkItem | null | undefined,
+) {
+  const addToast = useToastStore((state) => state.addToast);
+  const failedRefNames = useMemo(() => {
+    const items = Array.isArray(data) ? data : data ? [data] : [];
+    for (const item of items) {
+      if (item.partialFieldFailure && item.partialFieldFailure.length > 0) {
+        return item.partialFieldFailure;
+      }
+    }
+    return null;
+  }, [data]);
+
+  useEffect(() => {
+    if (!failedRefNames || failedRefNames.length === 0) return;
+    const key = [...failedRefNames].sort().join(',');
+    if (reportedPartialFieldFailures.has(key)) return;
+    reportedPartialFieldFailures.add(key);
+    addToast({
+      type: 'error',
+      message: `Some configured work item fields could not be loaded: ${failedRefNames.join(', ')}. Check Project Settings → Integrations.`,
+    });
+  }, [failedRefNames, addToast]);
+}
 
 export function useWorkItems(params: {
   providerId: string;
@@ -33,13 +83,16 @@ export function useWorkItems(params: {
     iterationPaths?: string[];
     assignedTo?: string;
   };
+  extraFieldRefNames?: AzureFieldRefName[];
 }) {
-  return useQuery<AzureDevOpsWorkItem[]>({
+  const extraFieldRefNames = params.extraFieldRefNames;
+  const query = useQuery<AzureDevOpsWorkItem[]>({
     queryKey: [
       'work-items',
       params.providerId,
       params.projectId,
       params.filters,
+      hashRefNames(extraFieldRefNames ?? []),
     ],
     queryFn: () => api.azureDevOps.queryWorkItems(params),
     enabled:
@@ -50,6 +103,8 @@ export function useWorkItems(params: {
     staleTime: 60_000,
     refetchOnMount: params.refetchOnMount,
   });
+  usePartialFieldFailureToast(query.data);
+  return query;
 }
 
 export function useWorkItemOwners(params: {
@@ -110,17 +165,26 @@ export function useBoardColumns(params: {
 export function useWorkItemById(params: {
   providerId: string | null;
   workItemId: number | null;
+  extraFieldRefNames?: AzureFieldRefName[];
 }) {
-  return useQuery({
-    queryKey: ['work-item', params.providerId, params.workItemId],
+  const query = useQuery({
+    queryKey: [
+      'work-item',
+      params.providerId,
+      params.workItemId,
+      hashRefNames(params.extraFieldRefNames ?? []),
+    ],
     queryFn: () =>
       api.azureDevOps.getWorkItemById({
         providerId: params.providerId!,
         workItemId: params.workItemId!,
+        extraFieldRefNames: params.extraFieldRefNames,
       }),
     enabled: !!params.providerId && !!params.workItemId,
     staleTime: 5 * 60_000,
   });
+  usePartialFieldFailureToast(query.data);
+  return query;
 }
 
 export function useWorkItemsByIds(params: {
@@ -128,25 +192,30 @@ export function useWorkItemsByIds(params: {
   projectName: string | null;
   workItemIds: number[];
   enabled?: boolean;
+  extraFieldRefNames?: AzureFieldRefName[];
 }) {
-  return useQuery<AzureDevOpsWorkItem[]>({
+  const query = useQuery<AzureDevOpsWorkItem[]>({
     queryKey: [
       'work-items-by-ids',
       params.providerId,
       params.projectName,
       [...new Set(params.workItemIds)].sort((a, b) => a - b),
+      hashRefNames(params.extraFieldRefNames ?? []),
     ],
     queryFn: () =>
       api.azureDevOps.getWorkItemsByIds({
         providerId: params.providerId!,
         projectName: params.projectName!,
         workItemIds: [...new Set(params.workItemIds)],
+        extraFieldRefNames: params.extraFieldRefNames,
       }),
     enabled:
       params.enabled !== false &&
       !!params.providerId && !!params.projectName && params.workItemIds.length > 0,
     staleTime: 5 * 60_000,
   });
+  usePartialFieldFailureToast(query.data);
+  return query;
 }
 
 export function useLinkedPullRequestStatuses(params: {
@@ -187,6 +256,55 @@ export function useWorkItemStates(params: {
       !!params.providerId && !!params.projectName && !!params.workItemType,
     staleTime: 5 * 60_000,
   });
+}
+
+const EMPTY_FIELD_METADATA: WorkItemFieldMetadata[] = [];
+
+/**
+ * Azure's field metadata for one project. Cached for an hour — work item type
+ * definitions change very rarely.
+ */
+export function useWorkItemTypeFields(params: {
+  providerId: string | undefined;
+  azureProjectId: string | undefined;
+}) {
+  return useQuery<WorkItemFieldMetadata[]>({
+    queryKey: [
+      'work-item-type-fields',
+      params.providerId,
+      params.azureProjectId,
+    ],
+    queryFn: () =>
+      api.azureDevOps.getWorkItemTypeFields({
+        providerId: params.providerId!,
+        azureProjectId: params.azureProjectId!,
+      }),
+    enabled: !!params.providerId && !!params.azureProjectId,
+    staleTime: 60 * 60 * 1000,
+  });
+}
+
+/**
+ * The refName → metadata map used by every field renderer. Built-in core
+ * metadata sits underneath so core fields stay renderable when Azure metadata
+ * is unavailable. Memoized: the returned object identity is stable between
+ * renders as long as the query data is.
+ */
+export function useWorkItemFieldMetadataMap(params: {
+  providerId: string | undefined;
+  azureProjectId: string | undefined;
+}): Record<AzureFieldRefName, WorkItemFieldMetadata> {
+  const { data } = useWorkItemTypeFields(params);
+  const fields = data ?? EMPTY_FIELD_METADATA;
+  return useMemo(() => {
+    const map: Record<AzureFieldRefName, WorkItemFieldMetadata> = {
+      ...CORE_FIELD_METADATA,
+    };
+    for (const field of fields) {
+      map[field.refName] = field;
+    }
+    return map;
+  }, [fields]);
 }
 
 export function useUpdateWorkItemField() {
@@ -249,8 +367,9 @@ export function useUpdateWorkItemBoardColumn() {
         queryClient.cancelQueries({ queryKey: workItemsByIdsKey }),
         queryClient.cancelQueries(pullRequestWorkItemsFilter),
       ]);
-      const previousDetail =
-        queryClient.getQueryData<AzureDevOpsWorkItem | null>(detailKey);
+      const previousDetails = queryClient.getQueriesData<AzureDevOpsWorkItem | null>(
+        { queryKey: detailKey },
+      );
       const previousWorkItems =
         queryClient.getQueriesData<AzureDevOpsWorkItem[]>({
           queryKey: workItemsKey,
@@ -266,9 +385,10 @@ export function useUpdateWorkItemBoardColumn() {
       const updateItem = (item: AzureDevOpsWorkItem) =>
         applyWorkItemBoardColumnUpdate(item, { ...variables, mutationId });
 
-      if (previousDetail) {
-        queryClient.setQueryData(detailKey, updateItem(previousDetail));
-      }
+      queryClient.setQueriesData<AzureDevOpsWorkItem | null>(
+        { queryKey: detailKey },
+        (item) => (item ? updateItem(item) : item),
+      );
       queryClient.setQueriesData<AzureDevOpsWorkItem[]>(
         { queryKey: workItemsKey },
         (items) => items?.map(updateItem),
@@ -282,7 +402,7 @@ export function useUpdateWorkItemBoardColumn() {
         (items) => items?.map(updateItem),
       );
       return {
-        previousDetail,
+        previousDetails,
         previousWorkItems,
         previousWorkItemsByIds,
         previousPullRequestWorkItems,
@@ -290,16 +410,16 @@ export function useUpdateWorkItemBoardColumn() {
       };
     },
     onError: (error, variables, context) => {
-      if (context?.previousDetail) {
+      for (const [queryKey, previousDetail] of context?.previousDetails ?? []) {
+        if (!previousDetail) continue;
         queryClient.setQueryData<AzureDevOpsWorkItem | null>(
-          ['work-item', variables.providerId, variables.workItemId],
+          queryKey,
           (item) =>
             item
-              ? rollbackWorkItemBoardColumnUpdate(
-                  item,
-                  context.previousDetail!,
-                  { ...variables, mutationId: context.mutationId },
-                )
+              ? rollbackWorkItemBoardColumnUpdate(item, previousDetail, {
+                  ...variables,
+                  mutationId: context!.mutationId,
+                })
               : item,
         );
       }
@@ -326,11 +446,11 @@ export function useUpdateWorkItemBoardColumn() {
     },
     onSettled: (_result, _error, variables, context) => {
       const cachedItems = [
-        queryClient.getQueryData<AzureDevOpsWorkItem | null>([
-          'work-item',
-          variables.providerId,
-          variables.workItemId,
-        ]),
+        ...queryClient
+          .getQueriesData<AzureDevOpsWorkItem | null>({
+            queryKey: ['work-item', variables.providerId, variables.workItemId],
+          })
+          .map(([, item]) => item),
         ...queryClient
           .getQueriesData<AzureDevOpsWorkItem[]>({
             queryKey: ['work-items', variables.providerId],
@@ -359,8 +479,10 @@ export function useUpdateWorkItemBoardColumn() {
           predicate: (query: { queryKey: readonly unknown[] }) =>
             query.queryKey[2] === variables.providerId,
         };
-        queryClient.setQueryData<AzureDevOpsWorkItem | null>(
-          ['work-item', variables.providerId, variables.workItemId],
+        queryClient.setQueriesData<AzureDevOpsWorkItem | null>(
+          {
+            queryKey: ['work-item', variables.providerId, variables.workItemId],
+          },
           (item) => (item ? clearItem(item) : item),
         );
         queryClient.setQueriesData<AzureDevOpsWorkItem[]>(
@@ -413,9 +535,9 @@ export function applyWorkItemBoardColumnUpdate(
     ...item,
     fields: {
       ...item.fields,
-      state: update.state,
-      boardColumn: update.column,
-      boardColumnDone: update.isDone,
+      [FIELD_STATE]: update.state,
+      [FIELD_BOARD_COLUMN]: update.column,
+      [FIELD_BOARD_COLUMN_DONE]: update.isDone,
     },
     __boardColumnMutationId: update.mutationId,
   };
@@ -438,24 +560,24 @@ export function rollbackWorkItemBoardColumnUpdate(
     __boardColumnMutationId?: number;
   };
   if (optimisticItem.__boardColumnMutationId !== update.mutationId) return item;
-  const state = item.fields.state === update.state
-    ? previousItem.fields.state
-    : item.fields.state;
-  const boardColumn = item.fields.boardColumn === update.column
-    ? previousItem.fields.boardColumn
-    : item.fields.boardColumn;
-  const boardColumnDone = item.fields.boardColumnDone === update.isDone
-    ? previousItem.fields.boardColumnDone
-    : item.fields.boardColumnDone;
+  const state = item.fields[FIELD_STATE] === update.state
+    ? previousItem.fields[FIELD_STATE]
+    : item.fields[FIELD_STATE];
+  const boardColumn = item.fields[FIELD_BOARD_COLUMN] === update.column
+    ? previousItem.fields[FIELD_BOARD_COLUMN]
+    : item.fields[FIELD_BOARD_COLUMN];
+  const boardColumnDone = item.fields[FIELD_BOARD_COLUMN_DONE] === update.isDone
+    ? previousItem.fields[FIELD_BOARD_COLUMN_DONE]
+    : item.fields[FIELD_BOARD_COLUMN_DONE];
   const { __boardColumnMutationId: _mutationId, ...itemWithoutMutation } =
     optimisticItem;
   return {
     ...itemWithoutMutation,
     fields: {
       ...item.fields,
-      state,
-      boardColumn,
-      boardColumnDone,
+      [FIELD_STATE]: state,
+      [FIELD_BOARD_COLUMN]: boardColumn,
+      [FIELD_BOARD_COLUMN_DONE]: boardColumnDone,
     },
   };
 }
@@ -784,7 +906,7 @@ export function useRelatedTestCasesForWorkItems(params: {
             workItemId,
             testCases.map((tc) => ({
               id: tc.id,
-              title: tc.fields.title,
+              title: getTitle(tc),
               steps: tc.testSteps,
             })),
           ] as const;
@@ -827,20 +949,24 @@ export function useUpdateWorkItemState() {
         variables.workItemId,
       ];
       await queryClient.cancelQueries({ queryKey });
-      const previous = queryClient.getQueryData<AzureDevOpsWorkItem | null>(
+      const previous = queryClient.getQueriesData<AzureDevOpsWorkItem | null>({
         queryKey,
+      });
+      queryClient.setQueriesData<AzureDevOpsWorkItem | null>(
+        { queryKey },
+        (item) =>
+          item
+            ? {
+                ...item,
+                fields: { ...item.fields, [FIELD_STATE]: variables.state },
+              }
+            : item,
       );
-      if (previous) {
-        queryClient.setQueryData<AzureDevOpsWorkItem>(queryKey, {
-          ...previous,
-          fields: { ...previous.fields, state: variables.state },
-        });
-      }
       return { previous, queryKey };
     },
     onError: (_error, _variables, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(context.queryKey, context.previous);
+      for (const [key, item] of context?.previous ?? []) {
+        queryClient.setQueryData(key, item);
       }
       addToast({ message: 'Failed to update work item status', type: 'error' });
     },

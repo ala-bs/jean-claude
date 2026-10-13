@@ -41,7 +41,9 @@ function FeatureMapSaveActionInner({
   const [draftDiff, setDraftDiff] = useState<FeatureMapDraftDiff | null>(null);
   const [localSaved, setLocalSaved] = useState(false);
   const saved = meta.saved || localSaved;
-  const canSave = step.status === 'completed' && !saved;
+  const draftValidation = meta.draftValidation;
+  const draftReady = draftValidation?.status === 'valid';
+  const canSave = draftReady && !saved;
 
   const handleSave = useCallback(async () => {
     setIsSaving(true);
@@ -99,7 +101,7 @@ function FeatureMapSaveActionInner({
           <Button
             type="button"
             onClick={handleReviewDiff}
-            disabled={step.status !== 'completed' || isLoadingDiff}
+            disabled={!draftReady || isLoadingDiff}
             variant="secondary"
             icon={<Eye />}
           >
@@ -114,11 +116,13 @@ function FeatureMapSaveActionInner({
             <Save className="h-4 w-4" />
             Save Feature Map
           </Button>
-          {step.status === 'completed' && (
-            <span className="text-ink-3 text-xs">
-              Review changes, then save when ready.
-            </span>
-          )}
+          <span className="text-ink-3 text-xs">
+            {draftValidation?.status === 'invalid'
+              ? `Feature map not ready: ${draftValidation.error}`
+              : draftReady
+                ? 'Review changes, then save when ready.'
+                : 'Waiting for a valid feature-map file.'}
+          </span>
           <Modal
             isOpen={isDiffOpen}
             onClose={() => setIsDiffOpen(false)}

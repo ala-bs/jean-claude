@@ -132,7 +132,7 @@ const CAPABILITY_KEYS = {
     'runtimeModeSwitch',
     'sessionAllowedTools',
     'permissionRuleUpdates',
-    'followUpPrompt',
+    'promptSteering',
     'resourceTracking',
   ],
   generation: ['text', 'structured'],
@@ -238,11 +238,11 @@ describe('agent backend providers', () => {
     }
   });
 
-  it('only supports live follow-up prompts on backends with a streaming input', () => {
+  it('only supports live prompt steering on backends with a streaming input', () => {
     for (const type of BACKEND_TYPES) {
       const provider = getAgentBackendProvider(type);
-      expect(provider.capabilities.agent.followUpPrompt?.supported).toBe(
-        type === 'claude-code',
+      expect(provider.capabilities.agent.promptSteering?.supported).toBe(
+        type === 'claude-code' || type === 'codex',
       );
     }
   });
@@ -413,10 +413,11 @@ describe('agent backend providers', () => {
     expect(openCodeAgent.sessionAllowedTools.supported).toBe(false);
 
     const codexAgent = getAgentBackendProvider('codex').capabilities.agent;
-    expect(codexAgent.permissions.supported).toBe(false);
-    expect(codexAgent.questions.supported).toBe(false);
+    expect(codexAgent.permissions.supported).toBe(true);
+    expect(codexAgent.questions.supported).toBe(true);
     expect(codexAgent.runtimeModeSwitch.supported).toBe(false);
     expect(codexAgent.sessionAllowedTools.supported).toBe(false);
+    expect(codexAgent.promptSteering?.supported).toBe(true);
 
     const vibeAgent = getAgentBackendProvider('vibe').capabilities.agent;
     expect(vibeAgent.permissions.supported).toBe(true);
@@ -482,22 +483,21 @@ describe('agent backend providers', () => {
 
   it('throws unsupported capability errors with backend, capability, and reason', () => {
     const capability = getAgentBackendProvider('codex').capabilities.agent
-      .permissions;
+      .runtimeModeSwitch;
 
     expect(() =>
-      requireCapability('codex', 'agent.permissions', capability),
+      requireCapability('codex', 'agent.runtimeModeSwitch', capability),
     ).toThrow(UnsupportedBackendCapabilityError);
 
     try {
-      requireCapability('codex', 'agent.permissions', capability);
+      requireCapability('codex', 'agent.runtimeModeSwitch', capability);
       throw new Error('expected requireCapability to throw');
     } catch (error) {
       expect(error).toBeInstanceOf(UnsupportedBackendCapabilityError);
       expect(error).toMatchObject({
         backend: 'codex',
-        capability: 'agent.permissions',
-        reason:
-          'runtime permission responses are not integrated for this backend yet',
+        capability: 'agent.runtimeModeSwitch',
+        reason: 'runtime mode switching is not supported by this backend',
       });
     }
   });

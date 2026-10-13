@@ -50,6 +50,27 @@ export function CheckboxIndicator({
   );
 }
 
+/**
+ * Clicking a <label> makes the browser focus its control and scroll that
+ * control into view. Our input is `sr-only` — absolutely positioned and clipped
+ * to a 1px box — so the browser scrolls whatever ancestor it can to "reveal" a
+ * box that is nowhere near the visible checkbox. It will happily set `scrollTop`
+ * on ancestors that are `overflow: hidden`/`clip` too, which shoves their
+ * children up and leaves a blank band at the bottom that the user cannot scroll
+ * back. Focus the input ourselves with `preventScroll` instead: no jump, and
+ * focus still lands on the control that was clicked (unlike a bare
+ * preventDefault, which would leave focus behind).
+ *
+ * This lived in ui-unused-worktrees-cleanup for the same bug; keeping it here
+ * means every checkbox in the app is immune instead of one list.
+ */
+function focusWithoutScrolling(event: MouseEvent<HTMLLabelElement>) {
+  const input = event.currentTarget.querySelector('input');
+  if (!input || input.disabled) return;
+  event.preventDefault();
+  input.focus({ preventScroll: true });
+}
+
 export function Checkbox({
   size = 'md',
   checked,
@@ -90,6 +111,7 @@ export function Checkbox({
         className,
       )}
       onClick={onClick}
+      onMouseDown={focusWithoutScrolling}
     >
       <input
         id={id}

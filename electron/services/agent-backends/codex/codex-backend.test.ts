@@ -47,6 +47,371 @@ describe('CodexBackend', () => {
     });
   });
 
+  it('turns a command approval server request into a permission event', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Run the tests' },
+    ]);
+    const events = session.events[Symbol.asyncIterator]();
+    await events.next();
+    const nextEvent = events.next();
+
+    emitRequest({
+      id: 42,
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'item-1',
+        command: 'pnpm test',
+        cwd: '/tmp/project',
+        reason: 'Run the test suite',
+      },
+    });
+
+    await expect(nextEvent).resolves.toMatchObject({
+      value: {
+        type: 'permission-request',
+        request: {
+          requestId: '42',
+          toolName: 'bash',
+          input: { command: 'pnpm test' },
+          description: 'Run the test suite',
+        },
+      },
+    });
+
+    await backend.respondToPermission(session.sessionId, '42', {
+      behavior: 'allow',
+      allowMode: 'session',
+    });
+    expect(client.respond).toHaveBeenCalledWith(42, {
+      decision: 'acceptForSession',
+    });
+  });
+
+  it('turns a Codex user-input request into a question event and responds with answer arrays', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask me a question' },
+    ]);
+    const events = session.events[Symbol.asyncIterator]();
+    await events.next();
+    const nextEvent = events.next();
+
+    emitRequest({
+      id: 'question-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'item-question-1',
+        questions: [
+          {
+            id: 'choice',
+            header: 'Choice',
+            question: 'Which option?',
+            isOther: false,
+            isSecret: false,
+            options: [{ label: 'A', description: 'First option' }],
+          },
+        ],
+        isBlocking: true,
+        autoResolutionMs: null,
+      },
+    });
+
+    await expect(nextEvent).resolves.toMatchObject({
+      value: {
+        type: 'question',
+        request: {
+          requestId: 'question-1',
+          questions: [{ id: 'choice', question: 'Which option?' }],
+        },
+      },
+    });
+
+    await backend.respondToQuestion(
+      session.sessionId,
+      'question-1',
+      { choice: 'A' },
+      { questionKeys: ['choice'] },
+    );
+    expect(client.respond).toHaveBeenCalledWith('question-1', {
+      answers: { choice: { answers: ['A'] } },
+    });
+  });
+
+  it('routes MCP elicitation requests through the question UI', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask through MCP elicitation' },
+    ]);
+    const events = session.events[Symbol.asyncIterator]();
+    await events.next();
+    const nextEvent = events.next();
+
+    emitRequest({
+      id: 'elicitation-1',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        mode: 'form',
+        message: 'Choose an environment',
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            environment: {
+              type: 'string',
+              title: 'Environment',
+              enum: ['staging', 'production'],
+            },
+          },
+          required: ['environment'],
+        },
+      },
+    });
+
+    await expect(nextEvent).resolves.toMatchObject({
+      value: {
+        type: 'question',
+        request: {
+          requestId: 'elicitation-1',
+          contextReminder: 'Choose an environment',
+          questions: [{ id: 'environment', type: 'single_choice' }],
+        },
+      },
+    });
+
+    await backend.respondToQuestion(
+      session.sessionId,
+      'elicitation-1',
+      { environment: 'production' },
+      { questionKeys: ['environment'] },
+    );
+    expect(client.request).toHaveBeenCalledWith('thread/increment_elicitation', {
+      threadId: 'thread-1',
+    });
+    expect(client.request).toHaveBeenCalledWith('thread/decrement_elicitation', {
+      threadId: 'thread-1',
+    });
+    expect(client.respond).toHaveBeenCalledWith('elicitation-1', {
+      action: 'accept',
+      content: { environment: 'production' },
+    });
+  });
+
+  it('declines unsupported MCP elicitation modes', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    await backend.start(createConfig(), [{ type: 'text', text: 'Sign in' }]);
+
+    emitRequest({
+      id: 'elicitation-url',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        mode: 'url',
+        message: 'Sign in',
+        url: 'https://example.test',
+      },
+    });
+
+    expect(client.respond).toHaveBeenCalledWith('elicitation-url', {
+      action: 'decline',
+    });
+  });
+
+  it('turns a Codex permission-profile request into a permission event', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Request access' },
+    ]);
+    const events = session.events[Symbol.asyncIterator]();
+    await events.next();
+    const nextEvent = events.next();
+
+    emitRequest({
+      id: 43,
+      method: 'item/permissions/requestApproval',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'item-permissions-1',
+        environmentId: null,
+        startedAtMs: 1,
+        cwd: '/tmp/project',
+        reason: 'Need network access',
+        permissions: { network: { enabled: true }, fileSystem: null },
+      },
+    });
+
+    await expect(nextEvent).resolves.toMatchObject({
+      value: {
+        type: 'permission-request',
+        request: {
+          requestId: '43',
+          toolName: 'permissions',
+          description: 'Need network access',
+        },
+      },
+    });
+
+    await backend.respondToPermission(session.sessionId, '43', {
+      behavior: 'allow',
+      allowMode: 'session',
+    });
+    expect(client.respond).toHaveBeenCalledWith(43, {
+      permissions: { network: { enabled: true }, fileSystem: null },
+      scope: 'session',
+    });
+  });
+
+  it('steers an active Codex turn through the follow-up prompt capability', async () => {
+    const { backend, client, emitNotification } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Start working' },
+    ]);
+    const events = session.events[Symbol.asyncIterator]();
+    await events.next();
+
+    await expect(
+      backend.sendUserMessage!(session.sessionId, [
+        { type: 'text', text: 'Focus on the failing tests first.' },
+      ]),
+    ).resolves.toBe(true);
+    expect(client.request).toHaveBeenCalledWith('turn/steer', {
+      threadId: 'thread-1',
+      input: [{ type: 'text', text: 'Focus on the failing tests first.' }],
+      expectedTurnId: 'turn-1',
+    });
+
+    const nextEvent = events.next();
+    emitNotification({
+      method: 'item/started',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'steered-item-1',
+          type: 'userMessage',
+          content: [
+            { type: 'text', text: 'Focus on the failing tests first.' },
+          ],
+        },
+      },
+    });
+    await expect(nextEvent).resolves.toMatchObject({
+      value: {
+        type: 'entry',
+        entry: expect.objectContaining({
+          type: 'user-prompt',
+          value: 'Focus on the failing tests first.',
+        }),
+      },
+    });
+  });
+
+  it('responds with a protocol error for unsupported server requests', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    await backend.start(createConfig(), [{ type: 'text', text: 'Hello' }]);
+
+    emitRequest({
+      id: 'request-1',
+      method: 'item/tool/call',
+      params: { threadId: 'thread-1', turnId: 'turn-1' },
+    });
+
+    expect(client.respondError).toHaveBeenCalledWith(
+      'request-1',
+      -32601,
+      'Unsupported Codex server request: item/tool/call',
+    );
+  });
+
+  it('rejects permission-profile requests without a valid profile', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    await backend.start(createConfig(), [{ type: 'text', text: 'Request access' }]);
+
+    emitRequest({
+      id: 'permissions-invalid',
+      method: 'item/permissions/requestApproval',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'item-1',
+      },
+    });
+
+    expect(client.respondError).toHaveBeenCalledWith(
+      'permissions-invalid',
+      -32602,
+      'Invalid parameters for item/permissions/requestApproval',
+    );
+  });
+
+  it('cancels pending permission profiles with their protocol response shape', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Request access' },
+    ]);
+
+    emitRequest({
+      id: 'permissions-cleanup',
+      method: 'item/permissions/requestApproval',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'item-1',
+        permissions: { network: { enabled: true } },
+      },
+    });
+
+    await backend.stop(session.sessionId);
+
+    expect(client.respond).toHaveBeenCalledWith('permissions-cleanup', {
+      permissions: {},
+      scope: 'turn',
+    });
+    expect(client.respond).not.toHaveBeenCalledWith('permissions-cleanup', {
+      decision: 'cancel',
+    });
+  });
+
+  it('cancels pending MCP elicitations during cleanup', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Choose an environment' },
+    ]);
+
+    emitRequest({
+      id: 'elicitation-cleanup',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        mode: 'form',
+        requestedSchema: {
+          type: 'object',
+          properties: { environment: { type: 'string' } },
+        },
+      },
+    });
+
+    await backend.stop(session.sessionId);
+
+    expect(client.request).toHaveBeenCalledWith('thread/increment_elicitation', {
+      threadId: 'thread-1',
+    });
+    expect(client.request).toHaveBeenCalledWith('thread/decrement_elicitation', {
+      threadId: 'thread-1',
+    });
+    expect(client.respond).toHaveBeenCalledWith('elicitation-cleanup', {
+      action: 'cancel',
+    });
+  });
+
   it('resumes existing thread when config.sessionId is present', async () => {
     const { backend, client } = createBackend();
 
@@ -73,7 +438,7 @@ describe('CodexBackend', () => {
     );
   });
 
-  it('does not pass runtime MCP config to the app-server or thread config', async () => {
+  it('passes runtime MCP config into the Codex thread config', async () => {
     const { backend, client } = createBackend();
 
     await backend.start(
@@ -87,6 +452,9 @@ describe('CodexBackend', () => {
               JC_MCP_AUTH_TOKEN: 'token-1',
               JC_MCP_STEP_ID: 'step-1',
               JC_MCP_REGISTRATION_ID: 'registration-1',
+            },
+            tools: {
+              ask_question: { approval_mode: 'auto' },
             },
           },
         },
@@ -105,12 +473,27 @@ describe('CodexBackend', () => {
           network_access: true,
           writable_roots: expectedPackageManagerCacheRoots(),
         },
+        mcp_servers: {
+          'jean-claude-mcp': {
+            command: 'node',
+            args: ['jean-claude-mcp-server.js'],
+            env: {
+              JC_MCP_BRIDGE_URL: 'http://127.0.0.1:4567',
+              JC_MCP_AUTH_TOKEN: 'token-1',
+              JC_MCP_STEP_ID: 'step-1',
+              JC_MCP_REGISTRATION_ID: 'registration-1',
+            },
+            tools: {
+              ask_question: { approval_mode: 'auto' },
+            },
+          },
+        },
       },
       serviceName: 'jean_claude',
     });
   });
 
-  it('omits runtime MCP config when resuming threads', async () => {
+  it('passes runtime MCP config when resuming threads', async () => {
     const { backend, client } = createBackend();
 
     await backend.start(
@@ -143,6 +526,18 @@ describe('CodexBackend', () => {
         sandbox_workspace_write: {
           network_access: true,
           writable_roots: expectedPackageManagerCacheRoots(),
+        },
+        mcp_servers: {
+          'jean-claude-mcp': {
+            command: 'node',
+            args: ['jean-claude-mcp-server.js'],
+            env: {
+              JC_MCP_BRIDGE_URL: 'http://127.0.0.1:4567',
+              JC_MCP_AUTH_TOKEN: 'token-1',
+              JC_MCP_STEP_ID: 'step-1',
+              JC_MCP_REGISTRATION_ID: 'registration-1',
+            },
+          },
         },
       },
     });
@@ -262,7 +657,53 @@ describe('CodexBackend', () => {
         { type: 'text', text: 'Attached file: /tmp/file.txt' },
       ],
       model: 'gpt-5',
+      collaborationMode: {
+        mode: 'default',
+        settings: {
+          model: 'gpt-5',
+          reasoning_effort: null,
+          developer_instructions: null,
+        },
+      },
     });
+  });
+
+  it('passes native Plan mode to the next Codex turn', async () => {
+    const { backend, client } = createBackend();
+
+    await backend.start(createConfig({ model: 'gpt-5', interactionMode: 'plan' }), [
+      { type: 'text', text: 'Make a plan' },
+    ]);
+
+    expect(client.request).toHaveBeenCalledWith('turn/start', {
+      threadId: 'thread-1',
+      input: [{ type: 'text', text: 'Make a plan' }],
+      model: 'gpt-5',
+      collaborationMode: {
+        mode: 'plan',
+        settings: {
+          model: 'gpt-5',
+          reasoning_effort: null,
+          developer_instructions: null,
+        },
+      },
+    });
+  });
+
+  it('uses the first discovered model when the default marker is absent', async () => {
+    const { backend, client } = createBackend({
+      modelListResult: { data: [{ id: 'gpt-5.6-codex' }] },
+    });
+
+    await backend.start(createConfig(), [{ type: 'text', text: 'Hello' }]);
+
+    expect(client.request).toHaveBeenCalledWith('turn/start',
+      expect.objectContaining({
+        collaborationMode: expect.objectContaining({
+          settings: expect.objectContaining({ model: 'gpt-5.6-codex' }),
+        }),
+      }),
+    );
   });
 
   it('exposes the Codex app-server root PID for resource tracking', async () => {
@@ -723,6 +1164,54 @@ describe('CodexBackend', () => {
     vi.useRealTimers();
   });
 
+  it('does not complete while an MCP elicitation is pending', async () => {
+    vi.useFakeTimers();
+    const { backend, client, emitNotification, emitRequest, unsubscribe } =
+      createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Wait for an answer' },
+    ]);
+    const iterator = session.events[Symbol.asyncIterator]();
+    await iterator.next();
+
+    emitNotification({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { id: 'msg-1', type: 'message', role: 'assistant' },
+      },
+    });
+    await iterator.next();
+
+    const question = iterator.next();
+    emitRequest({
+      id: 'elicitation-waiting',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        mode: 'form',
+        requestedSchema: {
+          type: 'object',
+          properties: { answer: { type: 'string' } },
+        },
+      },
+    });
+    await expect(question).resolves.toMatchObject({
+      value: { type: 'question', request: { requestId: 'elicitation-waiting' } },
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await backend.stop(session.sessionId);
+    expect(client.respond).toHaveBeenCalledWith('elicitation-waiting', {
+      action: 'cancel',
+    });
+    vi.useRealTimers();
+  });
+
   it('closes after idle delta flush fails without retrying cleanup flush', async () => {
     vi.useFakeTimers();
     const updateRaw = vi.fn<NonNullable<AgentTaskContext['updateRaw']>>(
@@ -1003,6 +1492,7 @@ function createBackend(
     persistRaw?: AgentTaskContext['persistRaw'];
     threadResult?: unknown;
     turnResult?: unknown;
+    modelListResult?: unknown;
     updateRaw?: AgentTaskContext['updateRaw'];
     rootPid?: number;
   } = {},
@@ -1010,7 +1500,11 @@ function createBackend(
   let notificationListener:
     | ((message: { method: string; params?: unknown }) => void)
     | null = null;
+  let requestListener:
+    | ((message: { id: number | string; method: string; params?: unknown }) => void)
+    | null = null;
   const unsubscribe = vi.fn();
+  const unsubscribeRequest = vi.fn();
   const request = vi.fn(async (method: string) => {
     if (method === 'thread/start' || method === 'thread/resume') {
       return (
@@ -1020,13 +1514,22 @@ function createBackend(
     if (method === 'turn/start') {
       return options.turnResult ?? { turn: { id: 'turn-1' }, id: 'turn-1' };
     }
+    if (method === 'model/list') {
+      return options.modelListResult ?? {};
+    }
     return {};
   });
   const client = {
     request,
+    respond: vi.fn(async () => undefined),
+    respondError: vi.fn(async () => undefined),
     onNotification: vi.fn((listener) => {
       notificationListener = listener;
       return unsubscribe;
+    }),
+    onRequest: vi.fn((listener) => {
+      requestListener = listener;
+      return unsubscribeRequest;
     }),
   };
   const serverDispose = vi.fn(async () => undefined);
@@ -1053,9 +1556,17 @@ function createBackend(
     emitNotification: (message: { method: string; params?: unknown }) => {
       notificationListener?.(message);
     },
+    emitRequest: (message: {
+      id: number | string;
+      method: string;
+      params?: unknown;
+    }) => {
+      requestListener?.(message);
+    },
     persistRaw,
     serverDispose,
     unsubscribe,
+    unsubscribeRequest,
   };
 }
 

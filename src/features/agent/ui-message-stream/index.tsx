@@ -630,6 +630,9 @@ export const MessageStream = memo(function MessageStream({
                     isTaskRunning={
                       index === lastPromptGroupIndex && isRunning
                     }
+                    hasPendingQuestion={
+                      index === lastPromptGroupIndex && !!pendingQuestion
+                    }
                     previousPromptDate={previousPromptDate}
                     onFilePathClick={onFilePathClick}
                     onToolDiffClick={onToolDiffClick}

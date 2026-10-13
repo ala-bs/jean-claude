@@ -16,6 +16,7 @@ import type {
 } from '@shared/work-item-summary-types';
 
 import { generateText } from './ai-generation-service';
+import { getTeamProject } from '@shared/work-item-field-types';
 import { invalidateWorkItemCache } from './feed-service';
 import { prepareWorkItemSummarySource } from './work-item-summary-source';
 import { ProjectRepository } from '../database/repositories/projects';
@@ -82,7 +83,7 @@ async function loadSource(request: WorkItemSummaryRequest) {
   if (!workItem) {
     throw new Error(`Work item not found: ${request.workItemId}`);
   }
-  if (workItem.fields.teamProject !== request.projectName) {
+  if (getTeamProject(workItem) !== request.projectName) {
     throw new Error('Work item does not belong to project');
   }
   const comments = await getWorkItemComments({

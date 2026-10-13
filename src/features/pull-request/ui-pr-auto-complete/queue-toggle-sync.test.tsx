@@ -13,6 +13,7 @@ import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
 import type { Project } from '@shared/types';
 
 import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
+import { usePrCompletionQueueStore } from '@/stores/pr-completion-queue';
 
 import { PrAutoComplete } from '.';
 
@@ -58,6 +59,7 @@ const pr = {
   status: 'active',
   isDraft: false,
   autoCompleteSetBy: null,
+  targetRefName: 'refs/heads/main',
   createdBy: { id: 'user-1', uniqueName: 'me@example.com' },
   reviewers: [],
 } as unknown as AzureDevOpsPullRequestDetails;
@@ -68,6 +70,7 @@ describe('PrAutoComplete queue toggle sync', () => {
 
   beforeEach(() => {
     resetCache();
+    usePrCompletionQueueStore.setState({ entries: [] });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -127,5 +130,27 @@ describe('PrAutoComplete queue toggle sync', () => {
     expect(container.querySelector('button')?.getAttribute('title')).toContain(
       'completion queue',
     );
+  });
+
+  it('deduplicates rapid queue clicks before React re-renders', async () => {
+    ingestProject(project(true));
+
+    await act(async () => {
+      root.render(
+        <RootKeyboardBindings>
+          <PrAutoComplete pr={pr} projectId="project-1" />
+        </RootKeyboardBindings>,
+      );
+    });
+
+    const button = container.querySelector('button');
+    expect(button).not.toBeNull();
+
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(usePrCompletionQueueStore.getState().entries).toHaveLength(1);
   });
 });

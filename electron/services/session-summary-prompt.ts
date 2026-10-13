@@ -11,8 +11,9 @@ export const SESSION_SUMMARY_PROMPT = [
 
 export const SESSION_SUMMARY_SCHEMA = {
   type: 'object',
+  additionalProperties: false,
   properties: {
-    summary: { type: 'string' },
+    summary: { type: 'string', maxLength: 8_000 },
   },
   required: ['summary'],
 } as const;

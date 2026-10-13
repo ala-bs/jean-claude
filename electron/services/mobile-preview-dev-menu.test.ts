@@ -247,9 +247,14 @@ describe('metro dev commands', () => {
     // Connect only after the wait has started, so the retry loop is what
     // observes it rather than the very first poll.
     const port = metro.port;
+    // Generous budget on purpose: what is under test is that the RETRY LOOP
+    // observes a late connection, not that it happens within a particular
+    // wall-clock window. At 3s this failed under full-suite parallel load,
+    // where the event loop is starved and the deadline passes before the
+    // connect is observed. The test still ends as soon as it succeeds.
     const pending = waitForMetroClient({
       metroPort: port,
-      timeoutMs: 3_000,
+      timeoutMs: 30_000,
       pollIntervalMs: 10,
     });
     setTimeout(() => void metro?.connectApp(), 150);
