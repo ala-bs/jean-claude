@@ -219,6 +219,59 @@ describe('getEffectiveProfile', () => {
     );
   });
 
+  it('honours an explicit project pick over a prefer pin', async () => {
+    const service = createModelProfileService(
+      makeDeps({
+        policyFile: { mode: 'prefer', pinnedProfileId: 'codex' },
+        settings: {
+          projectModelProfileSelections: {
+            p1: { profileId: 'anthropic', pinnedProfileId: 'codex' },
+          },
+        } as Partial<AppSettings>,
+      }).deps,
+    );
+
+    expect(await service.getEffectiveProfile({ projectId: 'p1' })).toEqual(
+      PROFILES[0],
+    );
+  });
+
+  it('expires a pick made against a different project default', async () => {
+    // The default moved from `anthropic` to `codex` (e.g. a committed
+    // model-policy.json changed under a pull). The old pick must not shadow it.
+    const service = createModelProfileService(
+      makeDeps({
+        policyFile: { mode: 'prefer', pinnedProfileId: 'codex' },
+        settings: {
+          projectModelProfileSelections: {
+            p1: { profileId: 'anthropic', pinnedProfileId: 'anthropic' },
+          },
+        } as Partial<AppSettings>,
+      }).deps,
+    );
+
+    expect(await service.getEffectiveProfile({ projectId: 'p1' })).toEqual(
+      PROFILES[1],
+    );
+  });
+
+  it('still honours an enforce pin over a project pick', async () => {
+    const service = createModelProfileService(
+      makeDeps({
+        policyFile: { mode: 'enforce', pinnedProfileId: 'codex' },
+        settings: {
+          projectModelProfileSelections: {
+            p1: { profileId: 'anthropic', pinnedProfileId: 'codex' },
+          },
+        } as Partial<AppSettings>,
+      }).deps,
+    );
+
+    expect(await service.getEffectiveProfile({ projectId: 'p1' })).toEqual(
+      PROFILES[1],
+    );
+  });
+
   it('ignores a pinned profile in inherit mode', async () => {
     const service = createModelProfileService(
       makeDeps({
@@ -499,5 +552,89 @@ describe('profiles and fallback', () => {
     const service = createModelProfileService(makeDeps().deps);
 
     expect('activateFallbackProfile' in service).toBe(false);
+  });
+});
+
+describe('activateProfile', () => {
+  it('records the pick per project under a prefer pin', async () => {
+    const { deps, settings } = makeDeps({
+      policyFile: { mode: 'prefer', pinnedProfileId: 'codex' },
+    });
+    const service = createModelProfileService(deps);
+
+    await service.activateProfile({ profileId: 'anthropic', projectId: 'p1' });
+
+    expect(settings.activeModelProfileId).toBe('anthropic');
+    expect(settings.projectModelProfileSelections).toEqual({
+      p1: { profileId: 'anthropic', pinnedProfileId: 'codex' },
+    });
+  });
+
+  it('does not record a pick when no prefer pin would swallow it', async () => {
+    for (const policyFile of [
+      { mode: 'inherit' } as const,
+      { mode: 'prefer' } as const,
+      { mode: 'enforce', pinnedProfileId: 'codex' } as const,
+    ]) {
+      const { deps, settings } = makeDeps({ policyFile });
+      const service = createModelProfileService(deps);
+
+      await service.activateProfile({ profileId: 'anthropic', projectId: 'p1' });
+
+      expect(settings.projectModelProfileSelections).toBeUndefined();
+    }
+  });
+
+  it('leaves the per-project map alone without a projectId', async () => {
+    const { deps, settings } = makeDeps({
+      policyFile: { mode: 'prefer', pinnedProfileId: 'codex' },
+    });
+    const service = createModelProfileService(deps);
+
+    await service.activateProfile({ profileId: 'codex' });
+
+    expect(settings.activeModelProfileId).toBe('codex');
+    expect(settings.projectModelProfileSelections).toBeUndefined();
+  });
+});
+
+describe('clearProjectProfilePick', () => {
+  it('forgets the pick so a new project default is not shadowed', async () => {
+    const { deps, settings } = makeDeps({
+      policyFile: { mode: 'prefer', pinnedProfileId: 'codex' },
+    });
+    const service = createModelProfileService(deps);
+
+    await service.activateProfile({ profileId: 'anthropic', projectId: 'p1' });
+    expect(settings.projectModelProfileSelections).toEqual({
+      p1: { profileId: 'anthropic', pinnedProfileId: 'codex' },
+    });
+
+    // What `projects:setModelPolicy` does when the default profile changes.
+    await service.clearProjectProfilePick({ projectId: 'p1' });
+
+    expect(settings.projectModelProfileSelections).toEqual({});
+    expect(await service.getEffectiveProfile({ projectId: 'p1' })).toEqual(
+      PROFILES[1],
+    );
+  });
+
+  it('leaves other projects untouched and is a no-op without an entry', async () => {
+    const { deps, settings } = makeDeps({
+      settings: {
+        projectModelProfileSelections: {
+          p1: { profileId: 'anthropic', pinnedProfileId: 'codex' },
+          p2: { profileId: 'codex', pinnedProfileId: 'anthropic' },
+        },
+      } as Partial<AppSettings>,
+    });
+    const service = createModelProfileService(deps);
+    const p2 = { profileId: 'codex', pinnedProfileId: 'anthropic' };
+
+    await service.clearProjectProfilePick({ projectId: 'p1' });
+    expect(settings.projectModelProfileSelections).toEqual({ p2 });
+
+    await service.clearProjectProfilePick({ projectId: 'nope' });
+    expect(settings.projectModelProfileSelections).toEqual({ p2 });
   });
 });

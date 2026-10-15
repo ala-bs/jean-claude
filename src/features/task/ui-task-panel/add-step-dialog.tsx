@@ -471,7 +471,7 @@ export function AddStepDialog({
   const markUserTouchedSelection = useCallback(() => {
     userTouchedSelectionRef.current = true;
     setUserTouchedSelection(true);
-  }, []);
+  }, [setUserTouchedSelection]);
 
   const { data: backendsSetting } = useBackendsSetting();
   // Defaults for any backend the user picks by hand come from the resolver
@@ -639,13 +639,14 @@ export function AddStepDialog({
     [setDraft],
   );
 
+  // Deliberately depends on `isOpen` only. The resolver-provided defaults
+  // change whenever the active / effective profile changes, and re-running this
+  // reset then would also clear the user's images, files and auto-start choice.
+  // Seeding from those defaults is the next effect's job.
   useEffect(() => {
     if (isOpen) {
       userTouchedSelectionRef.current = false;
       startTransition(() => setUserTouchedSelection(false));
-      startTransition(() => setBackend(defaultBackend));
-      startTransition(() => setModel(defaultModel));
-      startTransition(() => setThinkingEffort(defaultThinkingEffort ?? 'default'));
       startTransition(() => setBackendModelPresetId(null));
       startTransition(() => setImages([]));
        startTransition(() => setFiles([]));
@@ -655,9 +656,41 @@ export function AddStepDialog({
       startTransition(() => setIncludeReviewComments(true));
       startTransition(() => setShowReviewPreview(false));
       startTransition(() => setIsAutocompleteOpen(false));
-      startTransition(() => setReviewers(createDefaultReviewers(defaultBackend)));
     }
-  }, [defaultBackend, defaultModel, defaultThinkingEffort, isOpen]);
+  }, [isOpen]);
+
+  // Seed — and re-seed — the model selection from the resolver.
+  //
+  // Re-seeding is the point: picking a profile in the switcher only writes the
+  // active / per-project profile, so without this the dialog kept whatever
+  // triple it held when it opened and the step ran the old model. An explicit
+  // "Override this step only…" pick wins, hence the touched guard.
+  useEffect(() => {
+    if (!isOpen || userTouchedSelectionRef.current) return;
+    startTransition(() => setBackend(defaultBackend));
+    startTransition(() => setModel(defaultModel));
+    startTransition(() => setThinkingEffort(defaultThinkingEffort ?? 'default'));
+    startTransition(() => setBackendModelPresetId(null));
+    // `userTouchedSelection` is a dependency so that *clearing* it (a profile
+    // pick superseding a raw override) re-runs this seed even when the
+    // resolver's defaults happen not to change.
+  }, [
+    defaultBackend,
+    defaultModel,
+    defaultThinkingEffort,
+    isOpen,
+    userTouchedSelection,
+  ]);
+
+  // Reviewer defaults follow `defaultBackend` specifically, so they are re-made
+  // when the resolver answers. Latching them to the first value instead left a
+  // `review-changes` step running its reviewers on the placeholder backend
+  // (`activeStep?.agentBackend ?? 'claude-code'`) while the step itself ran the
+  // resolved one.
+  useEffect(() => {
+    if (!isOpen || userTouchedSelectionRef.current) return;
+    startTransition(() => setReviewers(createDefaultReviewers(defaultBackend)));
+  }, [defaultBackend, isOpen, userTouchedSelection]);
 
   // Re-arm the seed only when the dialog actually opens. Deliberately NOT part
   // of the reset effect above: that effect also depends on defaultBackend /
@@ -1072,6 +1105,14 @@ export function AddStepDialog({
             <ModelProfileSwitcher
               projectId={projectId}
               side="top"
+              // A profile pick supersedes an earlier "Override this step
+              // only…" pick, so the seed effect is re-armed. Without this the
+              // trigger showed the new profile while the step still submitted
+              // the stale raw override.
+              onProfileActivated={() => {
+                userTouchedSelectionRef.current = false;
+                setUserTouchedSelection(false);
+              }}
               overrideContent={
                 <div className="flex flex-wrap items-center gap-2">
                   <BackendModelPresetPicker

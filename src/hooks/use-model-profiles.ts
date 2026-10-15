@@ -7,7 +7,11 @@ import type {
   ModelProfilesSetting,
   ModelRole,
 } from '@shared/model-profiles';
-import { pickEffectiveProfile } from '@shared/model-profiles';
+import type { ProjectModelProfileSelectionsSetting } from '@shared/types';
+import {
+  pickEffectiveProfile,
+  readProjectProfilePick,
+} from '@shared/model-profiles';
 
 import { api } from '@/lib/api';
 import { useSetting } from '@/hooks/use-settings';
@@ -18,6 +22,7 @@ import { useUpdateSetting } from '@/hooks/use-settings';
  * (see AGENTS.md: unstable outputs cause re-render loops in React 19).
  */
 const EMPTY_PROFILES: ModelProfilesSetting = [];
+const EMPTY_SELECTIONS: ProjectModelProfileSelectionsSetting = {};
 
 export const MODEL_PROFILES_QUERY_KEY = ['settings', 'modelProfiles'] as const;
 export const ACTIVE_MODEL_PROFILE_QUERY_KEY = [
@@ -25,6 +30,10 @@ export const ACTIVE_MODEL_PROFILE_QUERY_KEY = [
   'activeModelProfileId',
 ] as const;
 export const RESOLVED_MODEL_QUERY_KEY = ['model-profiles', 'resolve'] as const;
+export const PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY = [
+  'settings',
+  'projectModelProfileSelections',
+] as const;
 
 /**
  * Global profile definitions. `profiles` is always an array and keeps a stable
@@ -34,6 +43,15 @@ export function useModelProfilesSetting() {
   const query = useSetting('modelProfiles');
   const profiles = query.data ?? EMPTY_PROFILES;
   return { ...query, profiles };
+}
+
+/**
+ * Explicit per-project profile picks. Only overrides a `prefer` policy's
+ * pinned default (see `pickEffectiveProfile`).
+ */
+export function useProjectModelProfileSelections() {
+  const query = useSetting('projectModelProfileSelections');
+  return { ...query, selections: query.data ?? EMPTY_SELECTIONS };
 }
 
 /** Id of the globally active profile, or `null` when none is set. */
@@ -103,21 +121,40 @@ export function useEffectiveModelProfile(projectId?: string | null) {
   });
 
   const policy = policyQuery.data?.policy;
+  const { selections } = useProjectModelProfileSelections();
+  // Through the shared reader, so a pick made against an older project default
+  // expires here exactly as it does in the main process.
+  const projectProfileId = readProjectProfilePick({
+    selections,
+    projectId: normalizedProjectId,
+    policy,
+  });
 
   const profile = useMemo<ModelProfile | undefined>(
     () =>
       // Keep the shared resolver's null result for main-process fallback
       // semantics, but give the UI a deterministic initial profile when the
       // settings have not selected one yet.
-      pickEffectiveProfile({ profiles, activeProfileId, policy }) ??
-      profiles[0],
-    [activeProfileId, policy, profiles],
+      pickEffectiveProfile({
+        profiles,
+        activeProfileId,
+        projectProfileId,
+        policy,
+      }) ?? profiles[0],
+    [activeProfileId, policy, profiles, projectProfileId],
   );
 
   return {
     profile,
     profiles,
     activeProfileId,
+    /**
+     * The project's explicit pick, for callers that resolve a role themselves.
+     * `resolveModelForRole` re-applies a `prefer` pin on top of
+     * `activeProfileId`, so passing `effectiveProfileId` alone is NOT enough —
+     * thread this too wherever a `policy` is passed.
+     */
+    projectProfileId,
     /** Id of the profile actually in effect here (pinned or active). */
     effectiveProfileId: profile?.id ?? null,
     isLoading:
@@ -157,10 +194,16 @@ export function useUpdateModelProfiles() {
   };
 }
 
-export function useActivateModelProfile() {
+/**
+ * Activates a profile. Pass the `projectId` whenever the pick happens inside a
+ * project (composer, new step dialog): a `prefer` policy's pinned default
+ * otherwise wins on the next read and the pick looks like it did nothing.
+ */
+export function useActivateModelProfile(projectId?: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (profileId: string) => api.modelProfiles.activate(profileId),
+    mutationFn: (profileId: string) =>
+      api.modelProfiles.activate(profileId, projectId ?? null),
     onMutate: async (profileId) => {
       const queryKey = ACTIVE_MODEL_PROFILE_QUERY_KEY;
       await queryClient.cancelQueries({ queryKey });
@@ -187,6 +230,11 @@ export function useActivateModelProfile() {
       });
       // Every resolved role depends on the active profile.
       queryClient.invalidateQueries({ queryKey: RESOLVED_MODEL_QUERY_KEY });
+      // The per-project pick may have been recorded too; without this the
+      // switcher keeps rendering the project default as selected.
+      queryClient.invalidateQueries({
+        queryKey: PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
+      });
     },
   });
 }

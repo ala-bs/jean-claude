@@ -91,6 +91,12 @@ function createFakeProfileService(
       overrides.activeProfile === undefined
         ? PROFILE_CLAUDE
         : overrides.activeProfile,
+    // Used instead of `getActiveProfile` when a `projectId` is supplied: a pin
+    // or an explicit per-project pick can make them differ.
+    getEffectiveProfile: async () =>
+      overrides.activeProfile === undefined
+        ? PROFILE_CLAUDE
+        : overrides.activeProfile,
     activateProfile,
     getEffectivePolicy: async () =>
       overrides.policy ?? {
@@ -246,6 +252,7 @@ describe('RateLimitSwapService (profile fallback)', () => {
     expect(result.profileId).toBe('codex-fallback');
     expect(activateProfile).toHaveBeenCalledWith({
       profileId: 'codex-fallback',
+      projectId: null,
     });
   });
 
@@ -357,6 +364,32 @@ describe('RateLimitSwapService (profile fallback)', () => {
     expect(result.swapped).toBe(true);
     expect(result.backend).toBe('codex');
     expect(result.blocked).toBeUndefined();
+  });
+
+  it('records the fallback against the project so a pick cannot undo it', async () => {
+    // Regression: an explicit per-project profile pick beats the global active
+    // profile in a `prefer` project. Activating globally only left the project
+    // resolving the rate-limited profile while the banner announced a swap.
+    vi.mocked(agentUsageService.getUsage).mockResolvedValue({
+      'claude-code': makeUsage(0.95),
+    });
+    const { swapService, activateProfile } = createService({
+      policy: {
+        policy: { mode: 'prefer', pinnedProfileId: 'claude-default' },
+        source: 'project',
+      },
+    });
+
+    const result = await swapService.resolveBackend('claude-code', {
+      projectId: 'project-1',
+      activate: true,
+    });
+
+    expect(result.swapped).toBe(true);
+    expect(activateProfile).toHaveBeenCalledWith({
+      profileId: 'codex-fallback',
+      projectId: 'project-1',
+    });
   });
 
   it('reports the rate limit when no profile can take over', async () => {

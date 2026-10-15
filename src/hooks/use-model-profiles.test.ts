@@ -177,7 +177,7 @@ describe('useActivateModelProfile', () => {
       finish(PROFILES[1]);
       await mutation;
     });
-    expect(api.modelProfiles.activate).toHaveBeenCalledWith('codex');
+    expect(api.modelProfiles.activate).toHaveBeenCalledWith('codex', null);
   });
 
   it('rolls back to the previous active profile id when activation fails', async () => {

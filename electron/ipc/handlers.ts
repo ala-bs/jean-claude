@@ -1487,6 +1487,10 @@ export function registerIpcHandlers() {
       dbg.ipc('projects:setModelPolicy %s %s', projectId, policy?.mode);
       const result = await ProjectRepository.setModelPolicy(projectId, policy);
       invalidateProjectPolicy(projectId);
+      // A per-project profile pick only means "not the current default". Once
+      // the default itself changes, keeping the pick would silently shadow the
+      // newly chosen one.
+      await getModelProfileService().clearProjectProfilePick({ projectId });
       emitProjectUpsert(result);
       return result;
     },
@@ -5159,16 +5163,21 @@ export function registerIpcHandlers() {
         override: params.override ?? null,
       }),
   );
-  ipcMain.handle('modelProfiles:activate', async (_, profileId: string) => {
-    dbg.ipc('modelProfiles:activate %s', profileId);
-    // Throws on an unknown profile; the broadcast only happens once the switch
-    // is persisted, so renderers never show a profile that is not active.
-    const profile = await getModelProfileService().activateProfile({
-      profileId,
-    });
-    broadcastActiveModelProfile(profile);
-    return profile;
-  });
+  ipcMain.handle(
+    'modelProfiles:activate',
+    async (_, profileId: string, projectId?: string | null) => {
+      dbg.ipc('modelProfiles:activate %s (project %s)', profileId, projectId);
+      // Throws on an unknown profile; the broadcast only happens once the
+      // switch is persisted, so renderers never show a profile that is not
+      // active.
+      const profile = await getModelProfileService().activateProfile({
+        profileId,
+        projectId: projectId ?? null,
+      });
+      broadcastActiveModelProfile(profile);
+      return profile;
+    },
+  );
 
   // Settings
   ipcMain.handle(

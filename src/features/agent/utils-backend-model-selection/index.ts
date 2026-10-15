@@ -145,6 +145,7 @@ export function resolveBackendModelSelection({
   areModelsFetched,
   profiles,
   activeProfileId,
+  projectProfileId,
   policy,
 }: {
   /** The effective profile's presets — never a global list. */
@@ -163,6 +164,11 @@ export function resolveBackendModelSelection({
   /** Global profile definitions; the `agent` role backs this selection. */
   profiles?: ModelProfile[];
   activeProfileId?: string | null;
+  /**
+   * The project's explicitly picked profile, which beats a `prefer` pin. Must
+   * be threaded alongside `policy` — see `resolveAgentModelSelection`.
+   */
+  projectProfileId?: string | null;
   /** Effective project policy, when the caller knows it. */
   policy?: ProjectModelPolicy | null;
 }): {
@@ -187,6 +193,7 @@ export function resolveBackendModelSelection({
     role: 'agent',
     profiles: profiles ?? [],
     activeProfileId: activeProfileId ?? null,
+    projectProfileId: projectProfileId ?? null,
     policy: policy ?? null,
     enabledBackends,
     // The visible preset belongs to the caller's (profile's) list, so its

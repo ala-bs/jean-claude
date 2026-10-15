@@ -922,8 +922,8 @@ contextBridge.exposeInMainWorld('api', {
       projectId?: string | null;
       override?: import('@shared/model-profiles').ModelOverride | null;
     }) => ipcRenderer.invoke('modelProfiles:resolve', params),
-    activate: (profileId: string) =>
-      ipcRenderer.invoke('modelProfiles:activate', profileId),
+    activate: (profileId: string, projectId?: string | null) =>
+      ipcRenderer.invoke('modelProfiles:activate', profileId, projectId ?? null),
   },
   backendConfig: {
     getUserConfig: (

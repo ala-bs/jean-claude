@@ -1431,9 +1431,16 @@ export interface Api {
       projectId?: string | null;
       override?: import('@shared/model-profiles').ModelOverride | null;
     }) => Promise<import('@shared/model-profiles').ResolvedModel>;
-    /** Makes a profile the globally active one. */
+    /**
+     * Makes a profile the globally active one.
+     *
+     * Pass `projectId` when the pick happens inside a project (composer, new
+     * step dialog): a `prefer` policy's pinned default would otherwise
+     * override the choice on the next read.
+     */
     activate: (
       profileId: string,
+      projectId?: string | null,
     ) => Promise<import('@shared/model-profiles').ModelProfile>;
   };
   backendConfig: {

@@ -40,6 +40,7 @@ import {
 } from '@/common/ui/list-detail-layout';
 import {
   PROJECT_MODEL_POLICY_QUERY_KEY,
+  PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
   RESOLVED_MODEL_QUERY_KEY,
   useModelProfilesSetting,
 } from '@/hooks/use-model-profiles';
@@ -2050,6 +2051,12 @@ function ProjectModelPolicySection({ projectId }: { projectId: string }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: effectivePolicyQueryKey });
       queryClient.invalidateQueries({ queryKey: RESOLVED_MODEL_QUERY_KEY });
+      // The main process clears this project's explicit profile pick on a
+      // policy write; without refetching it the switcher keeps showing the
+      // pick the new default has just superseded.
+      queryClient.invalidateQueries({
+        queryKey: PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
+      });
     },
   });
 

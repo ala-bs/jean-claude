@@ -1507,6 +1507,49 @@ export function isModelFallbackOrderSetting(
   );
 }
 
+/**
+ * Per-project explicit profile picks, keyed by project id.
+ *
+ * A project-scoped pick exists so a `prefer` policy's `pinnedProfileId` can be
+ * a *default* rather than an override: the pin seeds a project the user has
+ * never chosen for, and this map records the moment they choose otherwise.
+ * Without it the switcher could only write the global active profile, which a
+ * `prefer` pin then silently discarded.
+ *
+ * `pinnedProfileId` records the default the pick was made *against*, so the
+ * pick expires by itself as soon as the project default changes. That matters
+ * because a policy can come from a committed `.jean-claude/model-policy.json`
+ * that changes under a `git pull` — there is no write hook to clear it, so an
+ * entry keyed only by project id would shadow the new default forever.
+ */
+export type ProjectModelProfileSelection = {
+  /** The profile the user picked for this project. */
+  profileId: string;
+  /** The `prefer` pin in force when the pick was made. */
+  pinnedProfileId: string;
+};
+
+export type ProjectModelProfileSelectionsSetting = Record<
+  string,
+  ProjectModelProfileSelection
+>;
+
+export function isProjectModelProfileSelectionsSetting(
+  value: unknown,
+): value is ProjectModelProfileSelectionsSetting {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return false;
+    }
+    const pick = entry as Record<string, unknown>;
+    return (
+      typeof pick.profileId === 'string' &&
+      typeof pick.pinnedProfileId === 'string'
+    );
+  });
+}
+
 export function isProjectModelPolicySetting(
   value: unknown,
 ): value is ProjectModelPolicy {
@@ -1878,6 +1921,14 @@ export const SETTINGS_DEFINITIONS = {
   activeModelProfileId: {
     defaultValue: null as string | null,
     validate: isActiveModelProfileIdSetting,
+  },
+  /**
+   * Project id -> explicitly picked profile id. Beats a `prefer` policy's
+   * `pinnedProfileId`, which is only a default (see the type's doc comment).
+   */
+  projectModelProfileSelections: {
+    defaultValue: {} as ProjectModelProfileSelectionsSetting,
+    validate: isProjectModelProfileSelectionsSetting,
   },
   /** Ordered profile ids used for rate-limit fallback. Replaces `rateLimitSwap`. */
   modelFallbackOrder: {
