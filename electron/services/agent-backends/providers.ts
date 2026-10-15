@@ -389,8 +389,8 @@ export const codexProvider: AgentBackendProvider = {
     supportsPermissions: true,
     supportsQuestions: true,
     supportsRuntimeModeSwitch: false,
-    supportsSessionAllowedTools: false,
-    supportsPermissionRuleUpdates: false,
+    supportsSessionAllowedTools: true,
+    supportsPermissionRuleUpdates: true,
     supportsPromptSteering: true,
   }),
 };

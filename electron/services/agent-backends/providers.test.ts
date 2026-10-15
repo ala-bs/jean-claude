@@ -229,12 +229,14 @@ describe('agent backend providers', () => {
     }
   });
 
-  it('only supports permission rule refresh where the backend can honor it', () => {
+  it('supports permission rule refresh on every backend', () => {
+    // Codex was the last holdout: it now evaluates permission rules for MCP
+    // tool-call approvals, so a rule added mid-run reaches the live session.
     for (const type of BACKEND_TYPES) {
       const provider = getAgentBackendProvider(type);
       expect(
         provider.capabilities.agent.permissionRuleUpdates?.supported,
-      ).toBe(type !== 'codex');
+      ).toBe(true);
     }
   });
 
@@ -416,7 +418,10 @@ describe('agent backend providers', () => {
     expect(codexAgent.permissions.supported).toBe(true);
     expect(codexAgent.questions.supported).toBe(true);
     expect(codexAgent.runtimeModeSwitch.supported).toBe(false);
-    expect(codexAgent.sessionAllowedTools.supported).toBe(false);
+    // Codex evaluates permission rules for MCP tool calls, so it both accepts
+    // live rule refreshes and reports its session grants back for persistence.
+    expect(codexAgent.sessionAllowedTools.supported).toBe(true);
+    expect(codexAgent.permissionRuleUpdates?.supported).toBe(true);
     expect(codexAgent.promptSteering?.supported).toBe(true);
 
     const vibeAgent = getAgentBackendProvider('vibe').capabilities.agent;
