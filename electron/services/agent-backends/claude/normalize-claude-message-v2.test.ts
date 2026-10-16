@@ -158,3 +158,69 @@ describe('normalizeClaudeMessageV2 permission attribution', () => {
     });
   });
 });
+
+describe('normalizeClaudeMessageV2 model attribution', () => {
+  it('uses the assistant model instead of the first modelUsage key', () => {
+    const ctx = makeCtx();
+    normalizeClaudeMessageV2(
+      {
+        type: 'assistant',
+        session_id: 'session-1',
+        message: {
+          model: 'claude-opus-4-1',
+          content: [{ type: 'text', text: 'Done' }],
+        },
+      } as unknown as AgentMessage,
+      ctx,
+    );
+    normalizeClaudeMessageV2(
+      {
+        type: 'assistant',
+        session_id: 'session-1',
+        parent_tool_use_id: 'tool-subagent-1',
+        message: {
+          model: 'claude-3-5-haiku-20241022',
+          content: [{ type: 'text', text: 'Subagent result' }],
+        },
+      } as unknown as AgentMessage,
+      ctx,
+    );
+
+    const events = normalizeClaudeMessageV2(
+      {
+        type: 'result',
+        session_id: 'session-1',
+        modelUsage: {
+          'claude-3-5-haiku-20241022': {},
+          'claude-opus-4-1': {},
+        },
+      } as unknown as AgentMessage,
+      ctx,
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'complete',
+        result: expect.objectContaining({ model: 'claude-opus-4-1' }),
+      }),
+    );
+  });
+
+  it('uses a single modelUsage key when no assistant model was emitted', () => {
+    const events = normalizeClaudeMessageV2(
+      {
+        type: 'result',
+        session_id: 'session-1',
+        modelUsage: { 'claude-opus-5': {} },
+      } as unknown as AgentMessage,
+      makeCtx(),
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'complete',
+        result: expect.objectContaining({ model: 'claude-opus-5' }),
+      }),
+    );
+  });
+});

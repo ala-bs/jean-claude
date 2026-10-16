@@ -52,6 +52,8 @@ export type NormalizationContext = {
    * When unset, every tool falls back to "allowed by agent".
    */
   permissionRules?: ResolvedPermissionRule[];
+  /** Model reported on the latest assistant message in this turn. */
+  lastAssistantModel?: string;
 };
 
 // --- Constants ---
@@ -109,7 +111,7 @@ export function normalizeClaudeMessageV2(
       events.push(...normalizeUserRaw(raw, ctx));
       break;
     case 'result':
-      events.push(...normalizeResultRaw(raw));
+      events.push(...normalizeResultRaw(raw, ctx));
       break;
   }
 
@@ -158,7 +160,11 @@ function normalizeAssistantRaw(
   ctx: NormalizationContext,
 ): NormalizationEvent[] {
   const msg = raw.message as AssistantMessage | undefined;
-  if (!msg?.content) return [];
+  if (!msg) return [];
+  if (msg.model && raw.parent_tool_use_id == null) {
+    ctx.lastAssistantModel = msg.model;
+  }
+  if (!msg.content) return [];
 
   const parentToolId = raw.parent_tool_use_id ?? undefined;
   const events: NormalizationEvent[] = [];
@@ -323,7 +329,10 @@ function normalizeUserRaw(
 
 // --- Result messages ---
 
-function normalizeResultRaw(raw: AgentMessage): NormalizationEvent[] {
+function normalizeResultRaw(
+  raw: AgentMessage,
+  ctx: NormalizationContext,
+): NormalizationEvent[] {
   const usage = raw.usage
     ? {
         inputTokens: raw.usage.input_tokens ?? 0,
@@ -332,7 +341,17 @@ function normalizeResultRaw(raw: AgentMessage): NormalizationEvent[] {
         cacheCreationTokens: raw.usage.cache_creation_input_tokens,
       }
     : undefined;
-  const model = raw.modelUsage ? Object.keys(raw.modelUsage)[0] : undefined;
+  // `modelUsage` can contain models used by subagents as well as the main
+  // conversation model. Its key order is not a reliable way to identify the
+  // model for this session (a Haiku subagent could otherwise label an Opus
+  // session as Haiku). A sole key is unambiguous and preserves attribution
+  // when the SDK emits a result without an assistant message.
+  const modelUsageKeys = Object.keys(raw.modelUsage ?? {});
+  const model =
+    ctx.lastAssistantModel ??
+    (modelUsageKeys.length === 1 ? modelUsageKeys[0] : undefined);
+  // Do not carry a prior turn's model into a result that has no model signal.
+  ctx.lastAssistantModel = undefined;
 
   return [
     // The result entry for the UI
