@@ -593,3 +593,104 @@ describe('message-merger', () => {
     });
   });
 });
+
+describe('prompt navigation items', () => {
+  const compactionEntries = (): NormalizedEntry[] => [
+    {
+      id: 'prompt-1',
+      date: '2026-05-23T10:00:00.000Z',
+      type: 'user-prompt',
+      value: 'First prompt',
+    },
+    {
+      id: 'compact-start',
+      date: '2026-05-23T10:00:01.000Z',
+      type: 'system-status',
+      status: 'compacting',
+    },
+    {
+      id: 'compact-end',
+      date: '2026-05-23T10:00:02.000Z',
+      type: 'system-status',
+      status: null,
+    },
+    {
+      id: 'result-1',
+      date: '2026-05-23T10:00:03.000Z',
+      type: 'result',
+      isError: false,
+    },
+    {
+      id: 'prompt-2',
+      date: '2026-05-23T10:00:04.000Z',
+      type: 'user-prompt',
+      value: 'Second prompt',
+    },
+  ];
+
+  it('interleaves compaction items between prompts and keeps prompt numbering', () => {
+    const { promptNavigationItems, compactionIndexMap } = processMessageStream(
+      compactionEntries(),
+      false,
+    );
+
+    expect(promptNavigationItems).toEqual([
+      { kind: 'prompt', index: 0, promptNumber: 1, text: 'First prompt' },
+      {
+        kind: 'compaction',
+        index: 1,
+        text: 'Context compacted',
+        isComplete: true,
+      },
+      { kind: 'prompt', index: 2, promptNumber: 2, text: 'Second prompt' },
+    ]);
+    expect(compactionIndexMap.get('compact-start')).toBe(1);
+  });
+
+  it('marks an unfinished compaction as in-flight', () => {
+    const entries = compactionEntries().filter(
+      (entry) => entry.id !== 'compact-end',
+    );
+    const { promptNavigationItems } = processMessageStream(entries, true);
+
+    expect(
+      promptNavigationItems.find((item) => item.kind === 'compaction'),
+    ).toMatchObject({ isComplete: false, text: 'Compacting context…' });
+  });
+
+  it('collapses repeated compacting status pings into one item', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'prompt-1',
+        date: '2026-05-23T10:00:00.000Z',
+        type: 'user-prompt',
+        value: '/compact',
+      },
+      ...[1, 2, 3, 4, 5].map((n) => ({
+        id: `compact-start-${n}`,
+        date: `2026-05-23T10:00:0${n}.000Z`,
+        type: 'system-status' as const,
+        status: 'compacting' as const,
+      })),
+      {
+        id: 'compact-end',
+        date: '2026-05-23T10:00:06.000Z',
+        type: 'system-status',
+        status: null,
+      },
+    ];
+
+    const { promptNavigationItems } = processMessageStream(entries, false);
+
+    expect(
+      promptNavigationItems.filter((item) => item.kind === 'compaction'),
+    ).toEqual([
+      {
+        kind: 'compaction',
+        index: 1,
+        text: 'Context compacted',
+        isComplete: true,
+      },
+    ]);
+  });
+});

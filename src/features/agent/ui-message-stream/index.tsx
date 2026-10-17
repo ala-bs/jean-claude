@@ -218,6 +218,7 @@ export const MessageStream = memo(function MessageStream({
   const {
     streamMessages,
     promptIndexMap,
+    compactionIndexMap,
     promptNavigationItems,
     lastPromptGroupIndex,
   } = processedStream;
@@ -623,6 +624,7 @@ export const MessageStream = memo(function MessageStream({
                   )}
                   <PromptGroupEntry
                     group={streamMessage}
+                    compactionIndexMap={compactionIndexMap}
                     isLast={index === lastPromptGroupIndex}
                     backgroundJobsStepId={
                       index === lastPromptGroupIndex ? (stepId ?? null) : null
@@ -674,11 +676,18 @@ export const MessageStream = memo(function MessageStream({
               );
             }
             if (streamMessage.kind === 'compacting') {
+              const compactionIdx = compactionIndexMap.get(
+                streamMessage.startEntry.id,
+              );
               return (
-                <CompactingEntry
+                <div
                   key={index}
-                  isComplete={!!streamMessage.endEntry}
-                />
+                  {...(compactionIdx !== undefined
+                    ? { 'data-prompt-index': compactionIdx }
+                    : {})}
+                >
+                  <CompactingEntry isComplete={!!streamMessage.endEntry} />
+                </div>
               );
             }
             if (streamMessage.kind === 'subagent') {

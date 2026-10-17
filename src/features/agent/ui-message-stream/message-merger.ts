@@ -48,16 +48,28 @@ export type PromptGroup = {
  */
 export type StreamMessage = PromptGroup | DisplayMessage;
 
-export interface PromptNavigationItem {
-  index: number;
-  text: string;
-}
+/**
+ * One item of the prompt navigator rail. Prompts and context compactions share
+ * a single `index` sequence (document order) so the rail, keyboard navigation
+ * and the `data-prompt-index` DOM anchors all agree on what "item N" is.
+ * `promptNumber` is the user-facing 1-based prompt count, which skips
+ * compaction items so prompt numbering stays stable.
+ */
+export type PromptNavigationItem =
+  | { kind: 'prompt'; index: number; promptNumber: number; text: string }
+  | {
+      kind: 'compaction';
+      index: number;
+      text: string;
+      isComplete: boolean;
+    };
 
 export interface MessageStreamProcessingCache {
   entries: NormalizedEntry[];
   isRunning?: boolean;
   streamMessages: StreamMessage[];
   promptIndexMap: Map<number, number>;
+  compactionIndexMap: Map<string, number>;
   promptNavigationItems: PromptNavigationItem[];
   lastPromptGroupIndex: number;
 }
@@ -65,6 +77,8 @@ export interface MessageStreamProcessingCache {
 export interface MessageStreamProcessingResult {
   streamMessages: StreamMessage[];
   promptIndexMap: Map<number, number>;
+  /** compacting `startEntry.id` → navigation index */
+  compactionIndexMap: Map<string, number>;
   promptNavigationItems: PromptNavigationItem[];
   lastPromptGroupIndex: number;
   cache: MessageStreamProcessingCache;
@@ -357,13 +371,24 @@ export function mergeSkillMessages(
 
     // Check for compacting start
     if (isCompactingStartEntry(current)) {
+      // Backends emit the 'compacting' status repeatedly for a single
+      // compaction (one ping per stream update) but only one terminating
+      // null status. Absorb every repeated start up to the end so one
+      // compaction yields exactly one timeline item.
       let endIndex: number | undefined;
+      const duplicateStartIndices: number[] = [];
       for (let j = i + 1; j < entries.length; j++) {
         if (processedIndices.has(j)) continue;
         if (isCompactingEndEntry(entries[j])) {
           endIndex = j;
           break;
         }
+        if (isCompactingStartEntry(entries[j])) {
+          duplicateStartIndices.push(j);
+        }
+      }
+      for (const duplicateIndex of duplicateStartIndices) {
+        processedIndices.add(duplicateIndex);
       }
 
       if (endIndex !== undefined) {
@@ -668,34 +693,61 @@ function findStreamIndexForPrompt(
 
 function buildPromptIndexMetadata(streamMessages: StreamMessage[]): {
   promptIndexMap: Map<number, number>;
+  compactionIndexMap: Map<string, number>;
   promptNavigationItems: PromptNavigationItem[];
   lastPromptGroupIndex: number;
 } {
   const promptIndexMap = new Map<number, number>();
+  const compactionIndexMap = new Map<string, number>();
   const promptNavigationItems: PromptNavigationItem[] = [];
   let counter = 0;
+  let promptNumber = 0;
   let lastPromptGroupIndex = -1;
+
+  const pushPrompt = (streamIndex: number, text: string) => {
+    promptIndexMap.set(streamIndex, counter);
+    promptNumber++;
+    promptNavigationItems.push({
+      kind: 'prompt',
+      index: counter,
+      promptNumber,
+      text,
+    });
+    counter++;
+  };
+
+  const pushCompaction = (message: DisplayMessage) => {
+    if (message.kind !== 'compacting') return;
+    compactionIndexMap.set(message.startEntry.id, counter);
+    promptNavigationItems.push({
+      kind: 'compaction',
+      index: counter,
+      text: message.endEntry ? 'Context compacted' : 'Compacting context…',
+      isComplete: !!message.endEntry,
+    });
+    counter++;
+  };
 
   for (let i = 0; i < streamMessages.length; i++) {
     const message = streamMessages[i];
     if (message.kind === 'prompt-group') {
       const text = message.promptEntry.value.trim();
-      promptIndexMap.set(i, counter);
-      if (text) promptNavigationItems.push({ index: counter, text });
-      counter++;
+      if (text) {
+        pushPrompt(i, text);
+      } else {
+        // Keep the DOM anchor (and index slot) even for empty prompts so the
+        // rail's index arithmetic stays aligned with the stream.
+        promptIndexMap.set(i, counter);
+        counter++;
+      }
       lastPromptGroupIndex = i;
+      for (const child of message.childMessages) pushCompaction(child);
     } else if (
       message.kind === 'entry' &&
       isNonEmptyUserPromptEntry(message.entry)
     ) {
-      promptIndexMap.set(i, counter);
-      promptNavigationItems.push({
-        index: counter,
-        text: message.entry.value.trim(),
-      });
-      counter++;
+      pushPrompt(i, message.entry.value.trim());
     } else if (message.kind === 'skill') {
-      promptIndexMap.set(i, counter);
       const skillPrompt =
         message.promptEntry?.type === 'user-prompt'
           ? message.promptEntry.value.trim()
@@ -707,12 +759,18 @@ function buildPromptIndexMetadata(streamMessages: StreamMessage[]): {
             ? message.skillToolUse.skillName
             : 'unknown'
         }`;
-      promptNavigationItems.push({ index: counter, text });
-      counter++;
+      pushPrompt(i, text);
+    } else if (message.kind === 'compacting') {
+      pushCompaction(message);
     }
   }
 
-  return { promptIndexMap, promptNavigationItems, lastPromptGroupIndex };
+  return {
+    promptIndexMap,
+    compactionIndexMap,
+    promptNavigationItems,
+    lastPromptGroupIndex,
+  };
 }
 
 function reusePromptNavigationItemsIfEqual(
@@ -722,9 +780,22 @@ function reusePromptNavigationItemsIfEqual(
   if (!previous || previous.length !== next.length) return next;
 
   for (let i = 0; i < next.length; i++) {
+    const a = previous[i];
+    const b = next[i];
+    if (a.kind !== b.kind || a.index !== b.index || a.text !== b.text) {
+      return next;
+    }
     if (
-      previous[i].index !== next[i].index ||
-      previous[i].text !== next[i].text
+      a.kind === 'compaction' &&
+      b.kind === 'compaction' &&
+      a.isComplete !== b.isComplete
+    ) {
+      return next;
+    }
+    if (
+      a.kind === 'prompt' &&
+      b.kind === 'prompt' &&
+      a.promptNumber !== b.promptNumber
     ) {
       return next;
     }
@@ -913,8 +984,12 @@ export function processMessageStream(
     previousCache?.streamMessages,
   );
 
-  const { promptIndexMap, lastPromptGroupIndex, promptNavigationItems } =
-    buildPromptIndexMetadata(streamMessages);
+  const {
+    promptIndexMap,
+    compactionIndexMap,
+    lastPromptGroupIndex,
+    promptNavigationItems,
+  } = buildPromptIndexMetadata(streamMessages);
   const stablePromptNavigationItems = reusePromptNavigationItemsIfEqual(
     promptNavigationItems,
     previousCache?.promptNavigationItems,
@@ -924,6 +999,7 @@ export function processMessageStream(
     isRunning,
     streamMessages,
     promptIndexMap,
+    compactionIndexMap,
     promptNavigationItems: stablePromptNavigationItems,
     lastPromptGroupIndex,
   };
@@ -931,6 +1007,7 @@ export function processMessageStream(
   return {
     streamMessages,
     promptIndexMap,
+    compactionIndexMap,
     promptNavigationItems: stablePromptNavigationItems,
     lastPromptGroupIndex,
     cache,
