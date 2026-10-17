@@ -1384,6 +1384,8 @@ export interface Api {
     readPackageJson: (dirPath: string) => Promise<PackageJson | null>;
     readFile: (
       filePath: string,
+      /** Read only the first `maxBytes` bytes — for previews. */
+      maxBytes?: number,
     ) => Promise<{ content: string; language: string } | null>;
     getFileSize: (filePath: string) => Promise<number | null>;
     readImageAsDataUrl: (filePath: string) => Promise<string | null>;

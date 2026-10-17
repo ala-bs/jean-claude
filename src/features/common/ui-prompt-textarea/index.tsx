@@ -67,6 +67,12 @@ import type {
 import { FileEditorDialog } from '@/features/common/ui-file-editor-dialog';
 import { formatBytes } from '@/lib/format-bytes';
 import { formatPastedPromptContent } from '@/lib/format-pasted-prompt-content';
+import {
+  buildPastedPromptPlaceholder,
+  isPastedPromptFilename,
+  removePastedPromptPlaceholder,
+  reservePastedPromptFilename,
+} from '@/lib/pasted-prompt-placeholders';
 import { resolveMessageInputText } from '@/lib/resolve-message-input-text';
 import { resolvePromptSnippet } from '@/lib/resolve-snippet-template';
 import type { Skill } from '@shared/skill-types';
@@ -1104,6 +1110,10 @@ export const PromptTextarea = forwardRef<
   );
   imageBatchRef.current ??= createImageInsertBatch();
   const imageBatchSeqRef = useRef(0);
+  // Reserves `paste-N.md` names synchronously. A plain `files`-derived number
+  // would repeat itself for two pastes inside one write's round-trip, since
+  // `files` only grows once the write resolves.
+  const pasteSeqRef = useRef({ current: 0 });
 
   const insertAtCursor = useCallback(
     (placeholder: string) => {
@@ -1199,6 +1209,57 @@ export const PromptTextarea = forwardRef<
     [images, onImageRemove, onChange],
   );
 
+  /**
+   * Insert a marker at the live caret, outside the image batch. Pasted text is
+   * already in hand (no async decode), so the batch's held caret would only
+   * strand this insert at a *previous* paste's position.
+   */
+  const insertMarkerAtSelection = useCallback(
+    (marker: string) => {
+      const current = latestValueRef.current;
+      const textarea = textareaRef.current;
+      const caret = {
+        start: textarea?.selectionStart ?? current.length,
+        end: textarea?.selectionEnd ?? current.length,
+      };
+      const next = buildImagePlaceholderInsertion({
+        value: current,
+        caret,
+        placeholder: marker,
+      });
+      latestValueRef.current = next.value;
+      onChange(next.value);
+      setCursorPosition(next.caret.start);
+      setCompletionCursorPosition(next.caret.start);
+      dismiss();
+      requestAnimationFrame(() => {
+        textareaRef.current?.setSelectionRange(
+          next.caret.start,
+          next.caret.end,
+        );
+      });
+    },
+    [onChange, dismiss],
+  );
+
+  const handleFileRemove = useCallback(
+    (index: number) => {
+      const filename = files?.[index]?.filename;
+      if (filename && isPastedPromptFilename(filename)) {
+        const next = removePastedPromptPlaceholder(
+          latestValueRef.current,
+          filename,
+        );
+        if (next !== latestValueRef.current) {
+          latestValueRef.current = next;
+          onChange(next);
+        }
+      }
+      onFileRemove?.(index);
+    },
+    [files, onFileRemove, onChange],
+  );
+
   const handlePaste = useCallback(
     (e: ClipboardEvent<HTMLTextAreaElement>) => {
       dismiss();
@@ -1235,13 +1296,33 @@ export const PromptTextarea = forwardRef<
         projectRoot
       ) {
         e.preventDefault();
+        // The marker goes in now, synchronously, at the caret the user pasted
+        // into — the write is async and they may have moved on by the time it
+        // lands, and the whole point is to record *this* position.
+        const filename = reservePastedPromptFilename({
+          counter: pasteSeqRef.current,
+          files,
+          text: latestValueRef.current,
+        });
+        insertMarkerAtSelection(buildPastedPromptPlaceholder(filename));
 
-        void processPastedPromptAttachment(
-          pastedText,
-          projectRoot,
-          onFileAttach,
-          showImageError,
-        );
+        void processPastedPromptAttachment({
+          content: pastedText,
+          projectPath: projectRoot,
+          filename,
+          onAttach: onFileAttach,
+          onError: (message) => {
+            // Nothing was attached, so leave no marker pointing at a file that
+            // does not exist.
+            const next = removePastedPromptPlaceholder(
+              latestValueRef.current,
+              filename,
+            );
+            latestValueRef.current = next;
+            onChange(next);
+            showImageError(message);
+          },
+        });
         return;
       }
 
@@ -1293,6 +1374,8 @@ export const PromptTextarea = forwardRef<
       onChange,
       dismiss,
       slashOptionTokens,
+      files,
+      insertMarkerAtSelection,
     ],
   );
 
@@ -1893,7 +1976,7 @@ export const PromptTextarea = forwardRef<
 
       {/* File previews — below images in normal flow */}
       {files && files.length > 0 && (
-        <FileThumbnails files={files} onFileRemove={onFileRemove} />
+        <FileThumbnails files={files} onFileRemove={handleFileRemove} />
       )}
 
       {/* Drag overlay covers the full composer container, including padding. */}
@@ -1981,25 +2064,90 @@ function FileThumbnails({
   return (
     <div className="mt-2 flex max-h-24 flex-wrap gap-2 overflow-y-auto">
       {files.map((file, index) => (
-        <div
+        <FileThumbnail
           key={`${file.filename}-${index}`}
-          className="group border-glass-border bg-glass-light relative flex items-center gap-1.5 rounded border px-2 py-1"
-        >
-          <Paperclip className="text-ink-3 h-3 w-3 shrink-0" />
-          <span className="text-ink-2 max-w-[120px] truncate text-xs">
-            {file.filename}
-          </span>
-          {onFileRemove && (
-            <button
-              type="button"
-              onClick={() => onFileRemove(index)}
-              className="text-ink-3 hover:text-ink-1 ml-0.5 hidden group-hover:block"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          )}
-        </div>
+          file={file}
+          onRemove={onFileRemove ? () => onFileRemove(index) : undefined}
+        />
       ))}
+    </div>
+  );
+}
+
+/** Head of a pasted chunk shown on hover, so chips stay tellable apart. */
+const FILE_PREVIEW_CHARS = 600;
+/** Read a little more than is displayed; multi-byte chars cost extra bytes. */
+const FILE_PREVIEW_BYTES = FILE_PREVIEW_CHARS * 4;
+
+function FileThumbnail({
+  file,
+  onRemove,
+}: {
+  file: PromptFilePart;
+  onRemove?: () => void;
+}) {
+  const [preview, setPreview] = useState<string | null>(null);
+  const [hovered, setHovered] = useState(false);
+  // Only pasted chunks are previewed: they are the ones whose names say nothing
+  // about their contents. Any other chip can point at an arbitrary file the
+  // user picked — including a multi-hundred-MB one attached by original path —
+  // and a hover is an involuntary gesture to pay that read for.
+  const canPreview = isPastedPromptFilename(file.filename);
+
+  // Read lazily on first hover, and only the head: the tooltip shows a few
+  // hundred characters, so reading the whole attachment would stall the main
+  // process for bytes that are thrown away.
+  useEffect(() => {
+    if (!hovered || !canPreview || preview !== null) return;
+    let cancelled = false;
+    void window.api.fs
+      .readFile(file.filePath, FILE_PREVIEW_BYTES)
+      .then((result) => {
+        if (cancelled) return;
+        if (!result) {
+          // The IPC handler reports a read failure as `null` rather than a
+          // rejection, so this — not the catch — is the failure path. Leaving
+          // `preview` null keeps the next hover retrying instead of caching an
+          // empty tooltip for the chip's lifetime.
+          setHovered(false);
+          return;
+        }
+        setPreview(result.content.slice(0, FILE_PREVIEW_CHARS));
+      })
+      .catch(() => {
+        if (!cancelled) setHovered(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hovered, canPreview, preview, file.filePath]);
+
+  return (
+    <div
+      className="group border-glass-border bg-glass-light relative flex items-center gap-1.5 rounded border px-2 py-1"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <Paperclip className="text-ink-3 h-3 w-3 shrink-0" />
+      <span className="text-ink-2 max-w-[120px] truncate text-xs">
+        {file.filename}
+      </span>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="text-ink-3 hover:text-ink-1 ml-0.5 hidden group-hover:block"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
+      {hovered && preview && (
+        <div className="border-glass-border bg-surface-1 text-ink-2 pointer-events-none absolute bottom-full left-0 z-50 mb-1 max-h-48 w-80 overflow-hidden rounded border p-2 shadow-lg">
+          <pre className="font-mono text-[10px] leading-snug whitespace-pre-wrap">
+            {preview}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

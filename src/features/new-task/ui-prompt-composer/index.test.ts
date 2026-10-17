@@ -186,11 +186,11 @@ describe('PromptComposer large paste', () => {
     expect(event.preventDefault).toHaveBeenCalled();
     expect(writeAttachmentFile).toHaveBeenCalledWith(
       '/repo',
-      'pasted-content.md',
+      'paste-1.md',
       pasted,
     );
     expect(onFileAttach).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'file', filename: 'pasted-content.md' }),
+      expect.objectContaining({ type: 'file', filename: 'paste-1.md' }),
     );
   });
 

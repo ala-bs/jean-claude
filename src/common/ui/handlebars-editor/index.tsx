@@ -1,7 +1,13 @@
 import * as monaco from 'monaco-editor/esm/vs/editor/edcore.main.js';
 import Editor, { loader, type OnMount } from '@monaco-editor/react';
 import type { editor, IDisposable, IPosition, languages } from 'monaco-editor';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  type MutableRefObject,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 
 
@@ -170,6 +176,16 @@ function getWeightedFeatureScore({
   return Math.max(...scores);
 }
 
+export type HandlebarsEditorApi = {
+  /**
+   * Replace the current selection (or insert at the cursor) with `text`, and
+   * return the resulting document — callers tracking the latest value cannot
+   * wait for the `onChange` round-trip if they must undo the insert in the
+   * same tick.
+   */
+  insertAtCursor: (text: string) => string | null;
+};
+
 export function HandlebarsEditor({
   value,
   onChange,
@@ -180,6 +196,7 @@ export function HandlebarsEditor({
   featureMap = null,
   onPaste,
   moveCursorBelowPaste = false,
+  apiRef,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -198,6 +215,12 @@ export function HandlebarsEditor({
    * below the pasted content.
    */
   moveCursorBelowPaste?: boolean;
+  /**
+   * Filled with an imperative handle once the editor mounts. Needed because
+   * only Monaco knows where the cursor is, so a caller that cancels a paste
+   * (see `onPaste`) cannot drop a marker in its place from `value` alone.
+   */
+  apiRef?: MutableRefObject<HandlebarsEditorApi | null>;
 }) {
   const disposablesRef = useRef<IDisposable[]>([]);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
@@ -236,6 +259,41 @@ export function HandlebarsEditor({
   const handleMount: OnMount = useCallback(
     (monacoEditor, monaco) => {
       editorRef.current = monacoEditor;
+      if (apiRef) {
+        apiRef.current = {
+          insertAtCursor: (text) => {
+            const selection = monacoEditor.getSelection();
+            const model = monacoEditor.getModel();
+            if (!selection || !model) return null;
+            // Keep the marker on its own line, like the plain-textarea
+            // composer does, so it never glues itself to the word the user
+            // was mid-sentence on.
+            const before = model.getValueInRange({
+              startLineNumber: selection.startLineNumber,
+              startColumn: 1,
+              endLineNumber: selection.startLineNumber,
+              endColumn: selection.startColumn,
+            });
+            const after = model.getValueInRange({
+              startLineNumber: selection.endLineNumber,
+              startColumn: selection.endColumn,
+              endLineNumber: selection.endLineNumber,
+              endColumn: model.getLineMaxColumn(selection.endLineNumber),
+            });
+            const prefix = before.length === 0 ? '' : '\n';
+            const suffix = after.length === 0 ? '' : '\n';
+            monacoEditor.executeEdits('insert-at-cursor', [
+              {
+                range: selection,
+                text: `${prefix}${text}${suffix}`,
+                forceMoveMarkers: true,
+              },
+            ]);
+            monacoEditor.focus();
+            return model.getValue();
+          },
+        };
+      }
 
       // Monaco handles paste on its hidden textarea, so React's onPaste on a
       // parent runs too late to cancel it. Intercept in the capture phase.
@@ -569,7 +627,7 @@ export function HandlebarsEditor({
       });
       disposablesRef.current.push(pasteDisposable);
     },
-    [minHeight, maxHeight],
+    [minHeight, maxHeight, apiRef],
   );
 
   // Cleanup on unmount

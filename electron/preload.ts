@@ -1033,7 +1033,8 @@ contextBridge.exposeInMainWorld('api', {
   fs: {
     readPackageJson: (dirPath: string) =>
       ipcRenderer.invoke('fs:readPackageJson', dirPath),
-    readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
+    readFile: (filePath: string, maxBytes?: number) =>
+      ipcRenderer.invoke('fs:readFile', filePath, maxBytes),
     getFileSize: (filePath: string) =>
       ipcRenderer.invoke('fs:getFileSize', filePath),
     readImageAsDataUrl: (filePath: string) =>

@@ -590,6 +590,27 @@ import { cloneFromUrl } from '../services/git-clone-service';
 import { getModelProfileService } from '../services/model-profile-service';
 import { registerPrWorkspaceIpcHandlers } from './pr-workspace-ipc';
 
+/**
+ * Read at most `maxBytes` from the head of a file. For previews, where the
+ * caller discards everything past a few hundred characters anyway and the file
+ * may be an arbitrarily large attachment.
+ */
+async function readFileHead(
+  filePath: string,
+  maxBytes: number,
+): Promise<string> {
+  const handle = await fs.open(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+    // A multi-byte character straddling the cut decodes to U+FFFD; harmless in
+    // a preview and cheaper than re-reading to find a safe boundary.
+    return buffer.subarray(0, bytesRead).toString('utf-8');
+  } finally {
+    await handle.close();
+  }
+}
+
 function redactAiGenerationSetting(
   setting: AiGenerationSetting,
 ): AiGenerationSetting {
@@ -4837,50 +4858,59 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('fs:readFile', async (_, filePath: string) => {
-    try {
-      const content = await fs.readFile(filePath, 'utf-8');
-      const ext = path.extname(filePath).slice(1);
-      const languageMap: Record<string, string> = {
-        ts: 'typescript',
-        tsx: 'tsx',
-        js: 'javascript',
-        jsx: 'jsx',
-        py: 'python',
-        rb: 'ruby',
-        go: 'go',
-        rs: 'rust',
-        java: 'java',
-        kt: 'kotlin',
-        swift: 'swift',
-        c: 'c',
-        cpp: 'cpp',
-        h: 'c',
-        hpp: 'cpp',
-        cs: 'csharp',
-        php: 'php',
-        html: 'html',
-        css: 'css',
-        scss: 'scss',
-        less: 'less',
-        json: 'json',
-        yaml: 'yaml',
-        yml: 'yaml',
-        xml: 'xml',
-        md: 'markdown',
-        sql: 'sql',
-        sh: 'bash',
-        bash: 'bash',
-        zsh: 'bash',
-        toml: 'toml',
-        ini: 'ini',
-        dockerfile: 'dockerfile',
-      };
-      return { content, language: languageMap[ext] || 'text' };
-    } catch {
-      return null;
-    }
-  });
+  ipcMain.handle(
+    'fs:readFile',
+    async (_, filePath: string, maxBytes?: number) => {
+      try {
+        // A bounded read exists for callers that only want a head (attachment
+        // previews): slurping a multi-hundred-MB attachment as one UTF-8 string
+        // stalls the main process and clones the whole thing to the renderer.
+        const content =
+          typeof maxBytes === 'number' && maxBytes > 0
+            ? await readFileHead(filePath, maxBytes)
+            : await fs.readFile(filePath, 'utf-8');
+        const ext = path.extname(filePath).slice(1);
+        const languageMap: Record<string, string> = {
+          ts: 'typescript',
+          tsx: 'tsx',
+          js: 'javascript',
+          jsx: 'jsx',
+          py: 'python',
+          rb: 'ruby',
+          go: 'go',
+          rs: 'rust',
+          java: 'java',
+          kt: 'kotlin',
+          swift: 'swift',
+          c: 'c',
+          cpp: 'cpp',
+          h: 'c',
+          hpp: 'cpp',
+          cs: 'csharp',
+          php: 'php',
+          html: 'html',
+          css: 'css',
+          scss: 'scss',
+          less: 'less',
+          json: 'json',
+          yaml: 'yaml',
+          yml: 'yaml',
+          xml: 'xml',
+          md: 'markdown',
+          sql: 'sql',
+          sh: 'bash',
+          bash: 'bash',
+          zsh: 'bash',
+          toml: 'toml',
+          ini: 'ini',
+          dockerfile: 'dockerfile',
+        };
+        return { content, language: languageMap[ext] || 'text' };
+      } catch {
+        return null;
+      }
+    },
+  );
 
   ipcMain.handle('fs:getFileSize', async (_, filePath: string) => {
     try {

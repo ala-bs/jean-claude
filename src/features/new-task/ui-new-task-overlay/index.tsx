@@ -51,6 +51,10 @@ import {
   findMissingAttachmentPaths,
 } from '@/lib/prompt-attachment-cleanup';
 import {
+  isPastedPromptFilename,
+  removePastedPromptPlaceholder,
+} from '@/lib/pasted-prompt-placeholders';
+import {
   expandFeatureReferencesInPrompt,
   getReferencedFeatures,
   type PreparedProjectFeatures,
@@ -1745,9 +1749,32 @@ export function NewTaskOverlay({
       const removed =
         useNewTaskDraftStore.getState().drafts[draftKey]?.files?.[index];
 
+      // A pasted chunk's marker lives in the prompt text, so dropping the chip
+      // without it would leave the prompt naming a file that is no longer
+      // attached. Both composers are cleaned here rather than in each one: the
+      // overlay owns chip removal and does not know which is mounted.
+      const strip = removed && isPastedPromptFilename(removed.filename);
+
       updateDraft((prev) => ({
         files: (prev?.files ?? []).filter((_, i) => i !== index),
+        ...(strip
+          ? {
+              prompt: removePastedPromptPlaceholder(
+                prev?.prompt ?? '',
+                removed.filename,
+              ),
+            }
+          : {}),
       }));
+
+      // The work-item composer's text is local state, not the draft.
+      if (strip) {
+        setPromptTemplate((prev) =>
+          prev === null
+            ? prev
+            : removePastedPromptPlaceholder(prev, removed.filename),
+        );
+      }
 
       // Unsent attachment — reclaim its temp file. The main process refuses
       // paths outside the managed tmp dir, so original user files are safe.
@@ -1756,7 +1783,7 @@ export function NewTaskOverlay({
         files: removed ? [removed] : [],
       });
     },
-    [updateDraft, selectedProject?.path, draftKey],
+    [updateDraft, selectedProject?.path, draftKey, setPromptTemplate],
   );
 
   // Persisted attachments can point at files deleted since the draft was
