@@ -54,6 +54,10 @@ Verified as **benign** (scopes cannot co-mount): `escape`, `enter`, `up`/`down`/
 `cmd+e`, `cmd+m`, `cmd+n`, `cmd+p`, `cmd+shift+f`, `cmd+shift+w` — each pair is
 overlay-vs-panel or dialog-vs-dialog.
 
+`cmd+j` cycles model profiles in the New Task Overlay. Its exclusive keyboard
+layer handles that key before the global Activity Center shortcut; the settings
+dialog that uses `cmd+j` cannot be open at the same time as this overlay.
+
 Genuinely **suspect** (both surfaces can be on screen at once — the feed list
 stays mounted behind an open task):
 
@@ -91,13 +95,13 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `down` | work-item-list-nav | Navigate Down | `src/features/work-item/ui-work-item-list/index.tsx:165` |
 | `enter` | question-options | Activate Question Option | `src/features/agent/ui-question-options/index.tsx:868` |
 | `enter` | — | Execute Selected Command | `src/features/command-palette/ui-command-palette-overlay/index.tsx:96` |
-| `enter` | — | Toggle Work Item Selection | `src/features/new-task/ui-new-task-overlay/index.tsx:1861` |
+| `enter` | — | Toggle Work Item Selection | `src/features/new-task/ui-new-task-overlay/index.tsx:2076` |
 | `enter` | — | Open Todo Actions | `src/features/project/ui-backlog-overlay/index.tsx:469` |
 | `enter` | — | Select Highlighted Project Option | `src/features/project/ui-project-overlay/index.tsx:309` |
 | `escape` | — | Close Background Jobs Overlay | `src/features/background-jobs/ui-background-jobs-overlay/index.tsx:53` |
 | `escape` | — | Close Command Palette | `src/features/command-palette/ui-command-palette-overlay/index.tsx:88` |
 | `escape` | — | Close Mobile Preview | `src/features/mobile-preview/ui-mobile-preview-workspace/index.tsx:164` |
-| `escape` | — | Close or Go Back | `src/features/new-task/ui-new-task-overlay/index.tsx:1797` |
+| `escape` | — | Close or Go Back | `src/features/new-task/ui-new-task-overlay/index.tsx:2006` |
 | `escape` | — | Close Backlog | `src/features/project/ui-backlog-overlay/index.tsx:457` |
 | `escape` | — | Close Project Overlay | `src/features/project/ui-project-overlay/index.tsx:269` |
 | `escape` | — | Close Commit Diff | `src/features/project/ui-project-panel/index.tsx:471` |
@@ -129,65 +133,66 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+,` | — | Settings | `src/routes/__root.tsx:134` |
 | `cmd+;` | — | Calendar | `src/routes/__root.tsx:260` |
 | `cmd+.` | — | Cycle Model Profile | `src/common/hooks/use-commands/model-profile-commands.ts:52` |
-| `cmd+/` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2417` |
+| `cmd+/` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2415` |
 | `cmd+\\` | header-menu-trigger | Toggle Menu | `src/layout/ui-header/index.tsx:509` |
-| `cmd+1` | feed-list-navigation | Go to Feed Item 1 | `src/features/feed/ui-feed-list/index.tsx:1415` |
-| `cmd+2` | feed-list-navigation | Go to Feed Item 2 | `src/features/feed/ui-feed-list/index.tsx:1421` |
-| `cmd+3` | feed-list-navigation | Go to Feed Item 3 | `src/features/feed/ui-feed-list/index.tsx:1427` |
-| `cmd+4` | feed-list-navigation | Go to Feed Item 4 | `src/features/feed/ui-feed-list/index.tsx:1433` |
-| `cmd+5` | feed-list-navigation | Go to Feed Item 5 | `src/features/feed/ui-feed-list/index.tsx:1439` |
-| `cmd+6` | feed-list-navigation | Go to Feed Item 6 | `src/features/feed/ui-feed-list/index.tsx:1445` |
-| `cmd+7` | feed-list-navigation | Go to Feed Item 7 | `src/features/feed/ui-feed-list/index.tsx:1451` |
-| `cmd+8` | feed-list-navigation | Go to Feed Item 8 | `src/features/feed/ui-feed-list/index.tsx:1457` |
-| `cmd+9` | feed-list-navigation | Go to Feed Item 9 | `src/features/feed/ui-feed-list/index.tsx:1463` |
-| `cmd+b` | — | Toggle Worktree | `src/features/new-task/ui-new-task-overlay/index.tsx:1810` |
+| `cmd+1` | feed-list-navigation | Go to Feed Item 1 | `src/features/feed/ui-feed-list/index.tsx:1471` |
+| `cmd+2` | feed-list-navigation | Go to Feed Item 2 | `src/features/feed/ui-feed-list/index.tsx:1477` |
+| `cmd+3` | feed-list-navigation | Go to Feed Item 3 | `src/features/feed/ui-feed-list/index.tsx:1483` |
+| `cmd+4` | feed-list-navigation | Go to Feed Item 4 | `src/features/feed/ui-feed-list/index.tsx:1489` |
+| `cmd+5` | feed-list-navigation | Go to Feed Item 5 | `src/features/feed/ui-feed-list/index.tsx:1495` |
+| `cmd+6` | feed-list-navigation | Go to Feed Item 6 | `src/features/feed/ui-feed-list/index.tsx:1501` |
+| `cmd+7` | feed-list-navigation | Go to Feed Item 7 | `src/features/feed/ui-feed-list/index.tsx:1507` |
+| `cmd+8` | feed-list-navigation | Go to Feed Item 8 | `src/features/feed/ui-feed-list/index.tsx:1513` |
+| `cmd+9` | feed-list-navigation | Go to Feed Item 9 | `src/features/feed/ui-feed-list/index.tsx:1519` |
+| `cmd+b` | — | Toggle Worktree | `src/features/new-task/ui-new-task-overlay/index.tsx:2019` |
 | `cmd+b` | — | Open Backlog | `src/routes/__root.tsx:343` |
 | `cmd+backspace` | — | Confirm Delete Command | `src/features/project/ui-run-commands-config/delete-command-dialog.tsx:30` |
 | `cmd+backspace` | — | Stop Selected Command | `src/features/run-commands/ui-running-commands-overlay/index.tsx:779` |
 | `cmd+backspace` | — | Confirm Delete | `src/features/task/ui-task-panel/delete-task-dialog.tsx:50` |
-| `cmd+d` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2384` |
+| `cmd+d` | task-panel | — | `src/features/task/ui-task-panel/index.tsx:2382` |
 | `cmd+down` | — | Select Last Command | `src/features/command-palette/ui-command-palette-overlay/index.tsx:129` |
-| `cmd+down` | feed-list-navigation | Go to Next Feed Item | `src/features/feed/ui-feed-list/index.tsx:1475` |
-| `cmd+down` | — | Navigate to Next Project Grid Item | `src/features/new-task/ui-new-task-overlay/index.tsx:1853` |
-| `cmd+e` | — | Toggle File Explorer | `src/features/new-task/ui-new-task-overlay/index.tsx:1818` |
-| `cmd+e` | task-panel | Open Review Files | `src/features/task/ui-task-panel/index.tsx:2307` |
+| `cmd+down` | feed-list-navigation | Go to Next Feed Item | `src/features/feed/ui-feed-list/index.tsx:1531` |
+| `cmd+down` | — | Navigate to Next Project Grid Item | `src/features/new-task/ui-new-task-overlay/index.tsx:2068` |
+| `cmd+e` | — | Toggle File Explorer | `src/features/new-task/ui-new-task-overlay/index.tsx:2027` |
+| `cmd+e` | task-panel | Open Review Files | `src/features/task/ui-task-panel/index.tsx:2305` |
 | `cmd+enter` | question-options | Submit Question Answers | `src/features/agent/ui-question-options/index.tsx:875` |
 | `cmd+enter` | — | Commit | `src/features/agent/ui-worktree-actions/commit-modal.tsx:89` |
 | `cmd+enter` | — | Merge | `src/features/agent/ui-worktree-actions/merge-confirm-dialog.tsx:189` |
 | `cmd+enter` | — | Commit And Push | `src/features/agent/ui-worktree-actions/push-confirm-dialog.tsx:44` |
-| `cmd+enter` | — | Next / Submit | `src/features/new-task/ui-new-task-overlay/index.tsx:1825` |
+| `cmd+enter` | — | Next / Submit | `src/features/new-task/ui-new-task-overlay/index.tsx:2040` |
 | `cmd+enter` | — | — | `src/features/project/ui-backlog-overlay/index.tsx:508` |
 | `cmd+enter` | — | Confirm Delete Command | `src/features/project/ui-run-commands-config/delete-command-dialog.tsx:30` |
 | `cmd+enter` | — | Confirm Change Worktree Path | `src/features/task/ui-task-panel/change-worktree-path-dialog.tsx:49` |
 | `cmd+enter` | — | Confirm Complete | `src/features/task/ui-task-panel/complete-task-dialog.tsx:48` |
 | `cmd+enter` | — | Confirm Delete | `src/features/task/ui-task-panel/delete-task-dialog.tsx:50` |
-| `cmd+enter` | work-items-editor | Save Work Items | `src/features/task/ui-task-panel/index.tsx:1506` |
+| `cmd+enter` | work-items-editor | Save Work Items | `src/features/task/ui-task-panel/index.tsx:1504` |
 | `cmd+enter` | pr-creation-form | Submit PR | `src/features/task/ui-task-pr-view/pr-creation-form.tsx:915` |
 | `cmd+f` | — | Search Commits | `src/features/project/ui-project-panel/index.tsx:450` |
-| `cmd+i` | — | — | `src/features/new-task/ui-new-task-overlay/index.tsx:2052` |
-| `cmd+i` | — | — | `src/features/task/ui-task-panel/add-step-dialog.tsx:1066` |
+| `cmd+i` | — | — | `src/features/new-task/ui-new-task-overlay/index.tsx:2267` |
+| `cmd+i` | — | — | `src/features/task/ui-task-panel/add-step-dialog.tsx:1099` |
+| `cmd+j` | — | Cycle Model Profile | `src/features/new-task/ui-new-task-overlay/index.tsx:2035` |
 | `cmd+j` | — | — | `src/features/settings/ui-skills-settings/create-with-agent-dialog.tsx:170` |
 | `cmd+j` | — | Activity Center | `src/routes/__root.tsx:216` |
 | `cmd+k` | — | Clear Selected Command Logs | `src/features/run-commands/ui-running-commands-overlay/index.tsx:785` |
 | `cmd+l` | — | Toggle Command Logs | `src/features/project/ui-project-panel/index.tsx:508` |
-| `cmd+l` | task-panel | Toggle Mobile Dev / Command Logs | `src/features/task/ui-task-panel/index.tsx:2362` |
-| `cmd+left` | — | Navigate to Previous Project Tab | `src/features/new-task/ui-new-task-overlay/index.tsx:1839` |
-| `cmd+m` | — | Toggle Input Mode | `src/features/new-task/ui-new-task-overlay/index.tsx:1868` |
-| `cmd+m` | task-panel | Task Menu | `src/features/task/ui-task-panel/index.tsx:2291` |
-| `cmd+n` | — | Close New Task Overlay | `src/features/new-task/ui-new-task-overlay/index.tsx:1790` |
+| `cmd+l` | task-panel | Toggle Mobile Dev / Command Logs | `src/features/task/ui-task-panel/index.tsx:2360` |
+| `cmd+left` | — | Navigate to Previous Project Tab | `src/features/new-task/ui-new-task-overlay/index.tsx:2054` |
+| `cmd+m` | — | Toggle Input Mode | `src/features/new-task/ui-new-task-overlay/index.tsx:2083` |
+| `cmd+m` | task-panel | Task Menu | `src/features/task/ui-task-panel/index.tsx:2289` |
+| `cmd+n` | — | Close New Task Overlay | `src/features/new-task/ui-new-task-overlay/index.tsx:1999` |
 | `cmd+n` | — | New Task | `src/routes/__root.tsx:173` |
 | `cmd+o` | — | Open Project Overlay | `src/routes/__root.tsx:194` |
 | `cmd+p` | — | Close Command Palette | `src/features/command-palette/ui-command-palette-overlay/index.tsx:88` |
 | `cmd+p` | — | Switch Backlog Project | `src/features/project/ui-backlog-overlay/index.tsx:531` |
 | `cmd+p` | — | Open Command Palette | `src/routes/__root.tsx:104` |
-| `cmd+right` | — | Navigate to Next Project Tab | `src/features/new-task/ui-new-task-overlay/index.tsx:1832` |
-| `cmd+t` | — | — | `src/features/task/ui-task-panel/add-step-dialog.tsx:896` |
+| `cmd+right` | — | Navigate to Next Project Tab | `src/features/new-task/ui-new-task-overlay/index.tsx:2047` |
+| `cmd+t` | — | — | `src/features/task/ui-task-panel/add-step-dialog.tsx:929` |
 | `cmd+u` | — | Run Command | `src/features/project/ui-project-panel/index.tsx:502` |
-| `cmd+u` | task-panel | Run Command | `src/features/task/ui-task-panel/index.tsx:2299` |
+| `cmd+u` | task-panel | Run Command | `src/features/task/ui-task-panel/index.tsx:2297` |
 | `cmd+up` | — | Select First Command | `src/features/command-palette/ui-command-palette-overlay/index.tsx:121` |
-| `cmd+up` | feed-list-navigation | Go to Previous Feed Item | `src/features/feed/ui-feed-list/index.tsx:1469` |
-| `cmd+up` | — | Navigate to Previous Project Grid Item | `src/features/new-task/ui-new-task-overlay/index.tsx:1846` |
-| `cmd+w` | task-panel | Open Worktree in Editor | `src/features/task/ui-task-panel/index.tsx:2478` |
+| `cmd+up` | feed-list-navigation | Go to Previous Feed Item | `src/features/feed/ui-feed-list/index.tsx:1525` |
+| `cmd+up` | — | Navigate to Previous Project Grid Item | `src/features/new-task/ui-new-task-overlay/index.tsx:2061` |
+| `cmd+w` | task-panel | Open Worktree in Editor | `src/features/task/ui-task-panel/index.tsx:2476` |
 | `ctrl+`` | — | Toggle Terminal | `src/features/project/ui-project-panel/index.tsx:517` |
 | `shift+[` | pr-detail-tab-navigation | Previous PR Detail Tab | `src/features/pull-request/ui-pr-detail/index.tsx:203` |
 | `shift+]` | pr-detail-tab-navigation | Next PR Detail Tab | `src/features/pull-request/ui-pr-detail/index.tsx:197` |
@@ -207,25 +212,25 @@ modifier count. A `—` scope means the binding is registered outside a named
 | `cmd+shift+3` | pr-detail-tab-navigation | PR Detail Commits Tab | `src/features/pull-request/ui-pr-detail/index.tsx:221` |
 | `cmd+shift+a` | — | Open Azure Board | `src/routes/__root.tsx:363` |
 | `cmd+shift+b` | skills-settings | Browse Skills Registry | `src/features/settings/ui-skills-settings/index.tsx:60` |
-| `cmd+shift+d` | feed-list-navigation | Dismiss Selected Feed Item | `src/features/feed/ui-feed-list/index.tsx:1481` |
-| `cmd+shift+d` | task-panel | Cycle Diff Mode | `src/features/task/ui-task-panel/index.tsx:2425` |
+| `cmd+shift+d` | feed-list-navigation | Dismiss Selected Feed Item | `src/features/feed/ui-feed-list/index.tsx:1537` |
+| `cmd+shift+d` | task-panel | Cycle Diff Mode | `src/features/task/ui-task-panel/index.tsx:2423` |
 | `cmd+shift+e` | — | Open Project in Editor | `src/features/project/ui-project-panel/index.tsx:494` |
-| `cmd+shift+e` | task-panel | Open Project in Editor | `src/features/task/ui-task-panel/index.tsx:2470` |
-| `cmd+shift+escape` | — | Discard Draft and Close | `src/features/new-task/ui-new-task-overlay/index.tsx:1802` |
+| `cmd+shift+e` | task-panel | Open Project in Editor | `src/features/task/ui-task-panel/index.tsx:2468` |
+| `cmd+shift+escape` | — | Discard Draft and Close | `src/features/new-task/ui-new-task-overlay/index.tsx:2011` |
 | `cmd+shift+f` | review-files-search | Focus File Search | `src/features/agent/ui-worktree-review-view/review-files-tree.tsx:223` |
 | `cmd+shift+f` | — | — | `src/features/project/ui-backlog-overlay/index.tsx:541` |
-| `cmd+shift+g` | task-panel | Toggle Pull Request | `src/features/task/ui-task-panel/index.tsx:2409` |
+| `cmd+shift+g` | task-panel | Toggle Pull Request | `src/features/task/ui-task-panel/index.tsx:2407` |
 | `cmd+shift+k` | worktree-actions | Commit Changes | `src/features/agent/ui-worktree-actions/index.tsx:319` |
-| `cmd+shift+l` | feed-list-navigation | Toggle Low Priority on Selected Feed Item | `src/features/feed/ui-feed-list/index.tsx:1489` |
+| `cmd+shift+l` | feed-list-navigation | Toggle Low Priority on Selected Feed Item | `src/features/feed/ui-feed-list/index.tsx:1545` |
 | `cmd+shift+m` | worktree-actions | Merge Worktree | `src/features/agent/ui-worktree-actions/index.tsx:331` |
 | `cmd+shift+n` | step-flow-bar | Add Step | `src/features/task/ui-step-flow-bar/index.tsx:820` |
 | `cmd+shift+o` | pr-detail-tab-navigation | Open PR in Azure DevOps | `src/features/pull-request/ui-pr-detail/index.tsx:234` |
 | `cmd+shift+o` | work-item-workspace | Open Work Item in Azure DevOps | `src/features/work-item/ui-work-item-workspace/index.tsx:753` |
 | `cmd+shift+p` | worktree-actions | Create Pull Request | `src/features/agent/ui-worktree-actions/index.tsx:341` |
-| `cmd+shift+p` | feed-list-navigation | Toggle Pin on Selected Feed Item | `src/features/feed/ui-feed-list/index.tsx:1497` |
-| `cmd+shift+r` | task-panel | Cycle Review Mode | `src/features/task/ui-task-panel/index.tsx:2440` |
+| `cmd+shift+p` | feed-list-navigation | Toggle Pin on Selected Feed Item | `src/features/feed/ui-feed-list/index.tsx:1553` |
+| `cmd+shift+r` | task-panel | Cycle Review Mode | `src/features/task/ui-task-panel/index.tsx:2438` |
 | `cmd+shift+s` | — | Generate Summary | `src/features/agent/ui-worktree-review-view/index.tsx:333` |
-| `cmd+shift+s` | — | Toggle Auto-start | `src/features/task/ui-task-panel/add-step-dialog.tsx:867` |
+| `cmd+shift+s` | — | Toggle Auto-start | `src/features/task/ui-task-panel/add-step-dialog.tsx:900` |
 | `cmd+shift+t` | — | Open Running Commands | `src/routes/__root.tsx:381` |
 | `cmd+shift+u` | — | AI Usage | `src/routes/__root.tsx:238` |
 | `cmd+shift+w` | — | Toggle Worktree Cleanup | `src/features/task/ui-task-panel/complete-task-dialog.tsx:57` |

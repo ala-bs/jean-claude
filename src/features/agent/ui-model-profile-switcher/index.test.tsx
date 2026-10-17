@@ -250,6 +250,23 @@ describe('ModelProfileSwitcher', () => {
     expect(state.activate).toHaveBeenCalledWith('codex');
   });
 
+  it('delegates profile selection when the host coordinates draft state', async () => {
+    const onProfileSelected = vi.fn();
+    await act(() =>
+      root.render(
+        <ModelProfileSwitcher onProfileSelected={onProfileSelected} />,
+      ),
+    );
+
+    const codex = menuItems().find((item) =>
+      item.textContent?.includes('Codex fallback'),
+    );
+    await act(() => (codex as HTMLButtonElement).click());
+
+    expect(onProfileSelected).toHaveBeenCalledWith('codex');
+    expect(state.activate).not.toHaveBeenCalled();
+  });
+
   // Hidden entries make the list silently short; say why.
   it('explains that the list is limited when enforce hides profiles', async () => {
     state.policy = {

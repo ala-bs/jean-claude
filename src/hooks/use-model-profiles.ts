@@ -6,6 +6,7 @@ import type {
   ModelProfile,
   ModelProfilesSetting,
   ModelRole,
+  ProjectModelPolicy,
 } from '@shared/model-profiles';
 import type { ProjectModelProfileSelectionsSetting } from '@shared/types';
 import {
@@ -206,22 +207,66 @@ export function useActivateModelProfile(projectId?: string | null) {
       api.modelProfiles.activate(profileId, projectId ?? null),
     onMutate: async (profileId) => {
       const queryKey = ACTIVE_MODEL_PROFILE_QUERY_KEY;
-      await queryClient.cancelQueries({ queryKey });
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey }),
+        queryClient.cancelQueries({
+          queryKey: PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
+        }),
+      ]);
       const hadPrevious = queryClient.getQueryData(queryKey) !== undefined;
       const previous = queryClient.getQueryData<string | null>(queryKey);
-      queryClient.setQueryData(queryKey, profileId);
-      return { hadPrevious, previous };
-    },
-    onError: (_error, _profileId, context) => {
-      if (context?.hadPrevious) {
-        queryClient.setQueryData(
-          ACTIVE_MODEL_PROFILE_QUERY_KEY,
-          context.previous,
+      const policy = projectId
+        ? queryClient.getQueryData<{ policy: ProjectModelPolicy }>([
+            ...PROJECT_MODEL_POLICY_QUERY_KEY,
+            projectId,
+          ])?.policy
+        : undefined;
+      const pinnedProfileId =
+        policy?.mode === 'prefer' ? policy.pinnedProfileId : undefined;
+      const previousProjectSelections =
+        queryClient.getQueryData<ProjectModelProfileSelectionsSetting>(
+          PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
         );
-      } else {
-        queryClient.removeQueries({
-          queryKey: ACTIVE_MODEL_PROFILE_QUERY_KEY,
-        });
+      queryClient.setQueryData(queryKey, profileId);
+      if (projectId && pinnedProfileId) {
+        queryClient.setQueryData<ProjectModelProfileSelectionsSetting>(
+          PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
+          {
+            ...previousProjectSelections,
+            [projectId]: { profileId, pinnedProfileId },
+          },
+        );
+      }
+      return { hadPrevious, previous, previousProjectSelections, pinnedProfileId };
+    },
+    onError: (_error, profileId, context) => {
+      if (queryClient.getQueryData(ACTIVE_MODEL_PROFILE_QUERY_KEY) === profileId) {
+        if (context?.hadPrevious) {
+          queryClient.setQueryData(
+            ACTIVE_MODEL_PROFILE_QUERY_KEY,
+            context.previous,
+          );
+        } else {
+          queryClient.removeQueries({
+            queryKey: ACTIVE_MODEL_PROFILE_QUERY_KEY,
+          });
+        }
+      }
+      if (projectId && context?.pinnedProfileId) {
+        const current =
+          queryClient.getQueryData<ProjectModelProfileSelectionsSetting>(
+            PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
+          ) ?? {};
+        if (current[projectId]?.profileId === profileId) {
+          const restored = { ...current };
+          const previous = context.previousProjectSelections?.[projectId];
+          if (previous) restored[projectId] = previous;
+          else delete restored[projectId];
+          queryClient.setQueryData(
+            PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
+            restored,
+          );
+        }
       }
     },
     onSuccess: () => {

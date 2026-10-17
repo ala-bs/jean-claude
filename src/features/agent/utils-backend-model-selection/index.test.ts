@@ -126,6 +126,28 @@ describe('getQuickPresets', () => {
 });
 
 describe('resolveBackendModelSelection', () => {
+  it('uses the agent role after an explicit profile choice even when a quick preset differs', () => {
+    const profile: ModelProfile = {
+      ...anthropicProfile,
+      roles: { agent: { backend: 'claude-code', model: 'opus', thinkingEffort: 'high' } },
+      quickPresetIds: ['sonnet'],
+    };
+    const result = resolveBackendModelSelection({
+      ...base,
+      presets: profile.presets,
+      quickPresetIds: profile.quickPresetIds,
+      defaultModel: 'opus',
+      shouldAutoSelectPreset: false,
+      draftPresetId: null,
+      profiles: [profile],
+      activeProfileId: profile.id,
+    });
+
+    expect(result.presetId).toBeNull();
+    expect(result.model).toBe('opus');
+    expect(result.thinkingEffort).toBe('high');
+  });
+
   it('defaults an empty draft to the first quick preset of the profile', () => {
     const result = resolveBackendModelSelection({
       ...base,

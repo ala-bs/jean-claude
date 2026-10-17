@@ -76,6 +76,7 @@ export function ModelProfileSwitcher({
   stepModel,
   overrideContent,
   onProfileActivated,
+  onProfileSelected,
   align,
   side,
   className,
@@ -97,6 +98,8 @@ export function ModelProfileSwitcher({
    * the new profile while the host still submits the old override.
    */
   onProfileActivated?: (profileId: string) => void;
+  /** Let a host coordinate activation with its own pending draft state. */
+  onProfileSelected?: (profileId: string) => void;
   align?: 'left' | 'right';
   side?: 'top' | 'bottom';
   className?: string;
@@ -201,8 +204,12 @@ export function ModelProfileSwitcher({
           key={entry.profile.id}
           shortcut={entry.shortcut}
           onClick={() => {
-            activate.mutate(entry.profile.id);
-            onProfileActivated?.(entry.profile.id);
+            if (onProfileSelected) {
+              onProfileSelected(entry.profile.id);
+            } else {
+              activate.mutate(entry.profile.id);
+              onProfileActivated?.(entry.profile.id);
+            }
           }}
         >
           <span
