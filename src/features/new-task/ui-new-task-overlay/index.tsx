@@ -81,10 +81,10 @@ import {
 } from '@shared/thinking-settings';
 import {
   type InputMode,
-  type NewTaskDraft,
   useNewTaskDraftMetadata,
   useNewTaskDraftStore,
 } from '@/stores/new-task-draft';
+import { useProfileActivation } from '@/features/new-task/use-profile-activation';
 import {
   KeyboardLayerProvider,
   useKeyboardLayer,
@@ -557,15 +557,6 @@ export function NewTaskOverlay({
   } = useNewTaskDraftMetadata();
   const draftKey = selectedProjectId ?? 'all';
   const userTouchedSelectionRef = useRef(false);
-  const pendingProfileRef = useRef<{ draftKey: string; profileId: string } | null>(null);
-  const profileActivationQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const pendingProfileActivationCountRef = useRef(0);
-  const profileActivationStateRef = useRef<Record<string, {
-    pending: number;
-    hadSuccess: boolean;
-    previousDraft: Partial<NewTaskDraft> | undefined;
-    wasTouched: boolean;
-  }>>({});
 
   const { data: projects = [], isLoading: projectsLoading } =
     useActiveProjects();
@@ -902,97 +893,27 @@ export function NewTaskOverlay({
     enabled: Boolean(selectedProjectId),
   });
 
-  const handleProfileActivated = useCallback(() => {
-    // A profile choice supersedes a previous step-only model override.
-    // Keep rate-limit suggestions from replacing this explicit choice.
-    userTouchedSelectionRef.current = true;
-    updateDraft({
-      agentBackend: undefined,
-      modelPreference: undefined,
-      thinkingEffort: undefined,
-      backendModelPresetId: null,
-      shouldAutoSelectBackendModelPreset: false,
-    });
-  }, [updateDraft]);
-
-  const selectProfile = useCallback(
-    (profileId: string) => {
-      const activation = profileActivationStateRef.current[draftKey] ?? {
-        pending: 0,
-        hadSuccess: false,
-        previousDraft: useNewTaskDraftStore.getState().drafts[draftKey],
-        wasTouched: userTouchedSelectionRef.current,
-      };
-      activation.pending += 1;
-      pendingProfileActivationCountRef.current += 1;
-      profileActivationStateRef.current[draftKey] = activation;
-      pendingProfileRef.current = { draftKey, profileId };
-      handleProfileActivated();
-      const runActivation = profileActivationQueueRef.current.then(() =>
-        activateProfile.mutateAsync(profileId),
-      );
-      profileActivationQueueRef.current = runActivation.then(
-        () => {
-          activation.pending -= 1;
-          pendingProfileActivationCountRef.current -= 1;
-          addToast({ message: 'Could not switch model profile.', type: 'error' });
-          activation.hadSuccess = true;
-          if (activation.pending === 0) {
-            delete profileActivationStateRef.current[draftKey];
-          }
-        },
-        () => {
-          activation.pending -= 1;
-          pendingProfileActivationCountRef.current -= 1;
-          if (activation.pending === 0) {
-            delete profileActivationStateRef.current[draftKey];
-            const currentDraft = useNewTaskDraftStore.getState().drafts[draftKey];
-            // Preserve a newer manual model choice made while activation ran.
-            if (
-              !activation.hadSuccess &&
-              currentDraft?.agentBackend === undefined &&
-              currentDraft?.modelPreference === undefined &&
-              currentDraft?.thinkingEffort === undefined &&
-              currentDraft?.backendModelPresetId === null &&
-              currentDraft?.shouldAutoSelectBackendModelPreset === false
-            ) {
-              updateDraft({
-                agentBackend: activation.previousDraft?.agentBackend,
-                modelPreference: activation.previousDraft?.modelPreference,
-                thinkingEffort: activation.previousDraft?.thinkingEffort,
-                backendModelPresetId:
-                  activation.previousDraft?.backendModelPresetId,
-                shouldAutoSelectBackendModelPreset:
-                  activation.previousDraft?.shouldAutoSelectBackendModelPreset,
-              });
-              if (
-                useNewTaskDraftStore.getState().selectedProjectId ===
-                (draftKey === 'all' ? null : draftKey)
-              ) {
-                userTouchedSelectionRef.current = activation.wasTouched;
-              }
-            }
-          }
-          if (
-            pendingProfileRef.current?.draftKey === draftKey &&
-            pendingProfileRef.current.profileId === profileId
-          ) {
-            pendingProfileRef.current = null;
-          }
-        },
-      );
-    },
-    [activateProfile, addToast, draftKey, handleProfileActivated, updateDraft],
-  );
+  const {
+    selectProfile,
+    pendingProfileRef,
+    waitForPendingActivations,
+    clearPendingProfile,
+  } = useProfileActivation({
+    draftKey,
+    updateDraft,
+    activate: activateProfile.mutateAsync,
+    addToast,
+    userTouchedSelectionRef,
+  });
 
   useEffect(() => {
     if (
       pendingProfileRef.current?.draftKey === draftKey &&
       pendingProfileRef.current.profileId === effectiveProfileId
     ) {
-      pendingProfileRef.current = null;
+      clearPendingProfile();
     }
-  }, [draftKey, effectiveProfileId]);
+  }, [clearPendingProfile, draftKey, effectiveProfileId, pendingProfileRef]);
 
   const cycleProfile = useCallback(() => {
     if (selectedProjectId && !effectivePolicy) return;
@@ -1015,6 +936,7 @@ export function NewTaskOverlay({
     draftKey,
     effectivePolicy,
     effectiveProfileId,
+    pendingProfileRef,
     profiles,
     selectProfile,
     selectedProjectId,
@@ -1456,11 +1378,7 @@ export function NewTaskOverlay({
     // A fast ⌘J, ⌘Enter sequence must wait for the selected profile to be
     // persisted, then resolve from the latest cache and draft instead of this
     // render's model values.
-    const wasProfileActivationPending =
-      pendingProfileActivationCountRef.current > 0;
-    if (wasProfileActivationPending) {
-      await profileActivationQueueRef.current;
-    }
+    const wasProfileActivationPending = await waitForPendingActivations();
 
     const latestDraft = useNewTaskDraftStore.getState().drafts[draftKey];
     const submissionDraft = { ...(draft ?? {}), ...(latestDraft ?? {}) };
@@ -1734,6 +1652,7 @@ export function NewTaskOverlay({
     snippetVariableContext,
     testCasesByWorkItem,
     triggerAnimation,
+    waitForPendingActivations,
     workItemComments,
   ]);
 
