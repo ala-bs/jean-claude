@@ -296,6 +296,10 @@ function normalizeItemStarted(
   const itemId = itemIdFromItem(item, params);
   if (itemId === undefined) return [];
 
+  if (str(item.type) === 'subAgentActivity') {
+    return normalizeSubAgentActivity({ item, itemId, params, ctx });
+  }
+
   if (str(item.type) === 'contextCompaction') {
     const entry: NormalizedEntry = {
       id: itemId,
@@ -337,7 +341,7 @@ function normalizeItemStarted(
   }
 
   const entry = addCodexPermissionMetadata(
-    createToolEntry(item, itemId, dateFromParams(params)),
+    createToolEntry(item, itemId),
     ctx,
   );
   if (entry === undefined) return [];
@@ -347,7 +351,7 @@ function normalizeItemStarted(
     parentToolIdFromParams(params, ctx),
   );
   ctx.itemEntries.set(itemId, entryWithParent);
-  registerSubagentThreadIds(entryWithParent, item, ctx);
+  registerSubagentThreadIds(entryWithParent, item, ctx, params);
   return [{ type: 'entry', entry: entryWithParent }];
 }
 
@@ -395,6 +399,10 @@ function normalizeItemCompleted(
 
   const itemId = itemIdFromItem(item, params);
   if (itemId === undefined) return [];
+
+  if (str(item.type) === 'subAgentActivity') {
+    return normalizeSubAgentActivity({ item, itemId, params, ctx });
+  }
 
   if (str(item.type) === 'contextCompaction') {
     const entry: NormalizedEntry = {
@@ -468,7 +476,7 @@ function normalizeItemCompleted(
   }
 
   const entry = addCodexPermissionMetadata(
-    createToolEntry(item, itemId, dateFromParams(params)),
+    createToolEntry(item, itemId),
     ctx,
   );
   if (entry === undefined) return [];
@@ -480,7 +488,7 @@ function normalizeItemCompleted(
     parentToolIdFromParams(params, ctx),
   );
   ctx.itemEntries.set(itemId, entryWithParent);
-  registerSubagentThreadIds(entryWithParent, item, ctx);
+  registerSubagentThreadIds(entryWithParent, item, ctx, params);
   return [{ type: 'entry', entry: entryWithParent }];
 }
 
@@ -518,7 +526,6 @@ function createAssistantEntry(
 function createToolEntry(
   item: Record<string, unknown>,
   itemId: string,
-  eventDate?: string,
 ): ItemEntry | undefined {
   const type = str(item.type);
   if (
@@ -615,10 +622,6 @@ function createToolEntry(
     return createCollabAgentToolEntry(item, itemId);
   }
 
-  if (type === 'subAgentActivity') {
-    return createSubAgentActivityToolEntry(item, itemId, eventDate);
-  }
-
   if (type === 'webSearch') {
     const entry = createWebSearchToolEntry(item, itemId);
     if (entry !== undefined || isEmptyWebSearchPlaceholder(item)) {
@@ -653,18 +656,56 @@ function addCodexPermissionMetadata(
   };
 }
 
-function createSubAgentActivityToolEntry(
-  item: Record<string, unknown>,
-  itemId: string,
-  eventDate: string | undefined,
-): ToolUseEntry | undefined {
+/**
+ * Codex reports sub-agent lifecycle as a stream of `subAgentActivity` items,
+ * one item id per event (`started`, `interacted`, `completed`). They are keyed
+ * by `agentThreadId`, so one card per thread — not per event.
+ *
+ * Activity whose `agentThreadId` is the reporting thread itself (`agentPath`
+ * `/root`) is the main agent reporting on itself. It must never become a
+ * sub-agent card: the thread id would then be registered in
+ * `subagentToolIdsByThreadId` and every later main-thread entry would be
+ * re-parented into that collapsed card, hiding the whole conversation.
+ */
+function normalizeSubAgentActivity({
+  item,
+  itemId,
+  params,
+  ctx,
+}: {
+  item: Record<string, unknown>;
+  itemId: string;
+  params: Record<string, unknown>;
+  ctx: CodexNormalizationContext;
+}): NormalizationEvent[] {
+  const agentThreadId = str(item.agentThreadId);
+  const reportingThreadId = str(params.threadId) ?? str(params.thread_id);
+  if (agentThreadId === undefined) return [];
+  if (agentThreadId === reportingThreadId) return [];
+  if (isRootAgentPath(str(item.agentPath))) return [];
+
   const kind = str(item.kind);
-  if (kind !== 'started' && kind !== 'interacted') return undefined;
+  const isCompleted = kind === 'completed';
+  const existingToolId = ctx.subagentToolIdsByThreadId.get(agentThreadId);
+  const existing = existingToolId
+    ? ctx.itemEntries.get(existingToolId)
+    : undefined;
+
+  if (existing?.type === 'tool-use' && existing.name === 'sub-agent') {
+    // Already complete and nothing new to say.
+    if (isCompleted === Boolean(existing.result)) return [];
+
+    const entry: ToolUseEntry = isCompleted
+      ? { ...existing, result: { output: '' } }
+      : withoutResult(existing);
+    ctx.itemEntries.set(entry.toolId, entry);
+    return [{ type: 'entry-update', entry }];
+  }
 
   const agentName = agentNameFromPath(str(item.agentPath));
-  return {
+  const entry: ToolUseEntry = {
     id: itemId,
-    date: eventDate ?? dateFromItem(item),
+    date: dateFromParams(params) ?? dateFromItem(item),
     type: 'tool-use',
     toolId: itemId,
     name: 'sub-agent',
@@ -673,7 +714,26 @@ function createSubAgentActivityToolEntry(
       description: agentName,
       prompt: agentName,
     },
+    ...(isCompleted ? { result: { output: '' } } : {}),
   };
+
+  ctx.itemEntries.set(itemId, entry);
+  ctx.subagentToolIdsByThreadId.set(agentThreadId, itemId);
+  return [{ type: 'entry', entry }];
+}
+
+function withoutResult(entry: ToolUseEntry): ToolUseEntry {
+  const next = { ...entry };
+  delete (next as { result?: unknown }).result;
+  return next;
+}
+
+function isRootAgentPath(agentPath: string | undefined): boolean {
+  const segments = agentPath
+    ?.trim()
+    .split(/[\\/]+/)
+    .filter((segment) => segment !== '');
+  return segments === undefined || segments.length <= 1;
 }
 
 function agentNameFromPath(agentPath: string | undefined): string {
@@ -828,10 +888,15 @@ function registerSubagentThreadIds(
   entry: NormalizedEntry,
   item: Record<string, unknown>,
   ctx: CodexNormalizationContext,
+  params: Record<string, unknown>,
 ): void {
   if (entry.type !== 'tool-use' || entry.name !== 'sub-agent') return;
 
+  const reportingThreadId = str(params.threadId) ?? str(params.thread_id);
   for (const threadId of subagentThreadIdsFromItem(item)) {
+    // Never re-parent the reporting thread into one of its own sub-agent
+    // cards: every later entry of that thread would be hidden inside it.
+    if (threadId === reportingThreadId) continue;
     ctx.subagentToolIdsByThreadId.set(threadId, entry.toolId);
   }
 }

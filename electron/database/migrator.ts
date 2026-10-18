@@ -95,6 +95,7 @@ import * as m093 from './migrations/093_drop_project_default_backend';
 import * as m094 from './migrations/094_mobile_build_store';
 import * as m095 from './migrations/095_mobile_build_artifact_names';
 import * as m096 from './migrations/096_mobile_build_artifact_repository';
+import * as m097 from './migrations/097_repair_codex_subagent_cards';
 
 const migrations: Record<string, Migration> = {
   '001_initial': m001,
@@ -192,6 +193,7 @@ const migrations: Record<string, Migration> = {
   '094_mobile_build_store': m094,
   '095_mobile_build_artifact_names': m095,
   '096_mobile_build_artifact_repository': m096,
+  '097_repair_codex_subagent_cards': m097,
 };
 
 export const migrationProvider: MigrationProvider = {
