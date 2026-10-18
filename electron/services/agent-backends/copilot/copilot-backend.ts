@@ -30,6 +30,7 @@ import {
   normalizeCopilotEventV2,
 } from './normalize-copilot-message-v2';
 import { createCopilotClient } from './copilot-client';
+import { dbg } from '../../../lib/debug';
 
 const COPILOT_SESSION_SUMMARY_PROMPT = [
   'Summarize the prior session context for continuation.',
@@ -138,9 +139,36 @@ type CopilotClientLike = {
   ): Promise<CopilotSdkSession>;
 };
 
+/**
+ * Reasoning efforts the Copilot SDK accepts (`ReasoningEffort` in
+ * @github/copilot-sdk). Our `ThinkingEffort` union is wider (`minimal`,
+ * `none`, `max`), and the old code forwarded the raw value, so anything
+ * outside this set would have made the CLI build an invalid upstream request.
+ *
+ * Anything we can't map is dropped rather than translated: `max` is NOT sent
+ * as `xhigh`, because a model that advertises `max` has not advertised
+ * `xhigh`, and inventing an effort the model never offered is how you earn a
+ * 400 instead of avoiding one.
+ */
+const COPILOT_REASONING_EFFORTS = new Set<ThinkingEffort>([
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+]);
+
+export function toCopilotReasoningEffort(
+  effort: ThinkingEffort | null | undefined,
+): 'low' | 'medium' | 'high' | 'xhigh' | undefined {
+  if (!effort || effort === 'default') return undefined;
+  return COPILOT_REASONING_EFFORTS.has(effort)
+    ? (effort as 'low' | 'medium' | 'high' | 'xhigh')
+    : undefined;
+}
+
 type CopilotSessionConfig = {
   model?: string;
-  reasoningEffort?: Exclude<ThinkingEffort, 'default'>;
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
   agentMode?: CopilotAgentMode;
   mcpServers?: Record<string, CopilotMcpServerConfig>;
   onPermissionRequest?: (
@@ -279,9 +307,19 @@ export class CopilotBackend implements AgentBackend {
       if (config.model && config.model !== 'default') {
         sessionConfig.model = config.model;
       }
-      if (config.thinkingEffort && config.thinkingEffort !== 'default') {
-        sessionConfig.reasoningEffort = config.thinkingEffort;
+      const reasoningEffort = toCopilotReasoningEffort(config.thinkingEffort);
+      if (reasoningEffort) {
+        sessionConfig.reasoningEffort = reasoningEffort;
       }
+      // Instrumentation for the `thinking.type.enabled` CAPI 400: records what
+      // we actually asked for, so the error can be attributed to our config or
+      // to the Copilot CLI's own upstream request.
+      dbg.agent(
+        'Creating Copilot session model=%s requestedEffort=%s sentReasoningEffort=%s',
+        config.model ?? 'default',
+        config.thinkingEffort ?? 'default',
+        reasoningEffort ?? 'none',
+      );
       sessionConfig.agentMode = toCopilotAgentMode(config.interactionMode);
       if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
         sessionConfig.mcpServers = toCopilotMcpServers(config.mcpServers);
@@ -333,6 +371,19 @@ export class CopilotBackend implements AgentBackend {
             disconnect: true,
             stopClient: true,
           });
+          // Logged last, and message-only: `dbg` is enabled by default and
+          // every entry is broadcast to the renderer's debug panel, so the raw
+          // SDK error object must not be inspected here (it can carry request
+          // headers, i.e. the Copilot bearer token). The CAPI status and body
+          // — including the `thinking.type.enabled` 400 text — are already in
+          // `message`. Placed after cleanup so a formatter throw can never
+          // skip the error/complete events above.
+          dbg.agent(
+            'Copilot send failed model=%s sentReasoningEffort=%s error=%s',
+            config.model ?? 'default',
+            reasoningEffort ?? 'none',
+            error instanceof Error ? error.message : String(error),
+          );
         });
     })().catch(async (error: unknown) => {
       if (!startupReleased) {

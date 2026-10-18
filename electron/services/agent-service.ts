@@ -2059,6 +2059,19 @@ class AgentService {
       effort: thinkingEffort,
       allowCopilotEffortWithoutCapabilities: true,
     });
+    // Instrumentation for the Copilot `thinking.type.enabled` CAPI 400. The
+    // effort reaching here is already clamped by `finalize()` in
+    // shared/model-profiles.ts (which normalizes without capabilities), so for
+    // Copilot this should always read `normalized=default` — i.e. we send no
+    // reasoning effort at all. If a 400 is seen while this logs `default`, the
+    // thinking config is built by the Copilot CLI, not by us.
+    dbg.agent(
+      'Resolved thinking effort backend=%s model=%s requested=%s normalized=%s',
+      session.backendType,
+      modelPreference ?? 'default',
+      thinkingEffort ?? 'default',
+      normalizedThinkingEffort,
+    );
     session.currentModel = modelPreference ?? null;
     // Recorded so a follow-up can tell whether the user changed model/effort
     // since this run started. The backend applies these at `query()` time, so a
