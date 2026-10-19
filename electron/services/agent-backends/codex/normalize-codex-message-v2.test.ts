@@ -1048,7 +1048,7 @@ describe('normalizeCodexNotification', () => {
     ]);
   });
 
-  it('moves child message parenting to the latest Codex sub-agent activity', () => {
+  it('keeps one Codex sub-agent card per agent thread across activity events', () => {
     const ctx = createCodexNormalizationContext();
 
     normalizeCodexNotification(
@@ -1067,33 +1067,27 @@ describe('normalizeCodexNotification', () => {
       ctx,
     );
 
-    const interaction = normalizeCodexNotification(
-      {
-        method: 'item/completed',
-        params: {
-          item: {
-            id: 'call-activity-interacted',
-            type: 'subAgentActivity',
-            kind: 'interacted',
-            agentThreadId: 'thread-child',
-            agentPath: '/root/review',
+    // Codex emits a fresh item id per activity event; it must not spawn a
+    // second card for the same agent thread.
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/completed',
+          params: {
+            item: {
+              id: 'call-activity-interacted',
+              type: 'subAgentActivity',
+              kind: 'interacted',
+              agentThreadId: 'thread-child',
+              agentPath: '/root/review',
+            },
           },
         },
-      },
-      ctx,
-    );
+        ctx,
+      ),
+    ).toEqual([]);
 
-    expect(interaction).toEqual([
-      {
-        type: 'entry',
-        entry: expect.objectContaining({
-          id: 'call-activity-interacted',
-          name: 'sub-agent',
-          input: expect.objectContaining({ description: 'review' }),
-        }),
-      },
-    ]);
-
+    // Child messages stay parented to the original card.
     expect(
       normalizeCodexNotification(
         {
@@ -1114,8 +1108,81 @@ describe('normalizeCodexNotification', () => {
         type: 'entry',
         entry: expect.objectContaining({
           id: 'child-message-after-interaction',
-          parentToolId: 'call-activity-interacted',
+          parentToolId: 'call-activity-started',
         }),
+      },
+    ]);
+
+    // `completed` resolves the card so it stops showing as live.
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/completed',
+          params: {
+            item: {
+              id: 'call-activity-completed',
+              type: 'subAgentActivity',
+              kind: 'completed',
+              agentThreadId: 'thread-child',
+              agentPath: '/root/review',
+            },
+          },
+        },
+        ctx,
+      ),
+    ).toEqual([
+      {
+        type: 'entry-update',
+        entry: expect.objectContaining({
+          id: 'call-activity-started',
+          result: { output: '' },
+        }),
+      },
+    ]);
+  });
+
+  it('ignores Codex root-thread activity so the main stream is not nested', () => {
+    const ctx = createCodexNormalizationContext();
+
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/started',
+          params: {
+            threadId: 'thread-main',
+            item: {
+              id: 'call-root-activity',
+              type: 'subAgentActivity',
+              kind: 'interacted',
+              agentThreadId: 'thread-main',
+              agentPath: '/root',
+            },
+          },
+        },
+        ctx,
+      ),
+    ).toEqual([]);
+
+    // The main thread must stay at the top level, not inside a "root" card.
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/completed',
+          params: {
+            threadId: 'thread-main',
+            item: {
+              id: 'main-message',
+              type: 'agentMessage',
+              text: 'Back on the main thread',
+            },
+          },
+        },
+        ctx,
+      ),
+    ).toEqual([
+      {
+        type: 'entry',
+        entry: expect.not.objectContaining({ parentToolId: expect.anything() }),
       },
     ]);
   });

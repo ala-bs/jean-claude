@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_FILE_ATTACHMENT_SIZE,
   MAX_INLINE_PASTED_PROMPT_LENGTH,
-  PASTED_PROMPT_ATTACHMENT_FILENAME,
   processAttachmentFile,
   processAttachmentPath,
   processPastedPromptAttachment,
@@ -162,17 +161,22 @@ describe('processAttachmentFile', () => {
     stubFsApi({ writeAttachmentFile });
     const onAttach = vi.fn();
 
-    await processPastedPromptAttachment('long paste', '/repo', onAttach);
+    await processPastedPromptAttachment({
+      content: 'long paste',
+      projectPath: '/repo',
+      filename: 'paste-2.md',
+      onAttach,
+    });
 
     expect(writeAttachmentFile).toHaveBeenCalledWith(
       '/repo',
-      PASTED_PROMPT_ATTACHMENT_FILENAME,
+      'paste-2.md',
       'long paste',
     );
     expect(onAttach).toHaveBeenCalledWith({
       type: 'file',
       filePath: '/repo/.jean-claude/tmp/abc-pasted-content.md',
-      filename: PASTED_PROMPT_ATTACHMENT_FILENAME,
+      filename: 'paste-2.md',
     });
   });
 
@@ -182,12 +186,13 @@ describe('processAttachmentFile', () => {
     const onAttach = vi.fn();
     const onError = vi.fn();
 
-    await processPastedPromptAttachment(
-      'x'.repeat(MAX_FILE_ATTACHMENT_SIZE + 1),
-      '/repo',
+    await processPastedPromptAttachment({
+      content: 'x'.repeat(MAX_FILE_ATTACHMENT_SIZE + 1),
+      projectPath: '/repo',
+      filename: 'paste-1.md',
       onAttach,
       onError,
-    );
+    });
 
     expect(writeAttachmentFile).not.toHaveBeenCalled();
     expect(onAttach).not.toHaveBeenCalled();

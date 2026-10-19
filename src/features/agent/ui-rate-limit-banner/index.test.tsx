@@ -119,7 +119,7 @@ describe('RateLimitBanner', () => {
       revert?.click();
     });
 
-    expect(activate).toHaveBeenCalledWith('anthropic');
+    expect(activate).toHaveBeenCalledWith('anthropic', 'project-1');
     expect(container?.textContent).toBe('');
   });
 

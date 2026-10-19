@@ -125,7 +125,13 @@ export class RateLimitSwapService {
     if (utilization === null || utilization < threshold) return noSwap;
 
     const profiles = await service.listProfiles();
-    const active = await service.getActiveProfile();
+    // The profile this project actually runs, which a policy pin or an explicit
+    // per-project pick can make different from the globally active one. Using
+    // the global one here could nominate the profile already in use as its own
+    // fallback and announce a swap that changes nothing.
+    const active = options.projectId
+      ? await service.getEffectiveProfile({ projectId: options.projectId })
+      : await service.getActiveProfile();
 
     const candidate = order
       .map((id) => profiles.find((profile) => profile.id === id))
@@ -216,7 +222,16 @@ export class RateLimitSwapService {
       // whose agent role resolves to nothing), so the caller and the banner
       // could be told one profile while a different one was activated — and
       // the §8 enforce check validated the profile that was not used.
-      await service.activateProfile({ profileId: candidate.id });
+      //
+      // `projectId` matters: in a `prefer` project with an explicit per-project
+      // profile pick, that pick beats the global active profile. Activating
+      // globally only would leave the project resolving the rate-limited
+      // profile while the banner announced a fallback. The renderer's revert
+      // is project-scoped too, so the user's pick is restored, not destroyed.
+      await service.activateProfile({
+        profileId: candidate.id,
+        projectId: options.projectId ?? null,
+      });
     }
 
     const model =

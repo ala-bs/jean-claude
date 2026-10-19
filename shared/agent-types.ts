@@ -223,10 +223,45 @@ export type QuestionResponseMetadata = Pick<
   questionKeys: string[];
 };
 
+/**
+ * Upper bound for a text-derived question key.
+ *
+ * Question keys travel to the renderer and come back inside
+ * `QuestionResponse.memoryDetails`, where they are validated against
+ * `AGENT_MEMORY_MAX_ID_CHARS` (256). Backends that do not provide a question
+ * `id` (e.g. Copilot) fall back to the question text, which is frequently
+ * longer than that — the response would then be rejected as
+ * `invalid-detail-shape` and the step would wait forever. Keep the base well
+ * under the cap so the de-duplication suffixes below still fit.
+ */
+const MAX_TEXT_QUESTION_KEY_CHARS = 180;
+
+function hashQuestionText(text: string): string {
+  // FNV-1a: no node/web crypto dependency, this file is shared with the renderer.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+function toQuestionKeyCandidate(question: {
+  id?: string;
+  question: string;
+}): string {
+  if (question.id) return question.id;
+  const text = question.question;
+  if (text.length <= MAX_TEXT_QUESTION_KEY_CHARS) return text;
+  // Deterministic on both sides (main re-derives keys from the same request),
+  // and the hash keeps two long questions sharing a prefix distinct.
+  return `${text.slice(0, MAX_TEXT_QUESTION_KEY_CHARS)}#${hashQuestionText(text)}`;
+}
+
 export function getStableQuestionKeys(
   questions: Array<{ id?: string; question: string }>,
 ): string[] {
-  const candidates = questions.map((question) => question.id || question.question);
+  const candidates = questions.map(toQuestionKeyCandidate);
   const counts = new Map<string, number>();
   for (const candidate of candidates) {
     counts.set(candidate, (counts.get(candidate) ?? 0) + 1);

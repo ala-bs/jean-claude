@@ -13,7 +13,17 @@ import { getChildProcessEnv } from '../../../lib/child-process-env';
 // Re-enabled only when the caller passes `allowReadOnlyShell`. Codex exposes no
 // scoped Read tool: reading a file *is* a shell command, so file access and
 // shell access are the same capability and cannot be separated.
-const SHELL_FEATURES = ['shell_tool', 'unified_exec', 'shell_snapshot'];
+const SHELL_FEATURES = [
+  'shell_tool',
+  'unified_exec',
+  'shell_snapshot',
+  // codex-cli routes shell/command tool calls through the code-mode host. With
+  // `code_mode`/`code_mode_host` disabled the tool is still advertised to the
+  // model but every call fails closed with `code-mode host is disabled`, so the
+  // granted read-only shell is unusable. Verified against codex-cli 0.155.0.
+  'code_mode',
+  'code_mode_host',
+];
 
 const DISABLED_FEATURES = [
   ...SHELL_FEATURES,
@@ -26,8 +36,6 @@ const DISABLED_FEATURES = [
   'computer_use',
   'image_generation',
   'view_image',
-  'code_mode',
-  'code_mode_host',
   'skill_search',
   'skill_mcp_dependency_install',
   'tool_suggest',

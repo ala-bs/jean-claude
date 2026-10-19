@@ -97,7 +97,7 @@ it('keeps shell disabled unless the caller opts into read-only shell', async () 
     outputSchema: { type: 'object' }, abortController: new AbortController(),
   })).resolves.toEqual({ summary: 'Done' });
   const args = execFileMock.mock.calls[0][1];
-  for (const feature of ['shell_tool', 'unified_exec', 'shell_snapshot']) {
+  for (const feature of ['shell_tool', 'unified_exec', 'shell_snapshot', 'code_mode', 'code_mode_host']) {
     expect(args).toContain(feature);
   }
   expect(args).not.toContain('shell_environment_policy.inherit="core"');
@@ -112,8 +112,9 @@ it('grants read-only shell scoped to the caller cwd, with no inherited env', asy
     abortController: new AbortController(),
   })).resolves.toEqual({ summary: 'Done' });
   const args = execFileMock.mock.calls[0][1];
-  // Shell is the only capability re-enabled...
-  for (const feature of ['shell_tool', 'unified_exec', 'shell_snapshot']) {
+  // Shell is the only capability re-enabled — including the code-mode host the
+  // shell tool is routed through, otherwise every call fails closed.
+  for (const feature of ['shell_tool', 'unified_exec', 'shell_snapshot', 'code_mode', 'code_mode_host']) {
     expect(args).not.toContain(feature);
   }
   // ...everything else stays locked down, and the sandbox stays read-only.

@@ -69,7 +69,10 @@ export function useRateLimitFallback({
 
   const { profiles } = useModelProfilesSetting();
   const { activeProfileId } = useActiveModelProfileId();
-  const activateProfile = useActivateModelProfile();
+  // Project-scoped, mirroring the swap: the fallback records a per-project
+  // pick for a `prefer` project, so the revert has to write back at the same
+  // scope or the project would stay on the fallback profile forever.
+  const activateProfile = useActivateModelProfile(projectId);
 
   // Refs keep the event handler stable: re-subscribing on every render would
   // make "exactly once per limit event" depend on render timing.

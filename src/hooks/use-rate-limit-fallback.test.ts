@@ -168,7 +168,7 @@ describe('useRateLimitFallback', () => {
       await result?.revert();
     });
 
-    expect(activate).toHaveBeenCalledWith('anthropic');
+    expect(activate).toHaveBeenCalledWith('anthropic', 'project-1');
     expect(result?.state.kind).toBe('idle');
   });
 
@@ -219,7 +219,7 @@ describe('useRateLimitFallback', () => {
     await act(async () => {
       await vi.waitFor(() => expect(result?.state.kind).toBe('idle'));
     });
-    expect(activate).toHaveBeenCalledWith('anthropic');
+    expect(activate).toHaveBeenCalledWith('anthropic', 'project-1');
   });
 
   // The real service returns `{ swapped: false, skippedDueToRateLimit: true }`

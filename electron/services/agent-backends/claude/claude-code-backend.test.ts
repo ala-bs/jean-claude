@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 
+import { getStableQuestionKeys } from '../../../../shared/agent-types';
 import { toDirectoryPermissionPattern } from '../../directory-access';
 
 const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
@@ -299,6 +300,71 @@ describe('ClaudeCodeBackend prompt stream lifetime', () => {
       new Promise<false>((resolve) => setTimeout(() => resolve(false), 50)),
     ]);
   }
+
+  // The SDK documents AskUserQuestion's result as "question text -> answer
+  // string", and we hand back the original `questions` untouched. Jean-Claude
+  // question keys are NOT the raw text (they are truncated past 180 chars and
+  // suffixed for duplicates), so the map has to be re-keyed on the way out or
+  // the answer is silently dropped.
+  it('re-keys AskUserQuestion answers by raw question text, not question key', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    try {
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next();
+
+      const longQuestion = `Which deployment strategy? ${'x'.repeat(400)}`;
+      const canUseTool = queryMock.mock.calls[0][0].options.canUseTool;
+      const decision = canUseTool(
+        'AskUserQuestion',
+        {
+          questions: [
+            {
+              question: longQuestion,
+              header: 'Deploy',
+              options: [
+                { label: 'Blue/green', description: '' },
+                { label: 'Rolling', description: '' },
+              ],
+              multiSelect: false,
+            },
+          ],
+        },
+        {},
+      );
+
+      let requestId = '';
+      for (let i = 0; i < 50 && !requestId; i++) {
+        const next = await events.next();
+        const event = next.value as {
+          type?: string;
+          request?: { requestId: string };
+        };
+        if (event?.type === 'question' && event.request) {
+          requestId = event.request.requestId;
+        }
+      }
+      expect(requestId).not.toBe('');
+
+      const [questionKey] = getStableQuestionKeys([{ question: longQuestion }]);
+      expect(questionKey).not.toBe(longQuestion);
+
+      await backend.respondToQuestion(
+        session.sessionId,
+        requestId,
+        { [questionKey]: 'Blue/green' },
+        { questionKeys: [questionKey] },
+      );
+
+      await expect(decision).resolves.toMatchObject({
+        behavior: 'allow',
+        updatedInput: { answers: { [longQuestion]: 'Blue/green' } },
+      });
+    } finally {
+      controller.end();
+      await backend.dispose();
+    }
+  });
 
   it('sends the prompt as a stream, not a bare string', async () => {
     const controller = makeControllableQuery();

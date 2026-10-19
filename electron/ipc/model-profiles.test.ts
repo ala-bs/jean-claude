@@ -53,6 +53,7 @@ const modelProfileService = {
   listPresets: vi.fn(),
   getActiveProfile: vi.fn(),
   activateProfile: vi.fn(),
+  clearProjectProfilePick: vi.fn(),
   getEffectivePolicy: vi.fn(),
   resolveForRole: vi.fn(),
   getFallbackOrder: vi.fn(),
@@ -103,6 +104,7 @@ describe('modelProfiles:activate', () => {
 
     expect(modelProfileService.activateProfile).toHaveBeenCalledWith({
       profileId: 'codex-fallback',
+      projectId: null,
     });
     expect(result).toEqual(profile);
     expect(sentMessages).toContainEqual({
@@ -223,6 +225,11 @@ describe('policy cache invalidation', () => {
     });
     expect(
       modelProfileService.invalidateProjectPolicyCache,
+    ).toHaveBeenCalledWith({ projectId: 'project-3' });
+    // A per-project profile pick only means "not the current default", so a
+    // policy write must forget it — otherwise it shadows the new default.
+    expect(
+      modelProfileService.clearProjectProfilePick,
     ).toHaveBeenCalledWith({ projectId: 'project-3' });
   });
 });

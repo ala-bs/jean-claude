@@ -202,6 +202,408 @@ describe('CodexBackend', () => {
     });
   });
 
+  // The payload below is the verified codex-cli 0.155.0 shape: `_meta` carries
+  // `tool_description`/`tool_params`/`persist` but NO `tool_name`, and
+  // `requestedSchema.properties` is empty. The tool name is only available from
+  // the `item/started` notification that precedes it.
+  const MCP_APPROVAL_PARAMS = {
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    serverName: 'jean-claude-mcp',
+    mode: 'form',
+    message: 'Allow the jean-claude-mcp MCP server to run tool "ask_question"?',
+    requestedSchema: { type: 'object', properties: {} },
+    _meta: {
+      codex_approval_kind: 'mcp_tool_call',
+      persist: ['session', 'always'],
+      tool_description: 'Ask the user one or more questions.',
+      tool_params: { questions: [] },
+    },
+  };
+
+  // The approval is parked in `pendingApprovals` only after the
+  // `thread/increment_elicitation` round trip, so let microtasks settle before
+  // acting as the UI would. (In production the UI cannot respond earlier: it
+  // only learns of the request from the event pushed after that.)
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  const MCP_TOOL_CALL_STARTED = {
+    method: 'item/started',
+    params: {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        id: 'exec-1',
+        type: 'mcpToolCall',
+        server: 'jean-claude-mcp',
+        tool: 'ask_question',
+        status: 'inProgress',
+      },
+    },
+  };
+
+  it('names the tool from item/started, since the approval payload omits it', async () => {
+    const { backend, client, emitRequest, emitNotification } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask me something' },
+    ]);
+    const events = session.events[Symbol.asyncIterator]();
+    await events.next();
+
+    emitNotification(MCP_TOOL_CALL_STARTED);
+    emitRequest({ id: 'approval-1', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+
+    let permissionEvent: unknown;
+    for (let i = 0; i < 6; i += 1) {
+      const next = await events.next();
+      const value = next.value as { type?: string } | undefined;
+      if (value?.type === 'permission-request') {
+        permissionEvent = value;
+        break;
+      }
+    }
+    expect(permissionEvent).toMatchObject({
+      type: 'permission-request',
+      request: {
+        requestId: 'approval-1',
+        // Not the bare `mcp__jean-claude-mcp` fallback: the user must be able
+        // to see which tool they are approving.
+        toolName: 'mcp__jean-claude-mcp__ask_question',
+        input: { questions: [] },
+      },
+    });
+
+    // The Codex-side elicitation timeout is paused while the human decides.
+    expect(client.request).toHaveBeenCalledWith('thread/increment_elicitation', {
+      threadId: 'thread-1',
+    });
+
+    await backend.respondToPermission(session.sessionId, 'approval-1', {
+      behavior: 'allow',
+    });
+    expect(client.respond).toHaveBeenCalledWith('approval-1', {
+      action: 'accept',
+      content: {},
+    });
+    expect(client.request).toHaveBeenCalledWith('thread/decrement_elicitation', {
+      threadId: 'thread-1',
+    });
+  });
+
+  it('falls back to the server name when no tool name is known', async () => {
+    const { backend, emitRequest } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask me something' },
+    ]);
+    const events = session.events[Symbol.asyncIterator]();
+    await events.next();
+    const nextEvent = events.next();
+
+    // No preceding item/started, so the tool name is genuinely unavailable.
+    emitRequest({ id: 'approval-nameless', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+
+    await expect(nextEvent).resolves.toMatchObject({
+      value: { request: { toolName: 'mcp__jean-claude-mcp' } },
+    });
+  });
+
+  it('cancels a pending MCP tool-call approval with an elicitation result', async () => {
+    const { backend, client, emitRequest, emitNotification } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask me something' },
+    ]);
+    emitNotification(MCP_TOOL_CALL_STARTED);
+    emitRequest({ id: 'approval-stop', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+
+    await backend.stop(session.sessionId);
+
+    // `{decision:'cancel'}` carries no `action` and would leave Codex's MCP
+    // tool call unresolved.
+    expect(client.respond).toHaveBeenCalledWith('approval-stop', {
+      action: 'cancel',
+    });
+    expect(client.respond).not.toHaveBeenCalledWith('approval-stop', {
+      decision: 'cancel',
+    });
+  });
+
+  it('offers a session-allow button naming only the identified tool', async () => {
+    const { backend, emitRequest, emitNotification } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask me something' },
+    ]);
+    const events = session.events[Symbol.asyncIterator]();
+    await events.next();
+
+    emitNotification(MCP_TOOL_CALL_STARTED);
+    emitRequest({ id: 'approval-1', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+
+    let permissionEvent: { request?: unknown } | undefined;
+    for (let i = 0; i < 6; i += 1) {
+      const next = await events.next();
+      const value = next.value as { type?: string } | undefined;
+      if (value?.type === 'permission-request') {
+        permissionEvent = value as { request?: unknown };
+        break;
+      }
+    }
+    expect(permissionEvent?.request).toMatchObject({
+      sessionAllowButton: {
+        label: 'Allow ask_question for Session',
+        toolsToAllow: ['mcp__jean-claude-mcp__ask_question'],
+      },
+    });
+  });
+
+  it('honours "allow for session" so the same MCP tool stops re-prompting', async () => {
+    const { backend, client, emitRequest, emitNotification } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask me something' },
+    ]);
+    emitNotification(MCP_TOOL_CALL_STARTED);
+    emitRequest({ id: 'approval-1', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+    await settle();
+
+    await backend.respondToPermission(session.sessionId, 'approval-1', {
+      behavior: 'allow',
+      allowMode: 'session',
+    });
+    client.respond.mockClear();
+
+    // A second call to the same tool must be accepted without a new prompt.
+    emitNotification(MCP_TOOL_CALL_STARTED);
+    emitRequest({ id: 'approval-2', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+    await settle();
+
+    expect(client.respond).toHaveBeenCalledWith('approval-2', {
+      action: 'accept',
+      content: {},
+    });
+    await expect(
+      backend.respondToPermission(session.sessionId, 'approval-2', { behavior: 'allow' }),
+    ).rejects.toThrow('No pending Codex approval');
+  });
+
+  it('does not remember a plain allow-once', async () => {
+    const { backend, client, emitRequest, emitNotification } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask me something' },
+    ]);
+    emitNotification(MCP_TOOL_CALL_STARTED);
+    emitRequest({ id: 'approval-1', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+    await settle();
+    await backend.respondToPermission(session.sessionId, 'approval-1', {
+      behavior: 'allow',
+    });
+    client.respond.mockClear();
+
+    emitNotification(MCP_TOOL_CALL_STARTED);
+    emitRequest({ id: 'approval-2', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+    await settle();
+
+    // Still pending: no auto-accept was sent.
+    expect(client.respond).not.toHaveBeenCalled();
+  });
+
+  it('never remembers a grant for an unidentified tool', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask me something' },
+    ]);
+    // No item/started, so the tool is unnamed; a session grant here would
+    // otherwise widen to the whole MCP server.
+    emitRequest({ id: 'approval-1', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+    await settle();
+    await backend.respondToPermission(session.sessionId, 'approval-1', {
+      behavior: 'allow',
+      allowMode: 'session',
+    });
+    client.respond.mockClear();
+
+    emitRequest({ id: 'approval-2', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+    await settle();
+    expect(client.respond).not.toHaveBeenCalled();
+  });
+
+  const allowRule = (action: 'allow' | 'deny') => [
+    {
+      tool: 'mcp__jean-claude-mcp__ask_question',
+      pattern: '*',
+      action,
+    },
+  ];
+
+  it('accepts without prompting when a persisted rule allows the tool', async () => {
+    const { backend, client, emitRequest, emitNotification } = createBackend();
+    await backend.start(
+      createConfig({ permissionRules: allowRule('allow') }),
+      [{ type: 'text', text: 'Ask me something' }],
+    );
+
+    emitNotification(MCP_TOOL_CALL_STARTED);
+    emitRequest({ id: 'approval-1', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+    await settle();
+
+    expect(client.respond).toHaveBeenCalledWith('approval-1', {
+      action: 'accept',
+      content: {},
+    });
+    // No prompt was raised, so no elicitation pause was needed either.
+    expect(client.request).not.toHaveBeenCalledWith(
+      'thread/increment_elicitation',
+      expect.anything(),
+    );
+  });
+
+  it('declines when a persisted rule denies the tool', async () => {
+    const { backend, client, emitRequest, emitNotification } = createBackend();
+    await backend.start(
+      createConfig({ permissionRules: allowRule('deny') }),
+      [{ type: 'text', text: 'Ask me something' }],
+    );
+
+    emitNotification(MCP_TOOL_CALL_STARTED);
+    emitRequest({ id: 'approval-1', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+    await settle();
+
+    expect(client.respond).toHaveBeenCalledWith('approval-1', {
+      action: 'decline',
+    });
+  });
+
+  it('applies a rule added mid-run to the live session', async () => {
+    const { backend, client, emitRequest, emitNotification } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask me something' },
+    ]);
+
+    backend.updatePermissionRules({
+      sessionId: session.sessionId,
+      rules: allowRule('allow'),
+    });
+
+    emitNotification(MCP_TOOL_CALL_STARTED);
+    emitRequest({ id: 'approval-1', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+    await settle();
+
+    expect(client.respond).toHaveBeenCalledWith('approval-1', {
+      action: 'accept',
+      content: {},
+    });
+  });
+
+  it('keeps step-scoped rules across a mid-run refresh', async () => {
+    const { backend, client, emitRequest, emitNotification } = createBackend();
+    const session = await backend.start(
+      createConfig({
+        persistedSessionRules: {
+          'mcp__jean-claude-mcp__ask_question': 'allow',
+        } as AgentBackendConfig['persistedSessionRules'],
+      }),
+      [{ type: 'text', text: 'Ask me something' }],
+    );
+
+    // A refresh carrying unrelated project rules must not drop the step rule.
+    backend.updatePermissionRules({
+      sessionId: session.sessionId,
+      rules: [{ tool: 'bash', pattern: 'ls *', action: 'allow' }],
+    });
+
+    emitNotification(MCP_TOOL_CALL_STARTED);
+    emitRequest({ id: 'approval-1', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+    await settle();
+
+    expect(client.respond).toHaveBeenCalledWith('approval-1', {
+      action: 'accept',
+      content: {},
+    });
+  });
+
+  it('reports session grants so they can be persisted into the step', async () => {
+    const { backend, emitRequest, emitNotification } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask me something' },
+    ]);
+    expect(backend.getSessionAllowedTools(session.sessionId)).toEqual([]);
+
+    emitNotification(MCP_TOOL_CALL_STARTED);
+    emitRequest({ id: 'approval-1', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+    await settle();
+    await backend.respondToPermission(session.sessionId, 'approval-1', {
+      behavior: 'allow',
+      allowMode: 'project',
+    });
+
+    // Canonical permission-key form, which is what the step store expects.
+    expect(backend.getSessionAllowedTools(session.sessionId)).toEqual([
+      'mcp__jean-claude-mcp__ask_question',
+    ]);
+  });
+
+  it('declines an unknown approval kind instead of blind-accepting it', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    await backend.start(createConfig(), [{ type: 'text', text: 'Hello' }]);
+
+    emitRequest({
+      id: 'approval-future',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        ...MCP_APPROVAL_PARAMS,
+        _meta: { codex_approval_kind: 'some_future_kind' },
+      },
+    });
+
+    // Falls through to the elicitation-question path, which declines shapes it
+    // cannot render rather than accepting with empty content.
+    expect(client.respond).toHaveBeenCalledWith('approval-future', {
+      action: 'decline',
+    });
+  });
+
+  it('auto-approves MCP tool calls in auto mode without prompting', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    await backend.start(createConfig({ interactionMode: 'auto' }), [
+      { type: 'text', text: 'Just do it' },
+    ]);
+
+    emitRequest({ id: 'approval-auto', method: 'mcpServer/elicitation/request', params: MCP_APPROVAL_PARAMS });
+
+    expect(client.respond).toHaveBeenCalledWith('approval-auto', {
+      action: 'accept',
+      content: {},
+    });
+  });
+
+  it('auto-approves command approvals in auto mode without prompting', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    await backend.start(createConfig({ interactionMode: 'auto' }), [
+      { type: 'text', text: 'Run the tests' },
+    ]);
+
+    emitRequest({
+      id: 'cmd-auto',
+      method: 'item/commandExecution/requestApproval',
+      params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' },
+    });
+
+    expect(client.respond).toHaveBeenCalledWith('cmd-auto', {
+      decision: 'acceptForSession',
+    });
+  });
+
+  it('asks Codex for an approver even in auto mode', async () => {
+    const { backend, client } = createBackend();
+    await backend.start(createConfig({ interactionMode: 'auto' }), [
+      { type: 'text', text: 'Just do it' },
+    ]);
+
+    // `never` would make Codex hard-deny every MCP tool call.
+    expect(client.request).toHaveBeenCalledWith(
+      'thread/start',
+      expect.objectContaining({ approvalPolicy: 'on-request' }),
+    );
+  });
+
   it('declines unsupported MCP elicitation modes', async () => {
     const { backend, client, emitRequest } = createBackend();
     await backend.start(createConfig(), [{ type: 'text', text: 'Sign in' }]);

@@ -59,12 +59,21 @@ export function buildModelOverrideFromDraft(
 export function resolveAgentModelSelection({
   profiles,
   activeProfileId,
+  projectProfileId,
   policy,
   enabledBackends,
   draft,
 }: {
   profiles?: ModelProfile[] | null;
   activeProfileId?: string | null;
+  /**
+   * The project's explicitly picked profile. MUST be threaded whenever a
+   * `policy` is passed: `resolveModelForRole` re-applies a `prefer` pin on top
+   * of `activeProfileId`, so passing an already-resolved effective profile id
+   * is not enough — without this the pin wins here while the switcher shows
+   * the pick.
+   */
+  projectProfileId?: string | null;
   policy?: ProjectModelPolicy | null;
   enabledBackends?: AgentBackendType[];
   draft?: ModelDraftSelection | null;
@@ -73,6 +82,7 @@ export function resolveAgentModelSelection({
     role: 'agent',
     profiles: profiles ?? [],
     activeProfileId: activeProfileId ?? null,
+    projectProfileId: projectProfileId ?? null,
     policy: policy ?? null,
     enabledBackends,
     override: buildModelOverrideFromDraft(draft),

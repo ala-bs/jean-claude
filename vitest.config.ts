@@ -69,6 +69,7 @@ export default defineConfig({
       'src/features/mobile-preview/**/*.test.ts',
       'src/features/mobile-preview/**/*.test.tsx',
       'src/features/new-task/ui-prompt-composer/**/*.test.ts',
+      'src/features/new-task/use-profile-activation/**/*.test.ts',
       'src/common/ui/handlebars-editor/**/*.test.ts',
       'src/common/ui/checkbox/**/*.test.tsx',
       'src/common/ui/combobox/**/*.test.tsx',

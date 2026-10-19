@@ -186,6 +186,7 @@ describe('generateProjectLogo and the project-logo role', () => {
         };
       }
       if (key === 'activeModelProfileId') return 'profile-1';
+      if (key === 'projectModelProfileSelections') return {};
       throw new Error(`Unexpected setting key: ${key}`);
     });
     decryptMock.mockReset();
@@ -248,6 +249,7 @@ describe('generateProjectLogo and the project-logo role', () => {
         };
       }
       if (key === 'activeModelProfileId') return 'profile-1';
+      if (key === 'projectModelProfileSelections') return {};
       throw new Error(`Unexpected setting key: ${key}`);
     });
     listProfilesMock.mockResolvedValue(profileWithLogoRole(undefined));

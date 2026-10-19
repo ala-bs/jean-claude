@@ -1,3 +1,4 @@
+import { Loader2, PackageOpen } from 'lucide-react';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { RefObject } from 'react';
@@ -45,13 +46,13 @@ function ChipTooltip({
 }
 
 const PromptChip = memo(function PromptChip({
-  prompt,
+  item,
   isCompleted,
   isCurrent,
   isFuture,
   onNavigate,
 }: {
-  prompt: PromptNavigationItem;
+  item: PromptNavigationItem;
   isCompleted: boolean;
   isCurrent: boolean;
   isFuture: boolean;
@@ -60,27 +61,52 @@ const PromptChip = memo(function PromptChip({
   const [hovered, setHovered] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
+  const isCompaction = item.kind === 'compaction';
+
+  const className = isCompaction
+    ? `flex cursor-pointer items-center justify-center rounded-md transition-all ${
+        isCurrent
+          ? 'h-5 w-5 border border-amber-400/60 bg-amber-500/25 text-amber-200 shadow-[0_0_10px_oklch(0.78_0.15_75_/_0.35)]'
+          : isFuture
+            ? 'h-5 w-5 border border-dashed border-amber-400/25 text-amber-300/40 hover:border-amber-400/45'
+            : 'h-5 w-5 border border-amber-400/30 bg-amber-500/12 text-amber-300/80 hover:bg-amber-500/22'
+      }`
+    : `flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg text-xs font-medium transition-all ${
+        isCompleted
+          ? 'bg-acc/15 text-acc-ink border-acc/25 hover:bg-acc/25 border'
+          : isCurrent
+            ? 'bg-acc text-white shadow-[0_0_12px_oklch(0.7_0.18_295_/_0.4)]'
+            : isFuture
+              ? 'border border-dashed border-white/20 text-white/40 hover:border-white/35'
+              : ''
+      }`;
+
   return (
     <div className="relative">
       <button
         ref={buttonRef}
         type="button"
-        onClick={() => onNavigate(prompt.index)}
+        onClick={() => onNavigate(item.index)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        className={`flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg text-xs font-medium transition-all ${
-          isCompleted
-            ? 'bg-acc/15 text-acc-ink border-acc/25 hover:bg-acc/25 border'
-            : isCurrent
-              ? 'bg-acc text-white shadow-[0_0_12px_oklch(0.7_0.18_295_/_0.4)]'
-              : isFuture
-                ? 'border border-dashed border-white/20 text-white/40 hover:border-white/35'
-                : ''
-        }`}
+        aria-label={
+          item.kind === 'compaction'
+            ? item.text
+            : `Prompt ${item.promptNumber}`
+        }
+        className={className}
       >
-        {prompt.index + 1}
+        {item.kind === 'compaction' ? (
+          item.isComplete ? (
+            <PackageOpen className="h-3 w-3" aria-hidden />
+          ) : (
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+          )
+        ) : (
+          item.promptNumber
+        )}
       </button>
-      {hovered && <ChipTooltip text={prompt.text} triggerRef={buttonRef} />}
+      {hovered && <ChipTooltip text={item.text} triggerRef={buttonRef} />}
     </div>
   );
 });
@@ -96,7 +122,12 @@ export const PromptSidebar = memo(function PromptSidebar({
   taskId?: string;
   bottomPadding?: number;
 }) {
-  const totalPrompts = prompts.length;
+  // Navigation scans DOM anchors 0..totalPrompts-1. Indices are assigned in
+  // document order across prompts AND compactions, and empty prompts consume an
+  // index without producing a rail item, so the count must come from the last
+  // index rather than the rail item count.
+  const totalPrompts =
+    prompts.length === 0 ? 0 : prompts[prompts.length - 1].index + 1;
 
   const { currentIndex, goToPrompt } = usePromptNavigation({
     scrollContainerRef,
@@ -133,36 +164,39 @@ export const PromptSidebar = memo(function PromptSidebar({
         </div>
       )}
       <div className="no-scrollbar flex min-h-0 flex-1 flex-col items-center gap-0 overflow-y-auto">
-        {prompts.map((prompt) => {
-          const isCompleted = prompt.index < currentIndex;
-          const isCurrent = prompt.index === currentIndex;
-          const isFuture = prompt.index > currentIndex;
+        {prompts.map((item, position) => {
+          const isCompleted = item.index < currentIndex;
+          const isCurrent = item.index === currentIndex;
+          const isFuture = item.index > currentIndex;
+          const isCompaction = item.kind === 'compaction';
 
           return (
             <div
-              key={prompt.index}
+              key={item.index}
               className="flex flex-col items-center"
               ref={(node) => {
                 if (node) {
-                  chipRefs.current.set(prompt.index, node);
+                  chipRefs.current.set(item.index, node);
                 } else {
-                  chipRefs.current.delete(prompt.index);
+                  chipRefs.current.delete(item.index);
                 }
               }}
             >
               {/* Connector line above (except first) */}
-              {prompt.index > 0 && (
+              {position > 0 && (
                 <div
-                  className={`h-5 w-px ${
-                    prompt.index <= currentIndex
-                      ? 'bg-acc/40'
+                  className={`${isCompaction ? 'h-2.5' : 'h-5'} w-px ${
+                    item.index <= currentIndex
+                      ? isCompaction
+                        ? 'bg-amber-400/40'
+                        : 'bg-acc/40'
                       : 'border-l border-dashed border-white/15'
                   }`}
                 />
               )}
 
               <PromptChip
-                prompt={prompt}
+                item={item}
                 isCompleted={isCompleted}
                 isCurrent={isCurrent}
                 isFuture={isFuture}

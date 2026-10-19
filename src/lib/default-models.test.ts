@@ -165,6 +165,44 @@ describe('resolveAgentModelSelection', () => {
     expect(resolved.source).toBe('fallback');
   });
 
+  it('lets an explicit project pick override a prefer pin', () => {
+    // Regression: `resolveModelForRole` re-applies the pin on top of
+    // `activeProfileId`, so passing the already-resolved effective profile id
+    // was not enough — the new-task path resolved the pin while the switcher
+    // displayed the pick.
+    const pinned = resolveAgentModelSelection({
+      profiles: PROFILES,
+      activeProfileId: 'anthropic',
+      enabledBackends: [...ENABLED_BACKENDS],
+      policy: { mode: 'prefer', pinnedProfileId: 'fallback' },
+    });
+    expect(pinned.profileId).toBe('fallback');
+
+    const picked = resolveAgentModelSelection({
+      profiles: PROFILES,
+      activeProfileId: 'anthropic',
+      projectProfileId: 'anthropic',
+      enabledBackends: [...ENABLED_BACKENDS],
+      policy: { mode: 'prefer', pinnedProfileId: 'fallback' },
+    });
+
+    expect(picked.profileId).toBe('anthropic');
+    expect(picked.backend).toBe('claude-code');
+    expect(picked.blocked).toBeUndefined();
+  });
+
+  it('never lets a project pick override an enforce pin', () => {
+    const resolved = resolveAgentModelSelection({
+      profiles: PROFILES,
+      activeProfileId: 'anthropic',
+      projectProfileId: 'anthropic',
+      enabledBackends: [...ENABLED_BACKENDS],
+      policy: { mode: 'enforce', pinnedProfileId: 'fallback' },
+    });
+
+    expect(resolved.profileId).toBe('fallback');
+  });
+
   it('honors an enforcing project policy over the active profile', () => {
     const resolved = resolveAgentModelSelection({
       profiles: PROFILES,

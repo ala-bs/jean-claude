@@ -75,6 +75,8 @@ export function ModelProfileSwitcher({
   projectId,
   stepModel,
   overrideContent,
+  onProfileActivated,
+  onProfileSelected,
   align,
   side,
   className,
@@ -88,6 +90,16 @@ export function ModelProfileSwitcher({
    * "Override this step only…" submenu. Hidden entirely under `enforce`.
    */
   overrideContent?: ReactNode;
+  /**
+   * Called after a profile is picked from the list. Hosts that keep their own
+   * draft model state use this to drop a stale per-step override: picking a
+   * profile is a later, more deliberate choice than the raw pickers nested
+   * under "Override this step only…", and without it the trigger would show
+   * the new profile while the host still submits the old override.
+   */
+  onProfileActivated?: (profileId: string) => void;
+  /** Let a host coordinate activation with its own pending draft state. */
+  onProfileSelected?: (profileId: string) => void;
   align?: 'left' | 'right';
   side?: 'top' | 'bottom';
   className?: string;
@@ -113,7 +125,9 @@ export function ModelProfileSwitcher({
     [profiles, stepModel],
   );
   const activeProfile = stepProfile ?? effectiveProfile;
-  const activate = useActivateModelProfile();
+  // Project-scoped: under a `prefer` policy the project default would
+  // otherwise override the pick and the menu would appear inert.
+  const activate = useActivateModelProfile(projectId);
   const openOverlay = useOverlaysStore((state) => state.open);
   const [isOverrideOpen, setIsOverrideOpen] = useState(false);
 
@@ -189,7 +203,14 @@ export function ModelProfileSwitcher({
         <DropdownItem
           key={entry.profile.id}
           shortcut={entry.shortcut}
-          onClick={() => activate.mutate(entry.profile.id)}
+          onClick={() => {
+            if (onProfileSelected) {
+              onProfileSelected(entry.profile.id);
+            } else {
+              activate.mutate(entry.profile.id);
+              onProfileActivated?.(entry.profile.id);
+            }
+          }}
         >
           <span
             aria-current={

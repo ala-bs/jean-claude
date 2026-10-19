@@ -636,7 +636,7 @@ export class ClaudeCodeBackend implements AgentBackend {
     sessionId: string,
     requestId: string,
     answer: Record<string, string>,
-    _metadata: QuestionResponseMetadata,
+    metadata: QuestionResponseMetadata,
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -655,9 +655,48 @@ export class ClaudeCodeBackend implements AgentBackend {
       behavior: 'allow',
       updatedInput: {
         questions: resolver.input.questions,
-        answers: answer,
+        answers: this.toSdkAnswers({
+          answer,
+          questionKeys: metadata.questionKeys,
+          questions: resolver.input.questions,
+        }),
       },
     });
+  }
+
+  /**
+   * Re-key answers from Jean-Claude question keys to the raw question text.
+   *
+   * The SDK's AskUserQuestion result is documented as "question text -> answer
+   * string", and we hand back `resolver.input.questions` untouched, so the map
+   * must be keyed by the original text. Question keys are only incidentally
+   * equal to that text: `getStableQuestionKeys` disambiguates duplicates and
+   * truncates long text, so keying by them silently drops answers.
+   * `questionKeys` is positional over the same question list the request was
+   * built from, which is what makes the zip below sound.
+   */
+  private toSdkAnswers({
+    answer,
+    questionKeys,
+    questions,
+  }: {
+    answer: Record<string, string>;
+    questionKeys: string[];
+    questions: unknown;
+  }): Record<string, string> {
+    const originalQuestions = Array.isArray(questions)
+      ? (questions as Array<{ question?: unknown }>)
+      : [];
+    const sdkAnswers: Record<string, string> = {};
+    for (const [index, questionKey] of questionKeys.entries()) {
+      const value = answer[questionKey];
+      // Skipped optional questions carry no answer.
+      if (value === undefined) continue;
+      const questionText = originalQuestions[index]?.question;
+      sdkAnswers[typeof questionText === 'string' ? questionText : questionKey] =
+        value;
+    }
+    return sdkAnswers;
   }
 
   async setMode(sessionId: string, mode: InteractionMode): Promise<void> {

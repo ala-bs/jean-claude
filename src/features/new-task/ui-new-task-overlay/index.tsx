@@ -51,6 +51,10 @@ import {
   findMissingAttachmentPaths,
 } from '@/lib/prompt-attachment-cleanup';
 import {
+  isPastedPromptFilename,
+  removePastedPromptPlaceholder,
+} from '@/lib/pasted-prompt-placeholders';
+import {
   expandFeatureReferencesInPrompt,
   getReferencedFeatures,
   type PreparedProjectFeatures,
@@ -80,6 +84,7 @@ import {
   useNewTaskDraftMetadata,
   useNewTaskDraftStore,
 } from '@/stores/new-task-draft';
+import { useProfileActivation } from '@/features/new-task/use-profile-activation';
 import {
   KeyboardLayerProvider,
   useKeyboardLayer,
@@ -142,16 +147,27 @@ import { Modal } from '@/common/ui/modal';
 import { ModelProfileSwitcher } from '@/features/agent/ui-model-profile-switcher';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import { NewTaskMoreMenu } from '@/features/new-task/ui-new-task-more-menu';
-import type { ProfilePreset } from '@shared/model-profiles';
+import {
+  listSelectableProfiles,
+  type ProfilePreset,
+  readProjectProfilePick,
+} from '@shared/model-profiles';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
 import { resolveAgentModelSelection } from '@/lib/default-models';
 import { resolveBackendModelSelection } from '@/features/agent/utils-backend-model-selection';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
+import { useToastStore } from '@/stores/toasts';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
-import { useEffectiveModelProfile } from '@/hooks/use-model-profiles';
+import {
+  ACTIVE_MODEL_PROFILE_QUERY_KEY,
+  PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
+  useActivateModelProfile,
+  useEffectiveModelProfile,
+} from '@/hooks/use-model-profiles';
+import type { ProjectModelProfileSelectionsSetting } from '@shared/types';
 import { useProjectCanCreateWorktree } from '@/hooks/use-project-git';
 import { useProjectSkills } from '@/hooks/use-skills';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
@@ -559,6 +575,7 @@ export function NewTaskOverlay({
     (state) => state.markJobSucceeded,
   );
   const markJobFailed = useBackgroundJobsStore((state) => state.markJobFailed);
+  const addToast = useToastStore((state) => state.addToast);
 
   const { data: completionSetting } = useCompletionSetting();
   const { data: promptSnippets = [] } = usePromptSnippetsSetting();
@@ -861,7 +878,9 @@ export function NewTaskOverlay({
     profile: effectiveProfile,
     profiles,
     effectiveProfileId,
+    projectProfileId,
   } = useEffectiveModelProfile(selectedProjectId);
+  const activateProfile = useActivateModelProfile(selectedProjectId);
   // Revision 1: presets and the quick list are owned by a profile, and the one
   // that counts here is the *effective* profile — the project may pin a
   // different profile than the globally active one.
@@ -874,6 +893,55 @@ export function NewTaskOverlay({
     enabled: Boolean(selectedProjectId),
   });
 
+  const {
+    selectProfile,
+    pendingProfileRef,
+    waitForPendingActivations,
+    clearPendingProfile,
+  } = useProfileActivation({
+    draftKey,
+    updateDraft,
+    activate: activateProfile.mutateAsync,
+    addToast,
+    userTouchedSelectionRef,
+  });
+
+  useEffect(() => {
+    if (
+      pendingProfileRef.current?.draftKey === draftKey &&
+      pendingProfileRef.current.profileId === effectiveProfileId
+    ) {
+      clearPendingProfile();
+    }
+  }, [clearPendingProfile, draftKey, effectiveProfileId, pendingProfileRef]);
+
+  const cycleProfile = useCallback(() => {
+    if (selectedProjectId && !effectivePolicy) return;
+    const selectable = listSelectableProfiles({
+      profiles,
+      policy: effectivePolicy?.policy,
+    });
+    if (selectable.length === 0) return;
+
+    const currentProfileId =
+      pendingProfileRef.current?.draftKey === draftKey
+        ? pendingProfileRef.current.profileId
+        : effectiveProfileId;
+    const currentIndex = selectable.findIndex(
+      (profile) => profile.id === currentProfileId,
+    );
+    const next = selectable[(currentIndex + 1) % selectable.length];
+    selectProfile(next.id);
+  }, [
+    draftKey,
+    effectivePolicy,
+    effectiveProfileId,
+    pendingProfileRef,
+    profiles,
+    selectProfile,
+    selectedProjectId,
+  ]);
+
   // The `agent` role is the single source of truth for what a new task runs.
   // The draft's own model fields are an explicit per-task override and win;
   // everything else follows the active profile (and the project policy).
@@ -882,6 +950,7 @@ export function NewTaskOverlay({
       resolveAgentModelSelection({
         profiles,
         activeProfileId: effectiveProfileId,
+        projectProfileId,
         policy: effectivePolicy?.policy ?? null,
         enabledBackends: backendsSetting?.enabledBackends,
         draft: {
@@ -900,6 +969,7 @@ export function NewTaskOverlay({
       effectivePolicy?.policy,
       effectiveProfileId,
       profiles,
+      projectProfileId,
     ],
   );
 
@@ -940,6 +1010,7 @@ export function NewTaskOverlay({
         areModelsFetched: areBackendModelsFetched,
         profiles,
         activeProfileId: effectiveProfileId,
+        projectProfileId,
         policy: effectivePolicy?.policy ?? null,
       }),
     [
@@ -955,6 +1026,7 @@ export function NewTaskOverlay({
       effectiveProfileId,
       profilePresets,
       profiles,
+      projectProfileId,
       quickPresetIds,
       resolvedAgentModel.model,
     ],
@@ -1303,6 +1375,11 @@ export function NewTaskOverlay({
   const handleStartTask = useCallback(async () => {
     if (!selectedProjectId || !selectedProject) return;
 
+    // A fast ⌘J, ⌘Enter sequence must wait for the selected profile to be
+    // persisted, then resolve from the latest cache and draft instead of this
+    // render's model values.
+    const wasProfileActivationPending = await waitForPendingActivations();
+
     const latestDraft = useNewTaskDraftStore.getState().drafts[draftKey];
     const submissionDraft = { ...(draft ?? {}), ...(latestDraft ?? {}) };
 
@@ -1401,14 +1478,37 @@ export function NewTaskOverlay({
       finalPrompt += buildAttachedFilesXml(draftFiles);
 
       const backlogTodoIds = submissionDraft.backlogTodoIds ?? [];
-      if (!currentBackend) {
+      const latestModel = wasProfileActivationPending
+        ? resolveAgentModelSelection({
+            profiles,
+            activeProfileId:
+              queryClient.getQueryData<string | null>(
+                ACTIVE_MODEL_PROFILE_QUERY_KEY,
+              ) ?? effectiveProfileId,
+            projectProfileId: readProjectProfilePick({
+              selections:
+                queryClient.getQueryData<ProjectModelProfileSelectionsSetting>(
+                  PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
+                ),
+              projectId: selectedProjectId,
+              policy: effectivePolicy?.policy,
+            }),
+            policy: effectivePolicy?.policy,
+            enabledBackends: backendsSetting?.enabledBackends,
+            draft: submissionDraft,
+          })
+        : null;
+      const submitBackend = latestModel?.backend ?? currentBackend;
+      if (!submitBackend) {
         throw new Error('Select an agent backend before creating a task.');
       }
 
       const submitSelection = await resolveRateLimitSwapSelection({
-        backend: currentBackend,
-        model: currentModelPreference,
-        thinkingEffort: currentThinkingEffort,
+        backend: submitBackend,
+        model: latestModel?.model ?? currentModelPreference,
+        thinkingEffort:
+          (latestModel?.thinkingEffort as ThinkingEffort | undefined) ??
+          currentThinkingEffort,
         enabled: !isNoteMode,
       });
 
@@ -1528,6 +1628,9 @@ export function NewTaskOverlay({
     currentSourceBranch,
     currentThinkingEffort,
     currentUpdateWorkItemStatus,
+    effectivePolicy,
+    effectiveProfileId,
+    backendsSetting,
     deleteBacklogTodo,
     draft,
     draftKey,
@@ -1540,6 +1643,7 @@ export function NewTaskOverlay({
     markJobSucceeded,
     promptTemplate,
     queryClient,
+    profiles,
     searchStep,
     selectedProject,
     preparedProjectFeatures,
@@ -1548,6 +1652,7 @@ export function NewTaskOverlay({
     snippetVariableContext,
     testCasesByWorkItem,
     triggerAnimation,
+    waitForPendingActivations,
     workItemComments,
   ]);
 
@@ -1740,9 +1845,32 @@ export function NewTaskOverlay({
       const removed =
         useNewTaskDraftStore.getState().drafts[draftKey]?.files?.[index];
 
+      // A pasted chunk's marker lives in the prompt text, so dropping the chip
+      // without it would leave the prompt naming a file that is no longer
+      // attached. Both composers are cleaned here rather than in each one: the
+      // overlay owns chip removal and does not know which is mounted.
+      const strip = removed && isPastedPromptFilename(removed.filename);
+
       updateDraft((prev) => ({
         files: (prev?.files ?? []).filter((_, i) => i !== index),
+        ...(strip
+          ? {
+              prompt: removePastedPromptPlaceholder(
+                prev?.prompt ?? '',
+                removed.filename,
+              ),
+            }
+          : {}),
       }));
+
+      // The work-item composer's text is local state, not the draft.
+      if (strip) {
+        setPromptTemplate((prev) =>
+          prev === null
+            ? prev
+            : removePastedPromptPlaceholder(prev, removed.filename),
+        );
+      }
 
       // Unsent attachment — reclaim its temp file. The main process refuses
       // paths outside the managed tmp dir, so original user files are safe.
@@ -1751,7 +1879,7 @@ export function NewTaskOverlay({
         files: removed ? [removed] : [],
       });
     },
-    [updateDraft, selectedProject?.path, draftKey],
+    [updateDraft, selectedProject?.path, draftKey, setPromptTemplate],
   );
 
   // Persisted attachments can point at files deleted since the draft was
@@ -1820,6 +1948,12 @@ export function NewTaskOverlay({
             updateDraft({ showFileExplorer: !currentShowFileExplorer });
           },
         },
+      !isNoteMode && {
+        label: 'Cycle Model Profile',
+        section: 'Model profiles',
+        shortcut: 'cmd+j',
+        handler: cycleProfile,
+      },
       {
         label: 'Next / Submit',
         shortcut: 'cmd+enter',
@@ -2062,6 +2196,7 @@ export function NewTaskOverlay({
                   <ModelProfileSwitcher
                     projectId={selectedProjectId}
                     side="top"
+                    onProfileSelected={selectProfile}
                     overrideContent={
                       <div className="flex flex-wrap items-center gap-2">
                         <BackendModelPresetPicker
@@ -2069,7 +2204,6 @@ export function NewTaskOverlay({
                     model={currentModelPreference}
                     selectedPresetId={currentBackendPresetId}
                     enabledBackends={backendsSetting?.enabledBackends}
-                    backendShortcut="cmd+j"
                     modelShortcut="cmd+l"
                     side="top"
                     layer={layer}

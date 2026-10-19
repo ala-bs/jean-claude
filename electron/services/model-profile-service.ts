@@ -19,6 +19,7 @@ import {
   DEFAULT_PROJECT_MODEL_POLICY,
   pickEffectiveProfile,
   PROJECT_MODEL_POLICY_MODES,
+  readProjectProfilePick,
   resolveModelForRole,
 } from '@shared/model-profiles';
 import type {
@@ -81,9 +82,26 @@ export type ModelProfileService = {
   /**
    * Makes `profileId` the globally active profile.
    *
+   * When `projectId` is given and that project's policy is `prefer` with a
+   * `pinnedProfileId`, the pick is *also* recorded per project
+   * (`projectModelProfileSelections`). Without that the pin would swallow the
+   * choice on the very next read and the switcher would appear inert.
+   *
    * Rejects when the profile does not exist.
    */
-  activateProfile: (params: { profileId: string }) => Promise<ModelProfile>;
+  activateProfile: (params: {
+    profileId: string;
+    projectId?: string | null;
+  }) => Promise<ModelProfile>;
+  /**
+   * Forgets the explicit per-project profile pick.
+   *
+   * MUST be called whenever a project's policy is written. The pick only
+   * exists to say "not the current default" — once the default itself changes,
+   * keeping it would silently shadow the newly chosen default forever, since
+   * `isProjectPickHonored` tests only `prefer` + *a* pin, not *which* pin.
+   */
+  clearProjectProfilePick: (params: { projectId: string }) => Promise<void>;
   /**
    * Effective policy for a project: the repo file when present (wholesale),
    * else the DB column, else `{ mode: 'inherit' }`.
@@ -156,10 +174,29 @@ export function createModelProfileService(
     return profiles.find((profile) => profile.id === activeId) ?? null;
   };
 
+  /**
+   * The project's explicitly picked profile id, if one is still in force.
+   * Goes through `readProjectProfilePick` so a pick made against an older
+   * project default expires instead of shadowing the new one.
+   */
+  const getProjectProfileId = async ({
+    projectId,
+    policy,
+  }: {
+    projectId?: string | null;
+    policy?: ProjectModelPolicy | null;
+  }): Promise<string | null> => {
+    if (!projectId) return null;
+    const selections = await deps.getSetting('projectModelProfileSelections');
+    return readProjectProfilePick({ selections, projectId, policy });
+  };
+
   const activateProfile = async ({
     profileId,
+    projectId,
   }: {
     profileId: string;
+    projectId?: string | null;
   }): Promise<ModelProfile> => {
     const profiles = await listProfiles();
     const profile = profiles.find((entry) => entry.id === profileId);
@@ -167,7 +204,43 @@ export function createModelProfileService(
       throw new Error(`Unknown model profile: ${profileId}`);
     }
     await deps.setSetting('activeModelProfileId', profileId);
+
+    if (projectId) {
+      const { policy } = await getEffectivePolicy({ projectId });
+      // Only `prefer` + pin needs the per-project record; see the service doc.
+      // Writing it for every mode would leave entries that silently outlive
+      // the policy that justified them.
+      const pinnedProfileId = policy.pinnedProfileId;
+      if (policy.mode === 'prefer' && pinnedProfileId) {
+        const selections =
+          (await deps.getSetting('projectModelProfileSelections')) ?? {};
+        const existing = selections[projectId];
+        // Record the pin the pick is made against so it can expire itself.
+        if (
+          existing?.profileId !== profileId ||
+          existing?.pinnedProfileId !== pinnedProfileId
+        ) {
+          await deps.setSetting('projectModelProfileSelections', {
+            ...selections,
+            [projectId]: { profileId, pinnedProfileId },
+          });
+        }
+      }
+    }
+
     return profile;
+  };
+
+  const clearProjectProfilePick = async ({
+    projectId,
+  }: {
+    projectId: string;
+  }): Promise<void> => {
+    const selections = await deps.getSetting('projectModelProfileSelections');
+    if (!selections || !(projectId in selections)) return;
+    const next = { ...selections };
+    delete next[projectId];
+    await deps.setSetting('projectModelProfileSelections', next);
   };
 
   const getEffectivePolicy = async ({
@@ -213,13 +286,19 @@ export function createModelProfileService(
     if (!projectId) return getActiveProfile();
 
     const { policy } = await getEffectivePolicy({ projectId });
-    const [profiles, activeProfileId] = await Promise.all([
+    const [profiles, activeProfileId, projectProfileId] = await Promise.all([
       listProfiles(),
       deps.getSetting('activeModelProfileId'),
+      getProjectProfileId({ projectId, policy }),
     ]);
 
     // One shared rule with the renderer's `useEffectiveModelProfile`.
-    return pickEffectiveProfile({ profiles, activeProfileId, policy });
+    return pickEffectiveProfile({
+      profiles,
+      activeProfileId,
+      projectProfileId,
+      policy,
+    });
   };
 
   const resolveForRole = async ({
@@ -235,11 +314,13 @@ export function createModelProfileService(
       ? (await getEffectivePolicy({ projectId })).policy
       : DEFAULT_PROJECT_MODEL_POLICY;
 
-    const [profiles, enabledBackends, globalActiveId] = await Promise.all([
-      listProfiles(),
-      getEnabledBackends(),
-      deps.getSetting('activeModelProfileId'),
-    ]);
+    const [profiles, enabledBackends, globalActiveId, projectProfileId] =
+      await Promise.all([
+        listProfiles(),
+        getEnabledBackends(),
+        deps.getSetting('activeModelProfileId'),
+        getProjectProfileId({ projectId, policy }),
+      ]);
 
     // A policy may only restrict: intersect with what the user enabled.
     // An empty list means unrestricted, so it must not become an empty
@@ -261,6 +342,7 @@ export function createModelProfileService(
       pickEffectiveProfile({
         profiles,
         activeProfileId: globalActiveId ?? null,
+        projectProfileId,
         policy,
       })?.id ?? null;
 
@@ -308,6 +390,7 @@ export function createModelProfileService(
       role,
       policy: effectivePolicy,
       activeProfileId,
+      projectProfileId,
       profiles,
       enabledBackends,
       override,
@@ -348,6 +431,7 @@ export function createModelProfileService(
     listProfiles,
     getActiveProfile,
     activateProfile,
+    clearProjectProfilePick,
     getEffectivePolicy,
     getEffectiveProfile,
     resolveForRole,

@@ -922,8 +922,8 @@ contextBridge.exposeInMainWorld('api', {
       projectId?: string | null;
       override?: import('@shared/model-profiles').ModelOverride | null;
     }) => ipcRenderer.invoke('modelProfiles:resolve', params),
-    activate: (profileId: string) =>
-      ipcRenderer.invoke('modelProfiles:activate', profileId),
+    activate: (profileId: string, projectId?: string | null) =>
+      ipcRenderer.invoke('modelProfiles:activate', profileId, projectId ?? null),
   },
   backendConfig: {
     getUserConfig: (
@@ -1033,7 +1033,8 @@ contextBridge.exposeInMainWorld('api', {
   fs: {
     readPackageJson: (dirPath: string) =>
       ipcRenderer.invoke('fs:readPackageJson', dirPath),
-    readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
+    readFile: (filePath: string, maxBytes?: number) =>
+      ipcRenderer.invoke('fs:readFile', filePath, maxBytes),
     getFileSize: (filePath: string) =>
       ipcRenderer.invoke('fs:getFileSize', filePath),
     readImageAsDataUrl: (filePath: string) =>

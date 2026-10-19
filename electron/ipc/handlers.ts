@@ -590,6 +590,27 @@ import { cloneFromUrl } from '../services/git-clone-service';
 import { getModelProfileService } from '../services/model-profile-service';
 import { registerPrWorkspaceIpcHandlers } from './pr-workspace-ipc';
 
+/**
+ * Read at most `maxBytes` from the head of a file. For previews, where the
+ * caller discards everything past a few hundred characters anyway and the file
+ * may be an arbitrarily large attachment.
+ */
+async function readFileHead(
+  filePath: string,
+  maxBytes: number,
+): Promise<string> {
+  const handle = await fs.open(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+    // A multi-byte character straddling the cut decodes to U+FFFD; harmless in
+    // a preview and cheaper than re-reading to find a safe boundary.
+    return buffer.subarray(0, bytesRead).toString('utf-8');
+  } finally {
+    await handle.close();
+  }
+}
+
 function redactAiGenerationSetting(
   setting: AiGenerationSetting,
 ): AiGenerationSetting {
@@ -1487,6 +1508,10 @@ export function registerIpcHandlers() {
       dbg.ipc('projects:setModelPolicy %s %s', projectId, policy?.mode);
       const result = await ProjectRepository.setModelPolicy(projectId, policy);
       invalidateProjectPolicy(projectId);
+      // A per-project profile pick only means "not the current default". Once
+      // the default itself changes, keeping the pick would silently shadow the
+      // newly chosen one.
+      await getModelProfileService().clearProjectProfilePick({ projectId });
       emitProjectUpsert(result);
       return result;
     },
@@ -4833,50 +4858,59 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('fs:readFile', async (_, filePath: string) => {
-    try {
-      const content = await fs.readFile(filePath, 'utf-8');
-      const ext = path.extname(filePath).slice(1);
-      const languageMap: Record<string, string> = {
-        ts: 'typescript',
-        tsx: 'tsx',
-        js: 'javascript',
-        jsx: 'jsx',
-        py: 'python',
-        rb: 'ruby',
-        go: 'go',
-        rs: 'rust',
-        java: 'java',
-        kt: 'kotlin',
-        swift: 'swift',
-        c: 'c',
-        cpp: 'cpp',
-        h: 'c',
-        hpp: 'cpp',
-        cs: 'csharp',
-        php: 'php',
-        html: 'html',
-        css: 'css',
-        scss: 'scss',
-        less: 'less',
-        json: 'json',
-        yaml: 'yaml',
-        yml: 'yaml',
-        xml: 'xml',
-        md: 'markdown',
-        sql: 'sql',
-        sh: 'bash',
-        bash: 'bash',
-        zsh: 'bash',
-        toml: 'toml',
-        ini: 'ini',
-        dockerfile: 'dockerfile',
-      };
-      return { content, language: languageMap[ext] || 'text' };
-    } catch {
-      return null;
-    }
-  });
+  ipcMain.handle(
+    'fs:readFile',
+    async (_, filePath: string, maxBytes?: number) => {
+      try {
+        // A bounded read exists for callers that only want a head (attachment
+        // previews): slurping a multi-hundred-MB attachment as one UTF-8 string
+        // stalls the main process and clones the whole thing to the renderer.
+        const content =
+          typeof maxBytes === 'number' && maxBytes > 0
+            ? await readFileHead(filePath, maxBytes)
+            : await fs.readFile(filePath, 'utf-8');
+        const ext = path.extname(filePath).slice(1);
+        const languageMap: Record<string, string> = {
+          ts: 'typescript',
+          tsx: 'tsx',
+          js: 'javascript',
+          jsx: 'jsx',
+          py: 'python',
+          rb: 'ruby',
+          go: 'go',
+          rs: 'rust',
+          java: 'java',
+          kt: 'kotlin',
+          swift: 'swift',
+          c: 'c',
+          cpp: 'cpp',
+          h: 'c',
+          hpp: 'cpp',
+          cs: 'csharp',
+          php: 'php',
+          html: 'html',
+          css: 'css',
+          scss: 'scss',
+          less: 'less',
+          json: 'json',
+          yaml: 'yaml',
+          yml: 'yaml',
+          xml: 'xml',
+          md: 'markdown',
+          sql: 'sql',
+          sh: 'bash',
+          bash: 'bash',
+          zsh: 'bash',
+          toml: 'toml',
+          ini: 'ini',
+          dockerfile: 'dockerfile',
+        };
+        return { content, language: languageMap[ext] || 'text' };
+      } catch {
+        return null;
+      }
+    },
+  );
 
   ipcMain.handle('fs:getFileSize', async (_, filePath: string) => {
     try {
@@ -5159,16 +5193,21 @@ export function registerIpcHandlers() {
         override: params.override ?? null,
       }),
   );
-  ipcMain.handle('modelProfiles:activate', async (_, profileId: string) => {
-    dbg.ipc('modelProfiles:activate %s', profileId);
-    // Throws on an unknown profile; the broadcast only happens once the switch
-    // is persisted, so renderers never show a profile that is not active.
-    const profile = await getModelProfileService().activateProfile({
-      profileId,
-    });
-    broadcastActiveModelProfile(profile);
-    return profile;
-  });
+  ipcMain.handle(
+    'modelProfiles:activate',
+    async (_, profileId: string, projectId?: string | null) => {
+      dbg.ipc('modelProfiles:activate %s (project %s)', profileId, projectId);
+      // Throws on an unknown profile; the broadcast only happens once the
+      // switch is persisted, so renderers never show a profile that is not
+      // active.
+      const profile = await getModelProfileService().activateProfile({
+        profileId,
+        projectId: projectId ?? null,
+      });
+      broadcastActiveModelProfile(profile);
+      return profile;
+    },
+  );
 
   // Settings
   ipcMain.handle(

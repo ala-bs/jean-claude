@@ -2,7 +2,6 @@ import type { PromptFilePart } from '@shared/agent-backend-types';
 
 export const MAX_FILE_ATTACHMENT_SIZE = 50 * 1024 * 1024; // 50 MB
 export const MAX_INLINE_PASTED_PROMPT_LENGTH = 10_000;
-export const PASTED_PROMPT_ATTACHMENT_FILENAME = 'pasted-content.md';
 
 function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -162,12 +161,20 @@ export function shouldAttachPastedPromptContent(value: string): boolean {
   return value.length > MAX_INLINE_PASTED_PROMPT_LENGTH;
 }
 
-export async function processPastedPromptAttachment(
-  content: string,
-  projectPath: string,
-  onAttach: (file: PromptFilePart) => void,
-  onError?: (message: string) => void,
-): Promise<void> {
+export async function processPastedPromptAttachment({
+  content,
+  projectPath,
+  filename,
+  onAttach,
+  onError,
+}: {
+  content: string;
+  projectPath: string;
+  /** Numbered name so several pastes in one prompt stay tellable apart. */
+  filename: string;
+  onAttach: (file: PromptFilePart) => void;
+  onError?: (message: string) => void;
+}): Promise<void> {
   const sizeBytes = new Blob([content]).size;
   if (sizeBytes > MAX_FILE_ATTACHMENT_SIZE) {
     onError?.(
@@ -179,14 +186,10 @@ export async function processPastedPromptAttachment(
   try {
     const filePath = await window.api.fs.writeAttachmentFile(
       projectPath,
-      PASTED_PROMPT_ATTACHMENT_FILENAME,
+      filename,
       content,
     );
-    onAttach({
-      type: 'file',
-      filePath,
-      filename: PASTED_PROMPT_ATTACHMENT_FILENAME,
-    });
+    onAttach({ type: 'file', filePath, filename });
   } catch (err) {
     onError?.('Failed to attach pasted content');
     console.error('Failed to attach pasted prompt content:', err);

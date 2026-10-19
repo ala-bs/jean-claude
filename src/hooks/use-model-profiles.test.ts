@@ -11,6 +11,8 @@ import { api } from '@/lib/api';
 import { getQuickPresets } from '@/features/agent/utils-backend-model-selection';
 
 import {
+  PROJECT_MODEL_POLICY_QUERY_KEY,
+  PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
   RESOLVED_MODEL_QUERY_KEY,
   useActivateModelProfile,
   useActiveModelProfile,
@@ -144,6 +146,68 @@ describe('useUpdateModelProfiles', () => {
 });
 
 describe('useActivateModelProfile', () => {
+  it('optimistically updates a pinned project pick while activation is pending', async () => {
+    let finish: (profile: ModelProfile) => void = () => {};
+    vi.spyOn(api.modelProfiles, 'activate').mockImplementation(
+      () => new Promise<ModelProfile>((resolve) => { finish = resolve; }),
+    );
+    const queryClient = makeQueryClient();
+    queryClient.setQueryData(['settings', 'activeModelProfileId'], 'anthropic');
+    queryClient.setQueryData(
+      [...PROJECT_MODEL_POLICY_QUERY_KEY, 'project-1'],
+      { policy: { mode: 'prefer', pinnedProfileId: 'anthropic' } },
+    );
+    queryClient.setQueryData(PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY, {});
+
+    let result: ReturnType<typeof useActivateModelProfile> | undefined;
+    await render(queryClient, function Harness() {
+      result = useActivateModelProfile('project-1');
+      return null;
+    });
+
+    let mutation: Promise<unknown> | undefined;
+    act(() => { mutation = result?.mutateAsync('codex'); });
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(queryClient.getQueryData(PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY))
+          .toEqual({
+            'project-1': { profileId: 'codex', pinnedProfileId: 'anthropic' },
+          }),
+      );
+    });
+    expect(api.modelProfiles.activate).toHaveBeenCalledWith('codex', 'project-1');
+
+    await act(async () => {
+      finish(PROFILES[1]);
+      await mutation;
+    });
+  });
+
+  it('restores a pinned project pick when activation fails', async () => {
+    vi.spyOn(api.modelProfiles, 'activate').mockRejectedValue(new Error('write failed'));
+    const queryClient = makeQueryClient();
+    queryClient.setQueryData(['settings', 'activeModelProfileId'], 'anthropic');
+    queryClient.setQueryData(
+      [...PROJECT_MODEL_POLICY_QUERY_KEY, 'project-1'],
+      { policy: { mode: 'prefer', pinnedProfileId: 'anthropic' } },
+    );
+    queryClient.setQueryData(PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY, {});
+
+    let result: ReturnType<typeof useActivateModelProfile> | undefined;
+    await render(queryClient, function Harness() {
+      result = useActivateModelProfile('project-1');
+      return null;
+    });
+
+    await act(async () => {
+      await expect(result?.mutateAsync('codex')).rejects.toThrow('write failed');
+    });
+    expect(queryClient.getQueryData(PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY))
+      .toEqual({});
+    expect(queryClient.getQueryData(['settings', 'activeModelProfileId']))
+      .toBe('anthropic');
+  });
+
   it('optimistically sets the active profile id before the IPC call resolves', async () => {
     let finish: (profile: ModelProfile) => void = () => {};
     vi.spyOn(api.modelProfiles, 'activate').mockImplementation(
@@ -177,7 +241,7 @@ describe('useActivateModelProfile', () => {
       finish(PROFILES[1]);
       await mutation;
     });
-    expect(api.modelProfiles.activate).toHaveBeenCalledWith('codex');
+    expect(api.modelProfiles.activate).toHaveBeenCalledWith('codex', null);
   });
 
   it('rolls back to the previous active profile id when activation fails', async () => {

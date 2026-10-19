@@ -463,6 +463,53 @@ function isProfilePermitted({
 }
 
 /**
+ * The project's explicit profile pick, or null when there is none *in force*.
+ *
+ * THE one reader of `projectModelProfileSelections` — never index that map
+ * directly, because a pick is only valid against the default it was made
+ * against. The stored `pinnedProfileId` is compared with the policy's current
+ * pin, so a pick expires by itself when the project default changes from any
+ * source, including a committed `.jean-claude/model-policy.json` that moves
+ * under a `git pull` (which has no write hook that could clear it).
+ */
+export function readProjectProfilePick({
+  selections,
+  projectId,
+  policy,
+}: {
+  selections?: Record<
+    string,
+    { profileId: string; pinnedProfileId: string }
+  > | null;
+  projectId?: string | null;
+  policy?: ProjectModelPolicy | null;
+}): string | null {
+  if (!projectId || !selections) return null;
+  const pick = selections[projectId];
+  if (!pick) return null;
+  // The pick expires the moment the default it was made against changes, from
+  // whichever source — including a committed policy file changing under a `git
+  // pull`, which has no write hook to clear it.
+  if (pick.pinnedProfileId !== policy?.pinnedProfileId) return null;
+  return pick.profileId;
+}
+
+/**
+ * Whether an explicit per-project profile pick may override the policy.
+ *
+ * Only under `prefer` *with* a pin. That is the one case where the pin would
+ * otherwise silently swallow the user's choice; `inherit` has nothing to
+ * override, `enforce` + pin is a hard rule, and an `enforce` allow-list already
+ * routes through the global active profile.
+ *
+ * This tests only that *a* pin exists; expiring a pick made against an older
+ * pin is `readProjectProfilePick`'s job.
+ */
+function isProjectPickHonored(policy?: ProjectModelPolicy | null): boolean {
+  return Boolean(policy && policy.mode === 'prefer' && policy.pinnedProfileId);
+}
+
+/**
  * The single rule for "which profile is in effect here", shared by
  * `ModelProfileService.getEffectiveProfile` (main) and
  * `useEffectiveModelProfile` (renderer). Both MUST call this — the two used to
@@ -470,10 +517,14 @@ function isProfilePermitted({
  *
  * In order:
  * 1. no policy, or mode `inherit` → the active profile.
- * 2. `pinnedProfileId` (prefer/enforce) that exists → that profile.
- * 3. `enforce` with a non-empty `allowedProfileIds` that excludes the active
+ * 2. mode `prefer` with a pin AND an explicit project-scoped pick → the pick.
+ *    Under `prefer` the pin is a *default*, not a restriction, so a deliberate
+ *    choice for this project has to beat it (otherwise the switcher appears to
+ *    do nothing and the project is stuck on its default profile forever).
+ * 3. `pinnedProfileId` (prefer/enforce) that exists → that profile.
+ * 4. `enforce` with a non-empty `allowedProfileIds` that excludes the active
  *    profile → the first allowed profile that exists, in `profiles` order.
- * 4. otherwise → the active profile.
+ * 5. otherwise → the active profile.
  *
  * Note this only decides what is *selected*. `resolveModelForRole` still blocks
  * at resolution time when a binding genuinely violates the policy.
@@ -481,10 +532,17 @@ function isProfilePermitted({
 export function pickEffectiveProfile({
   profiles,
   activeProfileId,
+  projectProfileId,
   policy,
 }: {
   profiles: ModelProfile[];
   activeProfileId?: string | null;
+  /**
+   * Profile the user explicitly picked *for this project*
+   * (`projectModelProfileSelections`). Only consulted to override a `prefer`
+   * pin — see `isProjectPickHonored`.
+   */
+  projectProfileId?: string | null;
   policy?: ProjectModelPolicy | null;
 }): ModelProfile | null {
   const active = activeProfileId
@@ -494,6 +552,12 @@ export function pickEffectiveProfile({
   if (!policy || policy.mode === 'inherit') return active;
 
   if (policy.pinnedProfileId) {
+    if (isProjectPickHonored(policy)) {
+      const picked = projectProfileId
+        ? profiles.find((entry) => entry.id === projectProfileId)
+        : undefined;
+      if (picked) return picked;
+    }
     const pinned = profiles.find(
       (entry) => entry.id === policy.pinnedProfileId,
     );
@@ -601,6 +665,11 @@ export type ResolveModelForRoleParams = {
   policy?: ProjectModelPolicy | null;
   /** Currently active profile (global) or the project-pinned one. */
   activeProfileId?: string | null;
+  /**
+   * Profile explicitly picked for this project, which overrides a `prefer`
+   * pin. See `pickEffectiveProfile` / `isProjectPickHonored`.
+   */
+  projectProfileId?: string | null;
   profiles: ModelProfile[];
   /** Backends the user has enabled; policy can only restrict, never grant. */
   enabledBackends?: AgentBackendType[];
@@ -653,6 +722,7 @@ export function resolveModelForRole(
     role,
     policy,
     activeProfileId,
+    projectProfileId,
     profiles,
     enabledBackends,
     override,
@@ -731,8 +801,18 @@ export function resolveModelForRole(
   // starting point, not a restriction (design §2/§9), so deleting the pinned
   // profile must fall back to the active one rather than making every run in
   // the project fail — which is what `pickEffectiveProfile` already does.
+  // An explicit per-project pick beats a `prefer` pin, exactly as
+  // `pickEffectiveProfile` decides for the pickers. These two used to disagree,
+  // so the switcher's selection marker and the model actually run diverged.
+  const projectPick =
+    isProjectPickHonored(policyActive ? policy : null) && projectProfileId
+      ? profiles.find((entry) => entry.id === projectProfileId)
+      : undefined;
   const effectiveProfileId =
-    (pinnedProfile ? pinnedProfileId : undefined) ?? activeProfileId ?? null;
+    projectPick?.id ??
+    (pinnedProfile ? pinnedProfileId : undefined) ??
+    activeProfileId ??
+    null;
   const profile = effectiveProfileId
     ? profiles.find((entry) => entry.id === effectiveProfileId)
     : undefined;
@@ -758,9 +838,8 @@ export function resolveModelForRole(
     }
   }
 
-  const profileSource: ResolvedModelSource = pinnedProfileId
-    ? 'policy'
-    : 'profile';
+  const profileSource: ResolvedModelSource =
+    pinnedProfileId && !projectPick ? 'policy' : 'profile';
 
   // --- Role binding, resolving `inherit` through the `agent` role. ---
   // An image binding is unusable for a chat role: treat it exactly like any
@@ -885,6 +964,8 @@ export type ResolveImageModelForRoleParams = {
   profiles: ModelProfile[];
   /** Currently active profile (global); a policy pin beats it. */
   activeProfileId?: string | null;
+  /** Explicit per-project pick, which beats a `prefer` pin. */
+  projectProfileId?: string | null;
   policy?: ProjectModelPolicy | null;
   /** The AI Generation image model, used when the role is unset. */
   fallbackModel: string;
@@ -914,7 +995,14 @@ export type ResolvedImageModel = {
 export function resolveImageModelForRole(
   params: ResolveImageModelForRoleParams,
 ): ResolvedImageModel {
-  const { role, profiles, activeProfileId, policy, fallbackModel } = params;
+  const {
+    role,
+    profiles,
+    activeProfileId,
+    projectProfileId,
+    policy,
+    fallbackModel,
+  } = params;
 
   const mode: ProjectModelPolicyMode = policy?.mode ?? 'inherit';
   const policyActive = mode !== 'inherit';
@@ -957,7 +1045,12 @@ export function resolveImageModelForRole(
   // the disallowed active profile and refused logo generation, naming a
   // profile no longer effective anywhere else.
   const profile =
-    pickEffectiveProfile({ profiles, activeProfileId, policy }) ?? undefined;
+    pickEffectiveProfile({
+      profiles,
+      activeProfileId,
+      projectProfileId,
+      policy,
+    }) ?? undefined;
 
   if (mode === 'enforce' && pinnedProfileId && !pinnedProfile) {
     return blockedResult(

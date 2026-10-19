@@ -17,6 +17,7 @@ import type {
 import type { InteractionMode } from '@shared/types';
 import type { NormalizedQuestionRequest } from '@shared/agent-backend-types';
 import type { QuestionResponseMetadata } from '@shared/agent-types';
+import type { ResolvedPermissionRule } from '@shared/permission-types';
 
 import {
   codexMcpElicitationContentFromAnswers,
@@ -25,8 +26,12 @@ import {
   normalizeCodexNotification,
   normalizeCodexQuestionRequest,
 } from './normalize-codex-message-v2';
+import {
+  evaluatePermission,
+  flattenScope,
+  normalizeToolRequest,
+} from '../../permission-settings-service';
 import { dbg } from '../../../lib/debug';
-import { flattenScope } from '../../permission-settings-service';
 import { getAllowedDirectories } from '../../directory-access';
 import { getOrCreateCodexAppServer } from './codex-app-server';
 import { interleavePromptParts } from '../../prompt-utils';
@@ -102,6 +107,24 @@ type CodexSessionState = {
   processing: Promise<void>;
   closed: boolean;
   pendingItemIds: Set<string>;
+  /** server name -> tool name for MCP tool calls Codex has started but not
+   *  finished. The approval request Codex sends does NOT carry the tool name
+   *  (verified against codex-cli 0.155.0: `_meta` has `tool_description` and
+   *  `tool_params` but no `tool_name`), so it is taken from the preceding
+   *  `item/started` notification instead. */
+  inFlightMcpTools: Map<string, string>;
+  /** Permission keys (`mcp__<server>__<tool>`) the user allowed beyond this one
+   *  call. Codex offers no verified way to persist an MCP tool-call approval on
+   *  its side, so "allow for session/project" is honoured here instead of being
+   *  silently dropped. Only ever holds fully-qualified server+tool keys, so a
+   *  grant can never widen to a whole MCP server. */
+  sessionAllowedMcpTools: Set<string>;
+  /** Live snapshot of resolved permission rules, evaluated before prompting so
+   *  a persisted "allow"/"deny" for an MCP tool is honoured instead of asking
+   *  again. Replaced wholesale by `updatePermissionRules`. */
+  permissionRules: ResolvedPermissionRule[];
+  /** Step-scoped rules, re-appended on every refresh so they survive it. */
+  persistedPermissionRules: ResolvedPermissionRule[];
   sawTurnActivity: boolean;
   idleCompletionTimer: ReturnType<typeof setTimeout> | null;
   rawDeltaRows: Map<
@@ -117,8 +140,16 @@ type CodexSessionState = {
     {
       client: Awaited<ReturnType<typeof getOrCreateCodexAppServer>>['client'];
       rpcId: CodexJsonRpcId;
-      type: 'command' | 'file-change' | 'permissions';
+      type: 'command' | 'file-change' | 'permissions' | 'mcp-tool-call';
       permissions?: Record<string, unknown>;
+      // Only for 'mcp-tool-call': mirrors the elicitation-question path so the
+      // Codex-side elicitation timeout is paused while a human decides.
+      elicitationPaused?: boolean;
+      threadId?: string;
+      /** Only for 'mcp-tool-call': the key to remember if the user picks an
+       *  allow mode wider than this single call. `null` when the tool name
+       *  could not be resolved, in which case nothing is remembered. */
+      allowKey?: string | null;
     }
   >;
   pendingQuestions: Map<
@@ -170,12 +201,23 @@ export class CodexBackend implements AgentBackend {
       processing: Promise.resolve(),
       closed: false,
       pendingItemIds: new Set(),
+      inFlightMcpTools: new Map(),
+      sessionAllowedMcpTools: new Set(),
+      permissionRules: [],
+      persistedPermissionRules: [],
       sawTurnActivity: false,
       idleCompletionTimer: null,
       rawDeltaRows: new Map(),
       pendingApprovals: new Map(),
       pendingQuestions: new Map(),
     };
+    session.persistedPermissionRules = flattenScope(
+      config.persistedSessionRules ?? {},
+    );
+    session.permissionRules = [
+      ...(config.permissionRules ?? []),
+      ...session.persistedPermissionRules,
+    ];
     session.normalizationCtx.model =
       config.model === 'default' ? undefined : config.model;
     this.sessions.set(sessionKey, session);
@@ -268,6 +310,43 @@ export class CodexBackend implements AgentBackend {
       throw new Error(`No pending Codex approval: ${requestId}`);
     }
 
+    if (pending.type === 'mcp-tool-call') {
+      // Codex delivers MCP tool-call approvals as an elicitation, so the reply
+      // has to be an elicitation result, not an approval `decision`.
+      // `allowMode` is honoured locally (below) rather than on the wire: Codex
+      // advertises `_meta.persist: ['session','always']` on the request, but
+      // the reply shape for taking it is unverified, and sending a guess would
+      // silently do nothing. A local allowlist at least makes the button mean
+      // what it says for the lifetime of this session. Cross-session
+      // persistence is still not wired up for Codex -- it has no rule
+      // evaluation on this path -- so "allow for project" lasts this session.
+      if (
+        response.behavior === 'allow' &&
+        response.allowMode !== undefined &&
+        pending.allowKey
+      ) {
+        // Keyed on the request's own server+tool identity rather than the
+        // renderer-supplied `toolsToAllow`, whose shape varies between the
+        // dedicated session button and the "Allow All" menu entry.
+        session.sessionAllowedMcpTools.add(pending.allowKey);
+        dbg.agent(
+          'Remembering Codex MCP approval for this session tool=%s mode=%s',
+          pending.allowKey,
+          response.allowMode,
+        );
+      }
+      try {
+        await pending.client.respond(pending.rpcId, {
+          action: response.behavior === 'deny' ? 'decline' : 'accept',
+          content: {},
+        });
+      } finally {
+        await this.resumeCodexElicitation(pending, requestId);
+        session.pendingApprovals.delete(requestId);
+      }
+      return;
+    }
+
     if (pending.type === 'permissions') {
       await pending.client.respond(pending.rpcId, {
         permissions: response.behavior === 'deny' ? {} : pending.permissions ?? {},
@@ -353,6 +432,35 @@ export class CodexBackend implements AgentBackend {
 
   async setMode(_sessionId: string, _mode: InteractionMode): Promise<void> {}
 
+  /**
+   * Replace the permission-rule snapshot used for runtime evaluation, so a rule
+   * the user adds mid-run ("always allow in this project") takes effect on the
+   * live session instead of only on the next one. Step-scoped rules are
+   * re-appended so they survive the refresh.
+   */
+  updatePermissionRules({
+    sessionId,
+    rules,
+  }: {
+    sessionId: string;
+    rules: ResolvedPermissionRule[];
+  }): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.permissionRules = [...rules, ...session.persistedPermissionRules];
+  }
+
+  /**
+   * Session-scoped MCP grants, in canonical permission-key form. The agent
+   * service reads these at the end of a turn and syncs them into the step's
+   * persisted session rules, which is what makes "allow for session" outlive
+   * the session.
+   */
+  getSessionAllowedTools(sessionId: string): string[] {
+    const session = this.sessions.get(sessionId);
+    return session ? [...session.sessionAllowedMcpTools] : [];
+  }
+
   async dispose(): Promise<void> {
     await Promise.all(
       Array.from(this.sessions.keys()).map((sessionId) => this.stop(sessionId)),
@@ -403,6 +511,124 @@ export class CodexBackend implements AgentBackend {
     }
 
     if (request.method === 'mcpServer/elicitation/request') {
+      // Codex reuses the elicitation channel to ask for *approval* of an MCP
+      // tool call (`_meta.codex_approval_kind`). Those carry an empty
+      // `requestedSchema`, so treating them as questions silently declined
+      // every MCP tool call. Route them through the permission pipeline
+      // instead -- but only for the one kind verified to arrive here. Any
+      // other kind falls through to `normalizeCodexMcpElicitation`, which
+      // declines shapes it cannot render rather than answering them with a
+      // content-less accept.
+      const approvalKind = stringOrNull(record(params._meta)?.codex_approval_kind);
+      if (approvalKind === 'mcp_tool_call') {
+        const serverName = stringOrNull(params.serverName) ?? 'mcp';
+        // `_meta.tool_name` is not sent by codex-cli 0.155.0; fall back to the
+        // name captured from this call's `item/started` notification, which
+        // always precedes the approval request.
+        const toolName =
+          stringOrNull(record(params._meta)?.tool_name) ??
+          session.inFlightMcpTools.get(serverName) ??
+          null;
+        // Only fully-qualified keys are remembered, so an unnamed tool call can
+        // never be covered by (or added to) a session grant.
+        const allowKey = toolName ? `mcp__${serverName}__${toolName}` : null;
+        if (isAutoApproveMode(session)) {
+          dbg.agent(
+            'Auto-approving Codex mcp_tool_call request=%s server=%s tool=%s',
+            requestId,
+            serverName,
+            toolName ?? 'unknown',
+          );
+          void client.respond(request.id, { action: 'accept', content: {} });
+          return;
+        }
+        const permissionToolName = allowKey ?? `mcp__${serverName}`;
+        const toolInput = record(record(params._meta)?.tool_params) ?? {};
+        // Persisted rules first: a `deny` must win over an in-memory grant.
+        const { tool, matchValue } = normalizeToolRequest(
+          permissionToolName,
+          toolInput,
+        );
+        const ruleAction = evaluatePermission(
+          session.permissionRules,
+          tool,
+          matchValue,
+        );
+        if (ruleAction === 'deny') {
+          dbg.agent(
+            'Declining Codex mcp_tool_call by permission rule request=%s tool=%s',
+            requestId,
+            permissionToolName,
+          );
+          void client.respond(request.id, { action: 'decline' });
+          return;
+        }
+        if (
+          ruleAction === 'allow' ||
+          (allowKey !== null && session.sessionAllowedMcpTools.has(allowKey))
+        ) {
+          dbg.agent(
+            'Accepting Codex mcp_tool_call without prompting request=%s tool=%s source=%s',
+            requestId,
+            permissionToolName,
+            ruleAction === 'allow' ? 'rule' : 'session-allowlist',
+          );
+          void client.respond(request.id, { action: 'accept', content: {} });
+          return;
+        }
+        dbg.agent(
+          'Codex mcp_tool_call approval request received request=%s server=%s tool=%s',
+          requestId,
+          serverName,
+          toolName ?? 'unknown',
+        );
+        // A human is about to be asked, so the turn is not idle and Codex's own
+        // elicitation timeout must not run out while they decide — same
+        // treatment the elicitation-question path below gives.
+        this.clearIdleCompletionTimer(session);
+        let elicitationPaused = false;
+        if (threadId !== null) {
+          try {
+            await client.request('thread/increment_elicitation', { threadId });
+            elicitationPaused = true;
+          } catch (error) {
+            dbg.agent(
+              'Failed to pause Codex elicitation timeout thread=%s error=%O',
+              threadId,
+              error,
+            );
+          }
+        }
+        session.pendingApprovals.set(requestId, {
+          client,
+          rpcId: request.id,
+          type: 'mcp-tool-call',
+          elicitationPaused,
+          allowKey,
+          ...(threadId !== null ? { threadId } : {}),
+        });
+        session.eventChannel.push({
+          type: 'permission-request',
+          request: {
+            requestId,
+            toolName: permissionToolName,
+            input: toolInput,
+            description: stringOrNull(params.message) ?? undefined,
+            // Offered only when the tool is identified, so the button never
+            // grants more than the one tool it names.
+            ...(allowKey !== null && toolName !== null
+              ? {
+                  sessionAllowButton: {
+                    label: `Allow ${toolName} for Session`,
+                    toolsToAllow: [allowKey],
+                  },
+                }
+              : {}),
+          },
+        });
+        return;
+      }
+
       const elicitation = normalizeCodexMcpElicitation({
         requestId,
         params,
@@ -483,6 +709,24 @@ export class CodexBackend implements AgentBackend {
         -32602,
         `Invalid parameters for ${request.method}`,
       );
+      return;
+    }
+
+    if (isAutoApproveMode(session)) {
+      // Previously `approval_policy=never` made Codex deny these outright
+      // without ever asking us. Now that we always ask for an approver, `auto`
+      // has to answer for itself to stay prompt-free.
+      dbg.agent(
+        'Auto-approving Codex %s request=%s',
+        request.method,
+        requestId,
+      );
+      void (isPermissionsRequest
+        ? client.respond(request.id, {
+            permissions: requestedPermissions ?? {},
+            scope: 'session',
+          })
+        : client.respond(request.id, { decision: 'acceptForSession' }));
       return;
     }
 
@@ -588,6 +832,15 @@ export class CodexBackend implements AgentBackend {
     notification: CodexJsonRpcNotification,
   ): void {
     if (session.closed) return;
+
+    // Capture MCP tool names synchronously, BEFORE the async pipeline below.
+    // Codex emits `item/started` for the tool call and then immediately
+    // requests approval for it, but notifications are processed on the
+    // `session.processing` chain (which awaits a raw-message write) while
+    // `handleServerRequest` runs on arrival. Tracking this inside
+    // `handleNotification` would therefore lose the race and the approval
+    // prompt would fall back to naming only the server.
+    trackInFlightMcpTool(session, notification);
 
     session.processing = session.processing
       .catch(() => undefined)
@@ -713,14 +966,27 @@ export class CodexBackend implements AgentBackend {
     session.unsubscribeRequest?.();
     session.unsubscribeRequest = null;
     await Promise.allSettled(
-      [...session.pendingApprovals.values()].map((pending) =>
-        pending.type === 'permissions'
-          ? pending.client.respond(pending.rpcId, {
-              permissions: {},
-              scope: 'turn',
-            })
-          : pending.client.respond(pending.rpcId, { decision: 'cancel' }),
-      ),
+      [...session.pendingApprovals.values()].map(async (pending) => {
+        if (pending.type === 'mcp-tool-call') {
+          // Delivered on the elicitation channel, so it must be cancelled with
+          // an elicitation result. `{decision:'cancel'}` carries no `action`
+          // and leaves Codex's MCP tool call unresolved.
+          try {
+            await pending.client.respond(pending.rpcId, { action: 'cancel' });
+          } finally {
+            await this.resumeCodexElicitation(pending, String(pending.rpcId));
+          }
+          return;
+        }
+        if (pending.type === 'permissions') {
+          await pending.client.respond(pending.rpcId, {
+            permissions: {},
+            scope: 'turn',
+          });
+          return;
+        }
+        await pending.client.respond(pending.rpcId, { decision: 'cancel' });
+      }),
     );
     session.pendingApprovals.clear();
     await Promise.allSettled(
@@ -818,9 +1084,20 @@ function partsToCodexInput(parts: PromptPart[]): unknown[] {
   });
 }
 
-function toCodexApprovalPolicy(mode: InteractionMode): string {
-  if (mode === 'auto') return 'never';
+function toCodexApprovalPolicy(_mode: InteractionMode): string {
+  // Always `on-request`, including for `auto`. Codex treats `never` as "deny
+  // anything that needs approval", and it classifies *every* MCP tool call as
+  // needing approval — so `never` made the whole MCP surface (jean-claude's own
+  // `ask_question`/`run_review`, plus any project MCP server) fail with
+  // "MCP tool call requires approval, but approval policy is never".
+  // `auto` keeps its no-prompt semantics by auto-approving in
+  // `handleServerRequest` instead of by starving Codex of an approver.
   return 'on-request';
+}
+
+/** `auto` means bypass: approve without ever surfacing a prompt. */
+function isAutoApproveMode(session: CodexSessionState): boolean {
+  return session.normalizationCtx.interactionMode === 'auto';
 }
 
 function toCodexSandbox(mode: InteractionMode): string {
@@ -1102,6 +1379,28 @@ function requiresSessionScope(method: string): boolean {
     method === 'turn/completed' ||
     method === 'thread/status/changed'
   );
+}
+
+function trackInFlightMcpTool(
+  session: CodexSessionState,
+  notification: CodexJsonRpcNotification,
+): void {
+  if (
+    notification.method !== 'item/started' &&
+    notification.method !== 'item/completed'
+  ) {
+    return;
+  }
+  const item = record(record(notification.params)?.item);
+  if (stringOrNull(item?.type) !== 'mcpToolCall') return;
+  const server = stringOrNull(item?.server);
+  const tool = stringOrNull(item?.tool);
+  if (server === null || tool === null) return;
+  if (notification.method === 'item/started') {
+    session.inFlightMcpTools.set(server, tool);
+  } else {
+    session.inFlightMcpTools.delete(server);
+  }
 }
 
 function updateItemTracking(

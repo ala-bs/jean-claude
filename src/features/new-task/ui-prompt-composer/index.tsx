@@ -5,6 +5,7 @@ import {
   memo,
   useCallback,
   useDeferredValue,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -53,7 +54,15 @@ import { Checkbox } from '@/common/ui/checkbox';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
 import { FileEditorDialog } from '@/features/common/ui-file-editor-dialog';
 import { formatBytes } from '@/lib/format-bytes';
-import { HandlebarsEditor } from '@/common/ui/handlebars-editor';
+import {
+  HandlebarsEditor,
+  type HandlebarsEditorApi,
+} from '@/common/ui/handlebars-editor';
+import {
+  buildPastedPromptPlaceholder,
+  removePastedPromptPlaceholder,
+  reservePastedPromptFilename,
+} from '@/lib/pasted-prompt-placeholders';
 import { Kbd } from '@/common/ui/kbd';
 import { useToastStore } from '@/stores/toasts';
 
@@ -728,6 +737,16 @@ export function PromptComposer({
   ]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const editorApiRef = useRef<HandlebarsEditorApi | null>(null);
+  // Reserves `paste-N.md` names synchronously; `files` only grows once the
+  // async write resolves, so two quick pastes would otherwise share a name.
+  const pasteSeqRef = useRef({ current: 0 });
+  // The template as last seen, so an async rollback edits current text rather
+  // than the value captured when the paste started.
+  const latestTemplateRef = useRef(template);
+  useEffect(() => {
+    latestTemplateRef.current = template;
+  }, [template]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showFileEditor, setShowFileEditor] = useState(false);
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -777,17 +796,51 @@ export function PromptComposer({
         projectRoot
       ) {
         e.preventDefault();
-
-        void processPastedPromptAttachment(
-          pastedText,
-          projectRoot,
-          onFileAttach,
-          showImageError,
+        // Dropped in now, at the caret the paste targeted — the file write is
+        // async and the cursor will have moved by the time it resolves.
+        const filename = reservePastedPromptFilename({
+          counter: pasteSeqRef.current,
+          files,
+          text: template,
+        });
+        const inserted = editorApiRef.current?.insertAtCursor(
+          buildPastedPromptPlaceholder(filename),
         );
+        // `onError` can fire synchronously (the size check runs before any
+        // await), before the `template` prop has caught up — so record the
+        // post-insert text now or the rollback below edits stale text.
+        if (inserted) latestTemplateRef.current = inserted;
+
+        void processPastedPromptAttachment({
+          content: pastedText,
+          projectPath: projectRoot,
+          filename,
+          onAttach: onFileAttach,
+          onError: (message) => {
+            // Nothing was attached, so leave no marker pointing at a file that
+            // does not exist.
+            onTemplateChange(
+              removePastedPromptPlaceholder(
+                latestTemplateRef.current,
+                filename,
+              ),
+            );
+            showImageError(message);
+          },
+        });
         return;
       }
     },
-    [onImageAttach, onFileAttach, images, projectRoot, showImageError],
+    [
+      onImageAttach,
+      onFileAttach,
+      images,
+      projectRoot,
+      showImageError,
+      files,
+      template,
+      onTemplateChange,
+    ],
   );
 
   const handleDragOver = useCallback(
@@ -1224,6 +1277,7 @@ export function PromptComposer({
               maxHeight="500px"
               featureMap={featureMap}
               onPaste={handlePaste}
+              apiRef={editorApiRef}
               moveCursorBelowPaste
             />
           </div>

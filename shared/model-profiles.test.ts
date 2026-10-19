@@ -10,6 +10,7 @@ import {
   type ModelRole,
   normalizeRoleBinding,
   pickEffectiveProfile,
+  readProjectProfilePick,
   resolveImageModelForRole,
   resolveModelForRole,
   roleForSkillSlot,
@@ -233,6 +234,28 @@ describe('resolveModelForRole', () => {
       expect(resolved.blocked?.message).toContain('codex');
       expect(resolved.backend).toBe('claude-code');
       expect(resolved.source).toBe('policy');
+    });
+
+    it('resolves a project pick over a prefer pin', () => {
+      const pinned = resolveModelForRole({
+        role: 'agent',
+        activeProfileId: 'anthropic',
+        profiles,
+        policy: { mode: 'prefer', pinnedProfileId: 'codex' },
+      });
+      const picked = resolveModelForRole({
+        role: 'agent',
+        activeProfileId: 'anthropic',
+        projectProfileId: 'anthropic',
+        profiles,
+        policy: { mode: 'prefer', pinnedProfileId: 'codex' },
+      });
+
+      expect(pinned.profileId).toBe('codex');
+      expect(picked.profileId).toBe('anthropic');
+      expect(picked.blocked).toBeUndefined();
+      // The user's own choice, not the policy's.
+      expect(picked.source).not.toBe('policy');
     });
 
     it('enforce blocks a profile outside allowedProfileIds', () => {
@@ -903,6 +926,69 @@ describe('pickEffectiveProfile', () => {
     ).toBe('a');
   });
 
+  it('lets an explicit project pick override a prefer pin', () => {
+    expect(
+      pickEffectiveProfile({
+        profiles: pickProfiles,
+        activeProfileId: 'a',
+        projectProfileId: 'b',
+        policy: { mode: 'prefer', pinnedProfileId: 'c' },
+      })?.id,
+    ).toBe('b');
+  });
+
+  it('keeps the prefer pin when the project has no explicit pick', () => {
+    expect(
+      pickEffectiveProfile({
+        profiles: pickProfiles,
+        activeProfileId: 'a',
+        projectProfileId: null,
+        policy: { mode: 'prefer', pinnedProfileId: 'c' },
+      })?.id,
+    ).toBe('c');
+  });
+
+  it('ignores a project pick naming a profile that no longer exists', () => {
+    expect(
+      pickEffectiveProfile({
+        profiles: pickProfiles,
+        activeProfileId: 'a',
+        projectProfileId: 'ghost',
+        policy: { mode: 'prefer', pinnedProfileId: 'c' },
+      })?.id,
+    ).toBe('c');
+  });
+
+  it('never lets a project pick override an enforce pin', () => {
+    expect(
+      pickEffectiveProfile({
+        profiles: pickProfiles,
+        activeProfileId: 'a',
+        projectProfileId: 'b',
+        policy: { mode: 'enforce', pinnedProfileId: 'c' },
+      })?.id,
+    ).toBe('c');
+  });
+
+  it('ignores a stale project pick once the policy drops the pin', () => {
+    expect(
+      pickEffectiveProfile({
+        profiles: pickProfiles,
+        activeProfileId: 'a',
+        projectProfileId: 'b',
+        policy: { mode: 'inherit' },
+      })?.id,
+    ).toBe('a');
+    expect(
+      pickEffectiveProfile({
+        profiles: pickProfiles,
+        activeProfileId: 'a',
+        projectProfileId: 'b',
+        policy: { mode: 'prefer' },
+      })?.id,
+    ).toBe('a');
+  });
+
   it('falls back to the active profile when the allow-list names nothing that exists', () => {
     expect(
       pickEffectiveProfile({
@@ -1114,5 +1200,53 @@ describe('preset-reference bindings', () => {
         fallbackModel: 'gpt-image-1',
       }),
     ).toEqual({ imageModel: 'gpt-image-1', off: false });
+  });
+});
+
+describe('readProjectProfilePick', () => {
+  const pick = { profileId: 'b', pinnedProfileId: 'c' };
+
+  it('returns the pick while the project default is unchanged', () => {
+    expect(
+      readProjectProfilePick({
+        selections: { p1: pick },
+        projectId: 'p1',
+        policy: { mode: 'prefer', pinnedProfileId: 'c' },
+      }),
+    ).toBe('b');
+  });
+
+  it('expires the pick when the project default changes', () => {
+    // The case a write-side hook cannot cover: a committed
+    // `.jean-claude/model-policy.json` moving under a `git pull`.
+    expect(
+      readProjectProfilePick({
+        selections: { p1: pick },
+        projectId: 'p1',
+        policy: { mode: 'prefer', pinnedProfileId: 'different' },
+      }),
+    ).toBeNull();
+  });
+
+  it('expires the pick when the pin is dropped entirely', () => {
+    expect(
+      readProjectProfilePick({
+        selections: { p1: pick },
+        projectId: 'p1',
+        policy: { mode: 'inherit' },
+      }),
+    ).toBeNull();
+  });
+
+  it('returns null for missing inputs', () => {
+    expect(
+      readProjectProfilePick({ selections: { p1: pick }, projectId: null }),
+    ).toBeNull();
+    expect(
+      readProjectProfilePick({ selections: {}, projectId: 'p1' }),
+    ).toBeNull();
+    expect(
+      readProjectProfilePick({ selections: null, projectId: 'p1' }),
+    ).toBeNull();
   });
 });

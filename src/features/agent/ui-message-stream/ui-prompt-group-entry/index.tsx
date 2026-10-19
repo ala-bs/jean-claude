@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react';
 import type { MouseEvent } from 'react';
+import clsx from 'clsx';
 
 
 import { ensureUtc, formatDuration } from '@/lib/time';
@@ -420,6 +421,37 @@ const LastMessageElapsed = memo(function LastMessageElapsed({
     </time>
   );
 });
+
+/**
+ * Compact in-timeline marker for a context compaction. Always rendered (both in
+ * the collapsed and the expanded group body) so the prompt navigator rail
+ * always has a `data-prompt-index` anchor to scroll to.
+ */
+function CompactionMarker({
+  navIndex,
+  isComplete,
+}: {
+  navIndex?: number;
+  isComplete: boolean;
+}) {
+  return (
+    <div
+      className="flex items-center gap-1.5"
+      {...(navIndex !== undefined ? { 'data-prompt-index': navIndex } : {})}
+    >
+      <span
+        className={clsx(
+          'h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500',
+          !isComplete &&
+            'rg-pulse-glow animate-pulse shadow-[0_0_6px_theme(colors.amber.500/40)]',
+        )}
+      />
+      <span className="font-mono text-[10px] tracking-wider text-amber-300/80 uppercase">
+        {isComplete ? 'context compacted' : 'compacting context…'}
+      </span>
+    </div>
+  );
+}
 
 function shouldRenderChildMessage(dm: DisplayMessage): boolean {
   return dm.kind !== 'entry' || dm.entry.type !== 'session-summary';
@@ -1388,6 +1420,7 @@ function getFileStats(fileChangeEntries: NormalizedEntry[]): FileStats | null {
  */
 export const PromptGroupEntry = memo(function PromptGroupEntry({
   group,
+  compactionIndexMap,
   isLast = false,
   isTaskRunning = false,
   previousPromptDate,
@@ -1405,6 +1438,8 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   hasPendingQuestion = false,
 }: {
   group: PromptGroup;
+  /** compacting `startEntry.id` → prompt navigator index */
+  compactionIndexMap?: Map<string, number>;
   isLast?: boolean;
   /**
    * The agent is waiting on an ask-question banner for this group. The turn is
@@ -1591,6 +1626,16 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
     [fileChangeEntries],
   );
 
+  // Context compactions that happened during this turn
+  const compactions = useMemo(
+    () =>
+      group.childMessages.filter(
+        (dm): dm is Extract<DisplayMessage, { kind: 'compacting' }> =>
+          dm.kind === 'compacting',
+      ),
+    [group.childMessages],
+  );
+
   return (
     <div className="mb-5">
       {/* Part 1: Prompt section */}
@@ -1659,6 +1704,17 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
             {backgroundJobsStepId && (
               <BackgroundJobsSection stepId={backgroundJobsStepId} />
             )}
+            {!detailsExpanded && compactions.length > 0 && (
+              <div className="flex flex-col gap-1">
+                {compactions.map((dm) => (
+                  <CompactionMarker
+                    key={dm.startEntry.id}
+                    navIndex={compactionIndexMap?.get(dm.startEntry.id)}
+                    isComplete={!!dm.endEntry}
+                  />
+                ))}
+              </div>
+            )}
             {detailsExpanded ? (
               /* Expanded: full child timeline */
               <div className="flex flex-col gap-0.5">
@@ -1686,7 +1742,16 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
                       </div>
                     );
                   }
-                  if (dm.kind === 'compacting') return null;
+                  if (dm.kind === 'compacting') {
+                    return (
+                      <div key={index} className="py-1 pl-0.5">
+                        <CompactionMarker
+                          navIndex={compactionIndexMap?.get(dm.startEntry.id)}
+                          isComplete={!!dm.endEntry}
+                        />
+                      </div>
+                    );
+                  }
                   if (dm.kind === 'subagent') {
                     return (
                       <div

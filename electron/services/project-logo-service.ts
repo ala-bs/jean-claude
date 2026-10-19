@@ -14,7 +14,10 @@ import {
   getImageMimeTypeFromBytes,
 } from '@shared/image-types';
 import { isOpenAiImageModel } from '@shared/types';
-import { resolveImageModelForRole } from '@shared/model-profiles';
+import {
+  readProjectProfilePick,
+  resolveImageModelForRole,
+} from '@shared/model-profiles';
 
 
 import { dbg } from '../lib/debug';
@@ -66,11 +69,15 @@ async function resolveLogoImageModel({
 }): Promise<LogoImageModelDecision> {
   try {
     const service = getModelProfileService();
-    const [profiles, activeProfileId, effectivePolicy] = await Promise.all([
-      service.listProfiles(),
-      SettingsRepository.get('activeModelProfileId'),
-      service.getEffectivePolicy({ projectId }),
-    ]);
+    const [profiles, activeProfileId, effectivePolicy, projectSelections] =
+      await Promise.all([
+        service.listProfiles(),
+        SettingsRepository.get('activeModelProfileId'),
+        service.getEffectivePolicy({ projectId }),
+        // Without this the image role keeps resolving the `prefer` pin while
+        // every chat role in the project honors the user's explicit pick.
+        SettingsRepository.get('projectModelProfileSelections'),
+      ]);
     if (!Array.isArray(profiles)) return { status: 'ok' };
 
     const resolved = resolveImageModelForRole({
@@ -78,6 +85,11 @@ async function resolveLogoImageModel({
       profiles,
       activeProfileId:
         typeof activeProfileId === 'string' ? activeProfileId : null,
+      projectProfileId: readProjectProfilePick({
+        selections: projectSelections,
+        projectId,
+        policy: effectivePolicy?.policy ?? null,
+      }),
       policy: effectivePolicy?.policy ?? null,
       fallbackModel: settingModel?.trim() || DEFAULT_IMAGE_MODEL,
     });
