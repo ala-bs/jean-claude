@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 
-import { AzureHtmlContent, AzureMarkdownContent } from '.';
+import {
+  AzureHtmlContent,
+  AzureMarkdownContent,
+  AzureWorkItemDescription,
+} from '.';
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -63,6 +67,65 @@ describe('AzureMarkdownContent images', () => {
       root.render(
         <AzureMarkdownContent
           markdown={`![image.png](${ATTACHMENT_URL} =640x)`}
+          providerId="provider-1"
+        />,
+      );
+    });
+
+    const image = container.querySelector('img');
+    expect(image?.getAttribute('src')).toMatch(/^azure-image-proxy:\/\//);
+    expect(image?.style.width).toBe('640px');
+  });
+});
+
+describe('AzureWorkItemDescription', () => {
+  it('renders Markdown headings, emphasis, links, and lists', () => {
+    act(() => {
+      root.render(
+        <AzureWorkItemDescription content={'# Heading\n\n**Bold** and [link](https://example.com)\n\n- First\n- Second'} />,
+      );
+    });
+
+    expect(container.querySelector('h1')?.textContent).toBe('Heading');
+    expect(container.querySelector('strong')?.textContent).toBe('Bold');
+    expect(container.querySelector('a')?.getAttribute('href')).toBe(
+      'https://example.com',
+    );
+    expect([...container.querySelectorAll('li')].map((item) => item.textContent)).toEqual([
+      'First',
+      'Second',
+    ]);
+  });
+
+  it('preserves HTML formatting from existing work items', () => {
+    act(() => {
+      root.render(
+        <AzureWorkItemDescription content="<p>Existing <strong>HTML</strong></p>" />,
+      );
+    });
+
+    expect(container.querySelector('strong')?.textContent).toBe('HTML');
+    expect(container.textContent).not.toContain('<p>');
+  });
+
+  it('keeps HTML examples inside Markdown code fences as code', () => {
+    act(() => {
+      root.render(
+        <AzureWorkItemDescription content={'```html\n<p>Example</p>\n```'} />,
+      );
+    });
+
+    expect(container.querySelector('code')?.textContent).toContain(
+      '<p>Example</p>',
+    );
+    expect(container.querySelector('p')?.textContent).not.toBe('Example');
+  });
+
+  it('keeps authenticated images in Markdown descriptions', () => {
+    act(() => {
+      root.render(
+        <AzureWorkItemDescription
+          content={`![image.png](${ATTACHMENT_URL} =640x)`}
           providerId="provider-1"
         />,
       );

@@ -57,7 +57,10 @@ import {
   useWorkItemsByIds,
   useWorkItemStates,
 } from '@/hooks/use-work-items';
-import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
+import {
+  AzureHtmlContent,
+  AzureWorkItemDescription,
+} from '@/features/common/ui-azure-html-content';
 import { canShowWorkItemSummary } from '@/lib/work-item-summary';
 import { Kbd } from '@/common/ui/kbd';
 import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
@@ -825,8 +828,8 @@ export const WorkItemPreview = memo(function WorkItemPreview({
               )}
 
               {description && (
-                <AzureHtmlContent
-                  html={description}
+                <AzureWorkItemDescription
+                  content={description}
                   providerId={providerId}
                   className="text-ink-2 text-xs"
                   imageClassName="max-h-72 w-auto object-contain"

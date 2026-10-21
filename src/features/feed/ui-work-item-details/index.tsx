@@ -82,7 +82,10 @@ import {
   WorkItemStateBadge,
   WorkItemStateEditor,
 } from '@/features/work-item/ui-work-item-field-editors/work-item-state-editor';
-import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
+import {
+  AzureHtmlContent,
+  AzureWorkItemDescription,
+} from '@/features/common/ui-azure-html-content';
 import { Chip } from '@/common/ui/chip';
 import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
@@ -784,8 +787,8 @@ export function WorkItemDetails({
           {hasContent ? (
             <div className="w-full">
               {description && (
-                <AzureHtmlContent
-                  html={description}
+                <AzureWorkItemDescription
+                  content={description}
                   providerId={providerId ?? undefined}
                   className="text-ink-1 text-sm"
                   imageClassName="max-h-96 w-auto object-contain"
