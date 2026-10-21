@@ -201,6 +201,22 @@ describe('Azure image URL security', () => {
     ).resolves.toMatchObject({ status: 502 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it('does not forward an attachment token to another Azure organization', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      redirectResponse('https://dev.azure.com/other/_apis/wit/attachments/file'),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await fetchAuthenticatedImageStream({
+      providerId: 'provider-1',
+      imageUrl: 'https://dev.azure.com/org/_apis/wit/attachments/file',
+      organization: 'org',
+    });
+
+    expect(response.status).toBe(502);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('fetchAuthenticatedImageStream', () => {

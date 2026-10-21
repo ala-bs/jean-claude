@@ -846,6 +846,12 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('azureDevOps:searchIdentities', params),
     fetchImageAsBase64: (params: { providerId: string; imageUrl: string }) =>
       ipcRenderer.invoke('azureDevOps:fetchImageAsBase64', params),
+    downloadWorkItemAttachment: (params: {
+      providerId: string;
+      attachmentUrl: string;
+      filename: string;
+      projectPath: string;
+    }) => ipcRenderer.invoke('azureDevOps:downloadWorkItemAttachment', params),
     getPullRequestPolicyEvaluations: (params: {
       providerId: string;
       projectId: string;

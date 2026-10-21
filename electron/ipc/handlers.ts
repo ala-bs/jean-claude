@@ -515,6 +515,7 @@ import { ensureAndroidMetroReverse } from '../services/mobile-preview-android-ad
 import { eureciaSessionService } from '../services/eurecia-session-service';
 import { exitCurrentPreviewAfterReload } from '../services/reload-preview-service';
 import { fetchImageAsBase64 } from '../services/azure-image-proxy-service';
+import { downloadWorkItemAttachment } from '../services/work-item-attachment-download-service';
 import { generatePrDescriptionForTask } from '../services/pr-description-generation-service';
 import { generateSummary } from '../services/summary-generation-service';
 import { generateTaskName } from '../services/name-generation-service';
@@ -4483,6 +4484,12 @@ export function registerIpcHandlers() {
         imageUrl: string;
       },
     ) => fetchImageAsBase64(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:downloadWorkItemAttachment',
+    (_, params: Parameters<typeof downloadWorkItemAttachment>[0]) =>
+      downloadWorkItemAttachment(params),
   );
 
   ipcMain.handle(

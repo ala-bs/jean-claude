@@ -1316,6 +1316,12 @@ export interface Api {
       providerId: string;
       imageUrl: string;
     }) => Promise<{ data: string; mimeType: string } | null>;
+    downloadWorkItemAttachment: (params: {
+      providerId: string;
+      attachmentUrl: string;
+      filename: string;
+      projectPath: string;
+    }) => Promise<{ filePath: string; filename: string }>;
     getPullRequestPolicyEvaluations: (params: {
       providerId: string;
       projectId: string;
@@ -2836,6 +2842,9 @@ export const api: Api = hasWindowApi
         },
         searchIdentities: async () => [],
         fetchImageAsBase64: async () => null,
+        downloadWorkItemAttachment: async () => {
+          throw new Error('API not available');
+        },
         getPullRequestPolicyEvaluations: async () => [],
         requeuePolicyEvaluation: async () => {},
         votePullRequest: async () => {
