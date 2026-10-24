@@ -90,7 +90,7 @@
     "mermaid": "^11.16.0",
     "monaco-editor": "^0.55.1",
     "nanoid": "^5.1.6",
-    "node-pty": "^1.1.0",
+    "node-pty": "1.2.0-beta.18",
     "picomatch": "^4.0.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
