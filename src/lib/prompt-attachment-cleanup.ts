@@ -29,6 +29,32 @@ export async function deleteAttachmentFiles({
   );
 }
 
+/** Remove project temp copies after task creation has moved them to its worktree. */
+export async function deleteRelocatedAttachmentFiles({
+  projectPath,
+  files,
+  prompt,
+  worktreePath,
+}: {
+  projectPath: string | null | undefined;
+  files: PromptFilePart[];
+  prompt: string;
+  worktreePath: string | null;
+}): Promise<void> {
+  if (!worktreePath) return;
+  await deleteAttachmentFiles({
+    projectPath,
+    files: files.filter((file) => {
+      const escapedPath = file.filePath
+        .replaceAll('&', '&amp;')
+        .replaceAll('"', '&quot;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+      return !prompt.includes(`path="${escapedPath}"`);
+    }),
+  });
+}
+
 /**
  * Returns the paths that no longer exist on disk (deleted by hand, tmp cleaned).
  * Callers drop these silently — the user can simply re-attach.

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { nanoid } from 'nanoid';
 import type { ProfilePreset } from '@shared/model-profiles';
+import type { PromptFilePart } from '@shared/agent-backend-types';
 import { useQuery } from '@tanstack/react-query';
 
 
@@ -60,6 +61,13 @@ import { useNewTaskFormStore } from '@/stores/new-task-form';
 import { useProjectCanCreateWorktree } from '@/hooks/use-project-git';
 import { useProjectSkills } from '@/hooks/use-skills';
 import { WorkItemsBrowser } from '@/features/agent/ui-work-items-browser';
+import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
+import {
+  deleteAttachmentFiles,
+  deleteRelocatedAttachmentFiles,
+} from '@/lib/prompt-attachment-cleanup';
+import { downloadWorkItemPromptAttachments } from '@/lib/work-item-prompt-attachments';
+import { useToastStore } from '@/stores/toasts';
 
 
 
@@ -75,6 +83,9 @@ function NewTask() {
   const { projectId } = Route.useParams();
   const navigate = useNavigate();
   const createTask = useCreateTaskWithWorktree();
+  const addToast = useToastStore((state) => state.addToast);
+  const submittingRef = useRef(false);
+  const [isPreparingTask, setIsPreparingTask] = useState(false);
   const { data: project, isLoading: isProjectLoading } = useProject(projectId);
   const { data: featureMap = null } = useProjectFeatureMap(projectId);
   // Not just "is a git repo": a repo with no commits has nothing to branch
@@ -334,6 +345,14 @@ function NewTask() {
     // setting. Re-checked here so non-button submit paths cannot slip through.
     if (isProjectLoading) return;
     if (!effectiveAgentBackend) return;
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setIsPreparingTask(true);
+    let downloadedFiles: PromptFilePart[] = [];
+    let taskCreated = false;
+    let taskCreationAttempted = false;
+
+    try {
 
     // Pass null if name is empty - will trigger auto-generation when agent starts
     const taskName = name.trim() || null;
@@ -344,11 +363,42 @@ function NewTask() {
       thinkingEffort: effectiveThinkingEffort,
     });
 
+    let finalPrompt = expandFeatureReferencesInPrompt({ text: prompt, featureMap });
+    if (workItemIds?.length && project?.workItemProviderId) {
+      try {
+        const workItems = await api.azureDevOps.getWorkItemsByIds({
+          providerId: project.workItemProviderId,
+          projectName: project.workItemProjectName!,
+          workItemIds: workItemIds.map(Number),
+        });
+        const attachments = await downloadWorkItemPromptAttachments({
+          workItems,
+          providerId: project.workItemProviderId,
+          projectPath: project.path,
+        });
+        downloadedFiles = attachments.files;
+        finalPrompt += buildAttachedFilesXml(attachments.files);
+        if (attachments.failures.length > 0) {
+          addToast({
+            type: 'error',
+            message: `Could not attach: ${attachments.failures.join(', ')}`,
+          });
+          finalPrompt += `\n\nWork item attachments unavailable: ${attachments.failures.join(', ')}`;
+        }
+      } catch (error) {
+        console.error('Failed to load work item attachments:', error);
+        addToast({ type: 'error', message: 'Could not load work item attachments' });
+        finalPrompt += '\n\nWork item attachments could not be loaded.';
+      }
+    }
+
+    setIsPreparingTask(false);
+    taskCreationAttempted = true;
     const task = await createTask.mutateAsync({
       id: nanoid(),
       projectId,
       name: taskName,
-      prompt: expandFeatureReferencesInPrompt({ text: prompt, featureMap }),
+      prompt: finalPrompt,
       agentMemoryPrompt: getOriginalTaskAgentMemoryPrompt({
         inputMode: 'prompt',
         prompt,
@@ -371,12 +421,29 @@ function NewTask() {
       updatedAt: new Date().toISOString(),
       autoStart: shouldStart,
     });
+    taskCreated = true;
+    await deleteRelocatedAttachmentFiles({
+      projectPath: project?.path,
+      files: downloadedFiles,
+      prompt: task.prompt,
+      worktreePath: task.worktreePath,
+    });
 
     // Clear the draft now that we've submitted
     clearDraft();
 
     // Navigate to the new task in the feed list, the main view
     navigate({ to: '/all/$taskId', params: { taskId: task.id } });
+    } finally {
+      if (!taskCreated && !taskCreationAttempted) {
+        await deleteAttachmentFiles({
+          projectPath: project?.path,
+          files: downloadedFiles,
+        });
+      }
+      submittingRef.current = false;
+      setIsPreparingTask(false);
+    }
   }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -621,8 +688,9 @@ function NewTask() {
               variant="secondary"
               size="md"
               onClick={handleCreateOnly}
-              loading={createTask.isPending}
+              loading={isPreparingTask || createTask.isPending}
               disabled={
+                isPreparingTask ||
                 createTask.isPending ||
                 !prompt.trim() ||
                 isWorktreeDataFetching ||
@@ -636,8 +704,9 @@ function NewTask() {
               variant="primary"
               size="md"
               type="submit"
-              loading={createTask.isPending}
+              loading={isPreparingTask || createTask.isPending}
               disabled={
+                isPreparingTask ||
                 createTask.isPending ||
                 !prompt.trim() ||
                 isWorktreeDataFetching ||
@@ -645,7 +714,7 @@ function NewTask() {
                 !effectiveAgentBackend
               }
             >
-              {createTask.isPending ? 'Creating…' : 'Start'}
+              {isPreparingTask ? 'Attaching files…' : createTask.isPending ? 'Creating…' : 'Start'}
             </Button>
           </div>
         </form>

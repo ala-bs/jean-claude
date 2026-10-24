@@ -5,6 +5,7 @@ import type {
   ResolvedPermissionRule,
 } from '@shared/permission-types';
 import type { AgentTaskContext } from '@shared/agent-backend-types';
+import type { ThinkingEffort } from '@shared/types';
 
 const mocks = vi.hoisted(() => ({
   nanoid: vi.fn(),
@@ -150,6 +151,37 @@ describe('CopilotBackend', () => {
     expect(mocks.createSession).toHaveBeenCalledWith(
       expect.objectContaining({ reasoningEffort: 'high' }),
     );
+  });
+
+  it('drops thinking efforts the Copilot SDK does not accept', async () => {
+    // `max`, `none` and `minimal` exist in our wider `ThinkingEffort` union
+    // but not in Copilot's `ReasoningEffort`. None may be translated into a
+    // neighbouring value: a model that never advertised it would reject it.
+    const unsupported: ThinkingEffort[] = ['max', 'none', 'minimal', 'default'];
+    for (const effort of unsupported) {
+      const next = createBackend();
+      await next.start(createConfig({ thinkingEffort: effort }), [
+        { type: 'text', text: 'hello' },
+      ]);
+      expect(mocks.createSession).toHaveBeenLastCalledWith(
+        expect.not.objectContaining({ reasoningEffort: expect.anything() }),
+      );
+      await next.stop('jc-session-1');
+    }
+  });
+
+  it('forwards the efforts Copilot does accept', async () => {
+    const supported: ThinkingEffort[] = ['low', 'medium', 'high', 'xhigh'];
+    for (const effort of supported) {
+      const next = createBackend();
+      await next.start(createConfig({ thinkingEffort: effort }), [
+        { type: 'text', text: 'hello' },
+      ]);
+      expect(mocks.createSession).toHaveBeenLastCalledWith(
+        expect.objectContaining({ reasoningEffort: effort }),
+      );
+      await next.stop('jc-session-1');
+    }
   });
 
   it('passes runtime MCP servers to Copilot sessions', async () => {
@@ -1874,7 +1906,7 @@ function createBackend(
 function createConfig(
   overrides: {
     model?: string;
-    thinkingEffort?: 'default' | 'high';
+    thinkingEffort?: ThinkingEffort;
     interactionMode?: 'ask' | 'auto' | 'plan';
     permissionRules?: ResolvedPermissionRule[];
     persistedSessionRules?: PermissionScope;

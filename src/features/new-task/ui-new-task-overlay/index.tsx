@@ -48,6 +48,7 @@ import {
 } from '@/features/work-item/ui-work-item-workspace';
 import {
   deleteAttachmentFiles,
+  deleteRelocatedAttachmentFiles,
   findMissingAttachmentPaths,
 } from '@/lib/prompt-attachment-cleanup';
 import {
@@ -159,6 +160,7 @@ import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useToastStore } from '@/stores/toasts';
+import { downloadWorkItemPromptAttachments } from '@/lib/work-item-prompt-attachments';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
 import {
@@ -575,6 +577,9 @@ export function NewTaskOverlay({
     (state) => state.markJobSucceeded,
   );
   const markJobFailed = useBackgroundJobsStore((state) => state.markJobFailed);
+  const updateTaskCreationInput = useBackgroundJobsStore(
+    (state) => state.updateTaskCreationInput,
+  );
   const addToast = useToastStore((state) => state.addToast);
 
   const { data: completionSetting } = useCompletionSetting();
@@ -584,6 +589,8 @@ export function NewTaskOverlay({
   const promptInputRef = useRef<PromptTextareaRef>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const workItemImageFetchSessionRef = useRef(0);
+  const startingTaskRef = useRef(false);
+  const [isPreparingTask, setIsPreparingTask] = useState(false);
   const [isPromptAutocompleteOpen, setIsPromptAutocompleteOpen] =
     useState(false);
   const [highlightedWorkItemId, setHighlightedWorkItemId] = useState<
@@ -1394,6 +1401,13 @@ export function NewTaskOverlay({
       return;
     }
 
+    if (startingTaskRef.current) return;
+    startingTaskRef.current = true;
+    setIsPreparingTask(true);
+    let taskCreationStarted = false;
+    let jobId: string | null = null;
+    let downloadedWorkItemFiles: PromptFilePart[] = [];
+
     try {
       // Determine the final prompt
       let finalPrompt: string;
@@ -1449,6 +1463,101 @@ export function NewTaskOverlay({
           ? submissionDraft.images
           : undefined;
       const draftFiles = submissionDraft.files ?? [];
+      const backlogTodoIds = submissionDraft.backlogTodoIds ?? [];
+      const latestModel = wasProfileActivationPending
+        ? resolveAgentModelSelection({
+            profiles,
+            activeProfileId:
+              queryClient.getQueryData<string | null>(
+                ACTIVE_MODEL_PROFILE_QUERY_KEY,
+              ) ?? effectiveProfileId,
+            projectProfileId: readProjectProfilePick({
+              selections:
+                queryClient.getQueryData<ProjectModelProfileSelectionsSetting>(
+                  PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
+                ),
+              projectId: selectedProjectId,
+              policy: effectivePolicy?.policy,
+            }),
+            policy: effectivePolicy?.policy,
+            enabledBackends: backendsSetting?.enabledBackends,
+            draft: submissionDraft,
+          })
+        : null;
+      const submitBackend = latestModel?.backend ?? currentBackend;
+      if (!submitBackend) {
+        throw new Error('Select an agent backend before creating a task.');
+      }
+      const submitSelection = await resolveRateLimitSwapSelection({
+        backend: submitBackend,
+        model: latestModel?.model ?? currentModelPreference,
+        thinkingEffort:
+          (latestModel?.thinkingEffort as ThinkingEffort | undefined) ??
+          currentThinkingEffort,
+        enabled: !isNoteMode,
+      });
+
+      const creationInput = {
+        projectId: selectedProjectId,
+        prompt: finalPrompt,
+        agentMemoryPrompt,
+        images: draftImages,
+        interactionMode: normalizeInteractionModeForBackend({
+          backend: submitSelection.backend,
+          mode: currentInteractionMode,
+        }),
+        agentBackend: submitSelection.backend,
+        modelPreference: submitSelection.model,
+        thinkingEffort: submitSelection.thinkingEffort as ThinkingEffort,
+        useWorktree: currentCreateWorktree,
+        useExistingBranch: currentUseExistingBranch,
+        sourceBranch: currentCreateWorktree ? currentSourceBranch : null,
+        workItemIds,
+        workItemUrls,
+        parentTaskId: submissionDraft.parentTaskId ?? null,
+        updateWorkItemStatus: currentUpdateWorkItemStatus,
+        updatedAt: new Date().toISOString(),
+        autoStart: true,
+      };
+      jobId = addRunningJob({
+        type: 'task-creation',
+        title: `Creating task in ${selectedProject.name}`,
+        projectId: selectedProjectId,
+        details: {
+          projectName: selectedProject.name,
+          promptPreview: finalPrompt.slice(0, 120),
+          backlogTodoIds,
+          creationInput,
+        },
+      });
+      const activeJobId = jobId;
+
+      // The job remains visible while attachments download, even if this
+      // overlay closes. Reset only this submission's draft before a new one opens.
+      workItemImageFetchSessionRef.current += 1;
+      setIsFetchingWorkItemImages(false);
+      void triggerAnimation();
+      clearDraft();
+      userTouchedSelectionRef.current = false;
+      useComposerFileCommentsStore.getState().clearComments(selectedProjectId);
+
+      const workItemAttachments =
+        inputMode === 'search' && searchStep === 'compose' &&
+        selectedProject.workItemProviderId
+          ? await downloadWorkItemPromptAttachments({
+              workItems: selectedWorkItems,
+              providerId: selectedProject.workItemProviderId,
+              projectPath: selectedProject.path,
+            })
+          : { files: [], failures: [] };
+      downloadedWorkItemFiles = workItemAttachments.files;
+      if (workItemAttachments.failures.length > 0) {
+        addToast({
+          type: 'error',
+          message: `Could not attach: ${workItemAttachments.failures.join(', ')}`,
+        });
+        finalPrompt += `\n\nWork item attachments unavailable: ${workItemAttachments.failures.join(', ')}`;
+      }
 
       // Append synthesized file comments to prompt
       const fileContextParts = synthesizeFileCommentsPrompt(
@@ -1475,89 +1584,16 @@ export function NewTaskOverlay({
         text: finalPrompt,
         preparedFeatures: preparedProjectFeatures,
       });
-      finalPrompt += buildAttachedFilesXml(draftFiles);
+      finalPrompt += buildAttachedFilesXml([
+        ...draftFiles,
+        ...workItemAttachments.files,
+      ]);
 
-      const backlogTodoIds = submissionDraft.backlogTodoIds ?? [];
-      const latestModel = wasProfileActivationPending
-        ? resolveAgentModelSelection({
-            profiles,
-            activeProfileId:
-              queryClient.getQueryData<string | null>(
-                ACTIVE_MODEL_PROFILE_QUERY_KEY,
-              ) ?? effectiveProfileId,
-            projectProfileId: readProjectProfilePick({
-              selections:
-                queryClient.getQueryData<ProjectModelProfileSelectionsSetting>(
-                  PROJECT_MODEL_PROFILE_SELECTIONS_QUERY_KEY,
-                ),
-              projectId: selectedProjectId,
-              policy: effectivePolicy?.policy,
-            }),
-            policy: effectivePolicy?.policy,
-            enabledBackends: backendsSetting?.enabledBackends,
-            draft: submissionDraft,
-          })
-        : null;
-      const submitBackend = latestModel?.backend ?? currentBackend;
-      if (!submitBackend) {
-        throw new Error('Select an agent backend before creating a task.');
-      }
+      creationInput.prompt = finalPrompt;
+      creationInput.images = draftImages;
+      updateTaskCreationInput(activeJobId, creationInput);
 
-      const submitSelection = await resolveRateLimitSwapSelection({
-        backend: submitBackend,
-        model: latestModel?.model ?? currentModelPreference,
-        thinkingEffort:
-          (latestModel?.thinkingEffort as ThinkingEffort | undefined) ??
-          currentThinkingEffort,
-        enabled: !isNoteMode,
-      });
-
-      const jobId = addRunningJob({
-        type: 'task-creation',
-        title: `Creating task in ${selectedProject?.name ?? 'project'}`,
-        projectId: selectedProjectId,
-        details: {
-          projectName: selectedProject?.name ?? null,
-          promptPreview: finalPrompt.slice(0, 120),
-          backlogTodoIds,
-          creationInput: {
-            projectId: selectedProjectId,
-            prompt: finalPrompt,
-            agentMemoryPrompt,
-            interactionMode: normalizeInteractionModeForBackend({
-              backend: submitSelection.backend,
-              mode: currentInteractionMode,
-            }),
-            agentBackend: submitSelection.backend,
-            modelPreference: submitSelection.model,
-            thinkingEffort: submitSelection.thinkingEffort as ThinkingEffort,
-             useWorktree: currentCreateWorktree,
-             useExistingBranch: currentUseExistingBranch,
-             sourceBranch: currentCreateWorktree ? currentSourceBranch : null,
-            workItemIds,
-            workItemUrls,
-            updateWorkItemStatus: currentUpdateWorkItemStatus,
-            updatedAt: new Date().toISOString(),
-            autoStart: true,
-          },
-        },
-      });
-
-      // Animate the overlay shrinking toward the Jobs button, then reset
-      // the draft so the overlay shows a fresh state for chaining
-      workItemImageFetchSessionRef.current += 1;
-      setIsFetchingWorkItemImages(false);
-      void triggerAnimation();
-      clearDraft();
-      userTouchedSelectionRef.current = false;
-      // Clear file comments for this project
-      if (selectedProjectId) {
-        useComposerFileCommentsStore
-          .getState()
-          .clearComments(selectedProjectId);
-      }
-
-      // Refocus the input for the next task
+      // Refocus the input for the next task.
       setTimeout(() => {
         if (inputMode === 'prompt') {
           promptInputRef.current?.focus();
@@ -1566,8 +1602,7 @@ export function NewTaskOverlay({
         searchInputRef.current?.focus();
       }, 50);
 
-      void createTaskMutation
-        .mutateAsync({
+      const taskCreation = createTaskMutation.mutateAsync({
           projectId: selectedProjectId,
           prompt: finalPrompt,
           agentMemoryPrompt,
@@ -1588,11 +1623,20 @@ export function NewTaskOverlay({
           parentTaskId: submissionDraft.parentTaskId ?? null,
           updatedAt: new Date().toISOString(),
           autoStart: true,
-        })
+        });
+      taskCreationStarted = true;
+      setIsPreparingTask(false);
+      void taskCreation
         .then((task) => {
-          markJobSucceeded(jobId, {
+          markJobSucceeded(activeJobId, {
             taskId: task.id,
             projectId: task.projectId,
+          });
+          void deleteRelocatedAttachmentFiles({
+            projectPath: selectedProject.path,
+            files: downloadedWorkItemFiles,
+            prompt: task.prompt,
+            worktreePath: task.worktreePath,
           });
           queryClient.invalidateQueries({ queryKey: ['tasks'] });
           queryClient.invalidateQueries({
@@ -1610,13 +1654,31 @@ export function NewTaskOverlay({
         .catch((error: unknown) => {
           const message =
             error instanceof Error ? error.message : 'Failed to create task';
-          markJobFailed(jobId, message);
+          markJobFailed(activeJobId, message);
+        })
+        .finally(() => {
+          startingTaskRef.current = false;
         });
     } catch (error) {
       console.error('Failed to create task:', error);
-      // Keep overlay open on error (draft preserved)
+      if (jobId) {
+        markJobFailed(jobId, error instanceof Error ? error.message : 'Could not prepare task');
+      } else {
+        addToast({ type: 'error', message: 'Could not prepare task' });
+      }
+      void deleteAttachmentFiles({
+        projectPath: selectedProject.path,
+        files: downloadedWorkItemFiles,
+      });
+      // A job created before this error remains visible in Jobs.
+    } finally {
+      if (!taskCreationStarted) {
+        startingTaskRef.current = false;
+        setIsPreparingTask(false);
+      }
     }
   }, [
+    addToast,
     addRunningJob,
     clearDraft,
     createTaskMutation,
@@ -1652,6 +1714,7 @@ export function NewTaskOverlay({
     snippetVariableContext,
     testCasesByWorkItem,
     triggerAnimation,
+    updateTaskCreationInput,
     waitForPendingActivations,
     workItemComments,
   ]);
@@ -2498,6 +2561,7 @@ export function NewTaskOverlay({
                     </span>
                   </>
                 )}
+                {isPreparingTask && <span>Attaching work item files…</span>}
                 {isNoteMode && (
                   <span className="flex items-center gap-1">
                     <Kbd shortcut="cmd+enter" /> create note

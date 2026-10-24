@@ -1474,6 +1474,7 @@ export async function getWorkItemsByIds(params: {
       relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
       linkedPrs: extractLinkedPrs(wi.relations),
       relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
+      attachments: extractWorkItemAttachments(wi.relations),
     })),
   );
   const itemById = new Map(items.map((item) => [item.id, item]));

@@ -401,6 +401,11 @@ describe('getWorkItemsByIds', () => {
                   url: 'https://example/_apis/wit/workItems/12',
                   attributes: {},
                 },
+                {
+                  rel: 'AttachedFile',
+                  url: 'https://dev.azure.com/org/_apis/wit/attachments/file-1',
+                  attributes: { name: 'design.pdf' },
+                },
               ],
             },
           ],
@@ -417,7 +422,17 @@ describe('getWorkItemsByIds', () => {
         workItemIds: [10, 10],
       }),
     ).resolves.toMatchObject([
-      { id: 10, childIds: [11], relatedWorkItemIds: [12] },
+      {
+        id: 10,
+        childIds: [11],
+        relatedWorkItemIds: [12],
+        attachments: [
+          {
+            name: 'design.pdf',
+            url: 'https://dev.azure.com/org/_apis/wit/attachments/file-1',
+          },
+        ],
+      },
     ]);
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
       ids: [10],

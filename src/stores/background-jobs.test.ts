@@ -85,3 +85,39 @@ describe('agent memory extraction background jobs', () => {
     });
   });
 });
+
+describe('task creation preparation', () => {
+  it('updates the retry input after attachments finish downloading', () => {
+    useBackgroundJobsStore.setState({ jobs: [] });
+    const creationInput = {
+      projectId: 'project-1',
+      prompt: 'Initial work item prompt',
+      useWorktree: true,
+      updatedAt: '2026-10-21T00:00:00.000Z',
+    };
+    const id = useBackgroundJobsStore.getState().addRunningJob({
+      type: 'task-creation',
+      title: 'Creating task',
+      details: {
+        projectName: 'Project',
+        promptPreview: creationInput.prompt,
+        backlogTodoIds: [],
+        creationInput,
+      },
+    });
+
+    useBackgroundJobsStore.getState().updateTaskCreationInput(id, {
+      ...creationInput,
+      prompt: 'Initial work item prompt\n<attached_files />',
+    });
+
+    expect(useBackgroundJobsStore.getState().jobs[0]).toMatchObject({
+      id,
+      status: 'running',
+      details: {
+        promptPreview: 'Initial work item prompt\n<attached_files />',
+        creationInput: { prompt: 'Initial work item prompt\n<attached_files />' },
+      },
+    });
+  });
+});

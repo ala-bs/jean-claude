@@ -355,6 +355,10 @@ type NewBackgroundJobInput =
 interface BackgroundJobsState {
   jobs: BackgroundJob[];
   addRunningJob: (job: NewBackgroundJobInput) => string;
+  updateTaskCreationInput: (
+    id: string,
+    input: Parameters<typeof api.tasks.createWithWorktree>[0],
+  ) => void;
   markJobSucceeded: (
     id: string,
     data?: {
@@ -551,6 +555,23 @@ export const useBackgroundJobsStore = create<BackgroundJobsState>()(
           }),
         }));
         return id;
+      },
+
+      updateTaskCreationInput: (id, input) => {
+        set((state) => ({
+          jobs: state.jobs.map((job) =>
+            job.id === id && job.type === 'task-creation'
+              ? {
+                  ...job,
+                  details: {
+                    ...job.details,
+                    promptPreview: input.prompt.slice(0, 120),
+                    creationInput: input,
+                  },
+                }
+              : job,
+          ),
+        }));
       },
 
       markJobSucceeded: (id, data) => {

@@ -1,5 +1,5 @@
 import TurndownService from 'turndown';
-import { useMemo } from 'react';
+import { type ComponentProps, useMemo } from 'react';
 
 
 import {
@@ -246,5 +246,25 @@ export function AzureMarkdownContent({
         allowBlobImages={allowBlobImages}
       />
     </div>
+  );
+}
+
+/** Work item descriptions can arrive as either Azure HTML or Markdown. */
+export function AzureWorkItemDescription({
+  content,
+  ...props
+}: Omit<ComponentProps<typeof AzureHtmlContent>, 'html'> & {
+  content: string;
+}) {
+  // The work item response has no per-description format field. Leading HTML
+  // tags preserve the existing path; plain Markdown bypasses Turndown.
+  const isHtml = /^\s*<\/?(?:a|b|blockquote|br|code|div|em|h[1-6]|hr|i|img|li|ol|p|pre|span|strong|table|tbody|td|th|thead|tr|u|ul)\b[^>]*>/i.test(
+    content,
+  );
+
+  return isHtml ? (
+    <AzureHtmlContent html={content} {...props} />
+  ) : (
+    <AzureMarkdownContent markdown={content} {...props} />
   );
 }

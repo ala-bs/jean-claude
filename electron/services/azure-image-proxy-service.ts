@@ -15,7 +15,10 @@ import { createAuthHeader } from './azure-devops-service';
 const MAX_AUTHENTICATED_REDIRECTS = 5;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
-function parseAllowedAzureImageUrl(imageUrl: string): URL | null {
+function parseAllowedAzureImageUrl(
+  imageUrl: string,
+  organization?: string,
+): URL | null {
   let url: URL;
   try {
     url = new URL(imageUrl);
@@ -36,6 +39,15 @@ function parseAllowedAzureImageUrl(imageUrl: string): URL | null {
     return null;
   }
 
+  if (organization) {
+    const belongsToOrganization =
+      url.hostname === 'dev.azure.com'
+        ? url.pathname.split('/')[1]?.toLowerCase() === organization.toLowerCase()
+        : url.hostname.toLowerCase() ===
+          `${organization.toLowerCase()}.visualstudio.com`;
+    if (!belongsToOrganization) return null;
+  }
+
   return url;
 }
 
@@ -43,8 +55,9 @@ async function fetchWithValidatedRedirects(params: {
   imageUrl: string;
   authorization: string;
   signal?: AbortSignal;
+  organization?: string;
 }): Promise<Response> {
-  let url = parseAllowedAzureImageUrl(params.imageUrl);
+  let url = parseAllowedAzureImageUrl(params.imageUrl, params.organization);
   if (!url) throw new Error('Disallowed Azure DevOps image URL');
 
   const visited = new Set<string>();
@@ -80,7 +93,10 @@ async function fetchWithValidatedRedirects(params: {
       await response.body?.cancel().catch(() => undefined);
       throw new Error('Invalid Azure DevOps image redirect');
     }
-    const allowedDestination = parseAllowedAzureImageUrl(destination.href);
+    const allowedDestination = parseAllowedAzureImageUrl(
+      destination.href,
+      params.organization,
+    );
     if (!allowedDestination) {
       await response.body?.cancel().catch(() => undefined);
       throw new Error('Disallowed Azure DevOps image redirect');
@@ -99,12 +115,13 @@ async function fetchAuthenticated(params: {
   providerId: string;
   imageUrl: string;
   signal?: AbortSignal;
+  organization?: string;
 }): Promise<
   { response: Response; mimeType: string } | { error: string; status: number }
 > {
   const { providerId, imageUrl, signal } = params;
 
-  if (!parseAllowedAzureImageUrl(imageUrl)) {
+  if (!parseAllowedAzureImageUrl(imageUrl, params.organization)) {
     dbg.azureImageProxy('Invalid URL: %s', imageUrl);
     return { error: 'Only Azure DevOps URLs are allowed', status: 403 };
   }
@@ -127,9 +144,11 @@ async function fetchAuthenticated(params: {
       imageUrl,
       authorization: createAuthHeader(token),
       signal,
+      organization: params.organization,
     });
 
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       dbg.azureImageProxy(
         'Failed to fetch image: %d %s',
         response.status,
@@ -160,6 +179,7 @@ export async function fetchAuthenticatedImageStream(params: {
   providerId: string;
   imageUrl: string;
   signal?: AbortSignal;
+  organization?: string;
 }): Promise<Response> {
   const fetchController = new AbortController();
   let abortBoundedStream: ((reason: unknown) => Promise<void>) | undefined;
@@ -188,6 +208,7 @@ export async function fetchAuthenticatedImageStream(params: {
       providerId: params.providerId,
       imageUrl: params.imageUrl,
       signal: fetchController.signal,
+      organization: params.organization,
     });
   } catch (error) {
     removeExternalAbortListener();
