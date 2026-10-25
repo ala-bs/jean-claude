@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { JEAN_CLAUDE_ANSWER_FILES_FIELD } from '@shared/attached-files';
 
 const QUESTION_OPTION_SCHEMA = z
   .object({
@@ -24,6 +25,9 @@ const QUESTION_BASE_SCHEMA = {
     .min(1)
     .refine((id) => id === id.trim(), {
       message: 'Question id must not contain leading or trailing whitespace',
+    })
+    .refine((id) => id !== JEAN_CLAUDE_ANSWER_FILES_FIELD, {
+      message: 'Question id is reserved for answer attachments',
     }),
   label: z.string().refine((label) => label.trim().length > 0, {
     message: 'Question label is required',

@@ -234,6 +234,8 @@ export interface NormalizedQuestion {
   multiSelect: boolean;
   required?: boolean;
   allowFreeform?: boolean;
+  /** False when a typed backend schema cannot carry file references. */
+  allowFileAttachments?: boolean;
 }
 
 export interface NormalizedQuestionRequest {

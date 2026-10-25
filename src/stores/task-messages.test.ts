@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const deleteAttachmentFiles = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('@/lib/prompt-attachment-cleanup', () => ({ deleteAttachmentFiles }));
 
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import type { RunStatus } from '@shared/run-command-types';
@@ -20,11 +23,89 @@ describe('task messages store', () => {
       runCommandLogGenerations: {},
       runCommandRunning: {},
       questionDrafts: {},
+      questionFileUploads: {},
       questionResponsesInFlight: {},
       areRunCommandStatusesHydrated: false,
       backgroundTasksByStepId: {},
       backgroundTasksVersions: {},
     });
+  });
+
+  it('keeps upload gating across a question form remount and accepts its late copy', () => {
+    const store = useTaskMessagesStore.getState();
+    const key = getQuestionDraftKey('task-1', 'request-1');
+    const file = {
+      type: 'file' as const,
+      filePath: '/repo/.jean-claude/tmp/file.txt',
+      filename: 'file.txt',
+    };
+
+    store.startQuestionFileUploads(key, 1);
+    // A remounted form reads the same request-keyed count from the store.
+    expect(useTaskMessagesStore.getState().questionFileUploads[key]).toBe(1);
+    expect(store.attachQuestionFile(key, 'question-1', file, '/repo')).toBe(true);
+    store.finishQuestionFileUpload(key);
+
+    expect(useTaskMessagesStore.getState().questionFileUploads[key]).toBeUndefined();
+    expect(useTaskMessagesStore.getState().questionDrafts[key]?.files).toEqual({
+      'question-1': [file],
+    });
+  });
+
+  it('deletes canceled answer files and rejects copies that finish after cancellation', () => {
+    deleteAttachmentFiles.mockClear();
+    const store = useTaskMessagesStore.getState();
+    const key = getQuestionDraftKey('task-1', 'request-1');
+    const file = {
+      type: 'file' as const,
+      filePath: '/repo/.jean-claude/tmp/file.txt',
+      filename: 'file.txt',
+    };
+    store.loadStep('step-1', 'task-1', [], 'running');
+    store.setQuestion('step-1', {
+      taskId: 'task-1',
+      requestId: 'request-1',
+      questions: [],
+    });
+    store.startQuestionFileUploads(key, 2);
+    expect(store.attachQuestionFile(key, 'question-1', file, '/repo')).toBe(true);
+    store.finishQuestionFileUpload(key);
+
+    store.setQuestion('step-1', null);
+
+    expect(deleteAttachmentFiles).toHaveBeenCalledWith({
+      projectPath: '/repo',
+      files: [file],
+    });
+    expect(store.attachQuestionFile(key, 'question-1', file, '/repo')).toBe(false);
+    expect(useTaskMessagesStore.getState().questionDrafts[key]).toBeUndefined();
+    expect(useTaskMessagesStore.getState().questionFileUploads[key]).toBeUndefined();
+  });
+
+  it('keeps submitted files on disk when the question closes during delivery', () => {
+    deleteAttachmentFiles.mockClear();
+    const store = useTaskMessagesStore.getState();
+    const key = getQuestionDraftKey('task-1', 'request-submitted');
+    const file = {
+      type: 'file' as const,
+      filePath: '/repo/.jean-claude/tmp/submitted.txt',
+      filename: 'submitted.txt',
+    };
+    store.loadStep('step-1', 'task-1', [], 'running');
+    store.setQuestion('step-1', {
+      taskId: 'task-1',
+      requestId: 'request-submitted',
+      questions: [],
+    });
+    store.startQuestionFileUploads(key, 1);
+    store.attachQuestionFile(key, 'question-1', file, '/repo');
+    store.finishQuestionFileUpload(key);
+
+    expect(store.tryStartQuestionResponse(key)).toBe(true);
+    store.setQuestion('step-1', null);
+
+    expect(deleteAttachmentFiles).not.toHaveBeenCalled();
+    store.finishQuestionResponse(key);
   });
 
   describe('setBackgroundTasks', () => {

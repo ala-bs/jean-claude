@@ -755,6 +755,7 @@ export const MessageStream = memo(function MessageStream({
                 key={pendingQuestion.request.requestId}
                 request={pendingQuestion.request}
                 onRespond={pendingQuestion.onRespond}
+                projectRoot={rootPath}
               />
             </div>
           )}

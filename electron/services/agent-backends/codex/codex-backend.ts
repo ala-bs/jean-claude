@@ -17,6 +17,7 @@ import type {
 import type { InteractionMode } from '@shared/types';
 import type { NormalizedQuestionRequest } from '@shared/agent-backend-types';
 import type { QuestionResponseMetadata } from '@shared/agent-types';
+import { buildAttachedFilesXml } from '@shared/attached-files';
 import type { ResolvedPermissionRule } from '@shared/permission-types';
 
 import {
@@ -368,7 +369,7 @@ export class CodexBackend implements AgentBackend {
     sessionId: string,
     requestId: string,
     answer: Record<string, string>,
-    _metadata: QuestionResponseMetadata,
+    metadata: QuestionResponseMetadata,
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`No Codex session: ${sessionId}`);
@@ -387,6 +388,7 @@ export class CodexBackend implements AgentBackend {
           content: codexMcpElicitationContentFromAnswers({
             schema: pending.schema,
             answers: answer,
+            files: metadata.files,
           }),
         });
       } finally {
@@ -397,10 +399,13 @@ export class CodexBackend implements AgentBackend {
     }
 
     const answers = Object.fromEntries(
-      pending.request.questions.map((question) => [
-        question.id ?? question.question,
-        { answers: parseQuestionAnswer(answer[question.id ?? question.question]) },
-      ]),
+      pending.request.questions.map((question, index) => {
+        const questionKey = metadata.questionKeys[index];
+        const selected = parseQuestionAnswer(answer[questionKey]);
+        const fileBlock = buildAttachedFilesXml(metadata.files?.[questionKey] ?? []);
+        if (fileBlock) selected.push(fileBlock.trim());
+        return [question.id ?? question.question, { answers: selected }];
+      }),
     );
     await pending.client.respond(pending.rpcId, { answers });
     session.pendingQuestions.delete(requestId);

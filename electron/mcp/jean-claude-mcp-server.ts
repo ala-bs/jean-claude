@@ -24,6 +24,10 @@ import {
 } from './ask-question-bridge';
 
 import type { AgentBackendType } from '@shared/agent-backend-types';
+import {
+  JEAN_CLAUDE_ANSWER_FILES_FIELD,
+  JEAN_CLAUDE_ASK_QUESTION_SCHEMA_DESCRIPTION,
+} from '@shared/attached-files';
 import type { ThinkingEffort } from '@shared/types';
 
 const MAX_DEPTH = 3;
@@ -80,8 +84,13 @@ function buildElicitationSchema(input: {
       }];
     }),
   );
+  properties[JEAN_CLAUDE_ANSWER_FILES_FIELD] = {
+    type: 'string',
+    title: 'Attached answer files',
+  };
   return {
     type: 'object',
+    description: JEAN_CLAUDE_ASK_QUESTION_SCHEMA_DESCRIPTION,
     properties,
     required: input.questions
       .filter((question) => question.required !== false)
@@ -90,9 +99,14 @@ function buildElicitationSchema(input: {
 }
 
 function formatElicitationResult(content: Record<string, unknown>): string {
-  return Object.entries(content)
+  const answers = Object.entries(content)
+    .filter(([key]) => key !== JEAN_CLAUDE_ANSWER_FILES_FIELD)
     .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`)
     .join('\n');
+  const files = content[JEAN_CLAUDE_ANSWER_FILES_FIELD];
+  return typeof files === 'string' && files.trim()
+    ? `${answers}\n\n${files.trim()}`
+    : answers;
 }
 
 function getMcpWorkingDirectory(): string {

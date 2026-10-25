@@ -6,8 +6,10 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BrowserWindow } from 'electron';
+import { buildAttachedFilesXml } from '@shared/attached-files';
 import { createHash } from 'node:crypto';
 import { nanoid } from 'nanoid';
+import path from 'node:path';
 
 import {
   AGENT_CHANNELS,
@@ -259,6 +261,8 @@ function canonicalizeQuestionResponse({
   response: QuestionResponse;
 }): {
   answers: Record<string, string>;
+  plainAnswers: Record<string, string>;
+  files: NonNullable<QuestionResponse['files']>;
   memoryDetails: CanonicalQuestionMemoryDetail[];
   questionKeys: string[];
 } {
@@ -287,6 +291,12 @@ function canonicalizeQuestionResponse({
   }
 
   const questionKeys = getStableQuestionKeys(request.questions);
+  if (
+    response.files !== undefined &&
+    (!response.files || typeof response.files !== 'object' || Array.isArray(response.files))
+  ) {
+    return reject('invalid-file-map');
+  }
   const questionIndexByKey = new Map(
     questionKeys.map((questionKey, index) => [questionKey, index]),
   );
@@ -310,12 +320,40 @@ function canonicalizeQuestionResponse({
   }
 
   const answers: Record<string, string> = {};
+  const plainAnswers: Record<string, string> = {};
   const memoryDetails: CanonicalQuestionMemoryDetail[] = [];
+  for (const key of Object.keys(response.files ?? {})) {
+    if (!questionIndexByKey.has(key)) return reject('unknown-file-question-key');
+  }
   for (const [questionIndex, question] of request.questions.entries()) {
     const questionKey = questionKeys[questionIndex];
     const rendererAnswer = response.answers[questionKey];
     const detail = detailByKey.get(questionKey);
+    const files =
+      response.files && Object.hasOwn(response.files, questionKey)
+        ? response.files[questionKey]
+        : [];
+    if (
+      !Array.isArray(files) ||
+      files.some(
+        (file) =>
+          !file ||
+          file.type !== 'file' ||
+          typeof file.filename !== 'string' ||
+          !file.filename.trim() ||
+          typeof file.filePath !== 'string' ||
+          !path.isAbsolute(file.filePath),
+      )
+    ) {
+      return reject('invalid-answer-files', questionIndex);
+    }
+    if (files.length && question.allowFileAttachments === false) {
+      return reject('attachments-not-supported', questionIndex);
+    }
     if (rendererAnswer === undefined) {
+      if (files.length) {
+        return reject('files-without-answer', questionIndex);
+      }
       if (detail) return reject('detail-without-answer', questionIndex);
       if (question.required ?? true) {
         return reject('missing-required-answer', questionIndex);
@@ -335,7 +373,13 @@ function canonicalizeQuestionResponse({
       return reject('delivered-answer-mismatch', questionIndex);
     }
 
-    answers[questionKey] = expected.answer;
+    const fileBlock = buildAttachedFilesXml(files);
+    plainAnswers[questionKey] = expected.answer;
+    answers[questionKey] = fileBlock
+      ? question.type === 'multi_choice' || question.multiSelect
+        ? JSON.stringify([...JSON.parse(expected.answer), fileBlock.trim()])
+        : `${expected.answer}${fileBlock}`
+      : expected.answer;
     memoryDetails.push({
       ...detail,
       questionKey,
@@ -344,6 +388,8 @@ function canonicalizeQuestionResponse({
   }
   return {
     answers,
+    plainAnswers,
+    files: response.files ?? {},
     memoryDetails,
     // Every question key in the backend's original order, including skipped
     // optional questions. Backends (e.g. OpenCode) map answers positionally, so
@@ -2351,6 +2397,9 @@ class AgentService {
       multiSelect: q.multiSelect,
       ...(q.required !== undefined ? { required: q.required } : {}),
       ...(q.allowFreeform !== undefined ? { allowFreeform: q.allowFreeform } : {}),
+      ...(q.allowFileAttachments !== undefined
+        ? { allowFileAttachments: q.allowFileAttachments }
+        : {}),
     }));
   }
 
@@ -3601,11 +3650,17 @@ class AgentService {
         await questionCapability.respond({
           handle: session.runHandle,
           requestId,
-          answer: canonicalResponse.answers,
+          answer:
+            session.backendType === 'codex'
+              ? canonicalResponse.plainAnswers
+              : canonicalResponse.answers,
           metadata: {
             wasFreeform: questionResponse.wasFreeform,
             wasFreeformByQuestion: questionResponse.wasFreeformByQuestion,
             questionKeys: canonicalResponse.questionKeys,
+            ...(Object.keys(canonicalResponse.files).length > 0
+              ? { files: canonicalResponse.files }
+              : {}),
           },
         });
       }

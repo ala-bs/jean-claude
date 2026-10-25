@@ -10,6 +10,12 @@ import type {
   NormalizedQuestionRequest,
 } from '@shared/agent-backend-types';
 import type { InteractionMode } from '@shared/types';
+import {
+  buildAttachedFilesXml,
+  JEAN_CLAUDE_ANSWER_FILES_FIELD,
+  JEAN_CLAUDE_ASK_QUESTION_SCHEMA_DESCRIPTION,
+} from '@shared/attached-files';
+import type { PromptFilePart } from '@shared/agent-backend-types';
 
 type UserPromptEntry = NormalizedEntry & { type: 'user-prompt' };
 type AssistantEntry = NormalizedEntry & { type: 'assistant-message' };
@@ -72,7 +78,11 @@ export function normalizeCodexMcpElicitation({
   if (!schema || !properties) return undefined;
 
   const required = new Set(stringArray(schema.required));
+  const allowsAttachments =
+    schema.description === JEAN_CLAUDE_ASK_QUESTION_SCHEMA_DESCRIPTION &&
+    Object.hasOwn(properties, JEAN_CLAUDE_ANSWER_FILES_FIELD);
   const questions = Object.entries(properties).flatMap(([id, value]) => {
+    if (allowsAttachments && id === JEAN_CLAUDE_ANSWER_FILES_FIELD) return [];
     const property = record(value);
     if (!property) return [];
     const options = elicitationOptions(property);
@@ -89,6 +99,7 @@ export function normalizeCodexMcpElicitation({
       options,
       multiSelect: isMulti,
       required: required.has(id),
+      allowFileAttachments: allowsAttachments,
     } satisfies NormalizedQuestion];
   });
 
@@ -109,13 +120,19 @@ export function normalizeCodexMcpElicitation({
 export function codexMcpElicitationContentFromAnswers({
   schema,
   answers,
+  files,
 }: {
   schema: Record<string, unknown>;
   answers: Record<string, string>;
+  files?: Record<string, PromptFilePart[]>;
 }): Record<string, unknown> {
   const properties = record(schema.properties) ?? {};
+  const allowsAttachments =
+    schema.description === JEAN_CLAUDE_ASK_QUESTION_SCHEMA_DESCRIPTION &&
+    Object.hasOwn(properties, JEAN_CLAUDE_ANSWER_FILES_FIELD);
   const content: Record<string, unknown> = {};
   for (const [id, value] of Object.entries(properties)) {
+    if (allowsAttachments && id === JEAN_CLAUDE_ANSWER_FILES_FIELD) continue;
     const property = record(value);
     const answer = answers[id];
     if (!property || answer === undefined) continue;
@@ -137,6 +154,18 @@ export function codexMcpElicitationContentFromAnswers({
     } else {
       content[id] = answer;
     }
+  }
+  const attachedFiles = Object.entries(files ?? {})
+    .filter(([, questionFiles]) => questionFiles.length > 0)
+    .map(
+      ([questionKey, questionFiles]) =>
+        `${questionKey}:${buildAttachedFilesXml(questionFiles)}`,
+    );
+  if (attachedFiles.length > 0) {
+    if (!allowsAttachments) {
+      throw new Error('MCP elicitation schema does not support attachments');
+    }
+    content[JEAN_CLAUDE_ANSWER_FILES_FIELD] = attachedFiles.join('\n\n');
   }
   return content;
 }
