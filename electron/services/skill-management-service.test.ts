@@ -249,7 +249,7 @@ describe('skill management project skill discovery', () => {
     await expect(fs.realpath(vibeSymlinkPath)).resolves.toBe(skill.skillPath);
   });
 
-  it('discovers Vibe project skills from .vibe skills only for Vibe', async () => {
+  it('discovers Vibe project skills from both .vibe/skills and .agents/skills', async () => {
     const projectPath = '/project';
     const vibeSkillDir = await writeSkill({
       projectPath,
@@ -257,7 +257,7 @@ describe('skill management project skill discovery', () => {
       dirName: 'project-vibe-skill',
       name: 'project-vibe-skill',
     });
-    await writeSkill({
+    const sharedSkillDir = await writeSkill({
       projectPath,
       relativeDir: '.agents/skills',
       dirName: 'shared-agent-skill',
@@ -277,6 +277,34 @@ describe('skill management project skill discovery', () => {
         enabledBackends: { vibe: true },
       }),
     );
+    // Vibe discovers `.agents/skills` upstream, so JC must report it too,
+    // otherwise the UI hides skills the agent actually loads.
+    expect(skills).toContainEqual(
+      expect.objectContaining({
+        name: 'shared-agent-skill',
+        source: 'project',
+        skillPath: sharedSkillDir,
+        enabledBackends: { vibe: true },
+      }),
+    );
+  });
+
+  it('does not discover .agents/skills for claude-code', async () => {
+    const projectPath = '/project';
+    await writeSkill({
+      projectPath,
+      relativeDir: '.agents/skills',
+      dirName: 'shared-agent-skill',
+      name: 'shared-agent-skill',
+    });
+
+    const skills = await getAllManagedSkills({
+      backendType: 'claude-code',
+      projectPath,
+    });
+
+    // Claude Code only loads `.claude/skills`, so listing `.agents/skills`
+    // would show skills the agent would never pick up.
     expect(skills.map((skill) => skill.name)).not.toContain(
       'shared-agent-skill',
     );

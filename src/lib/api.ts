@@ -723,7 +723,10 @@ export interface Api {
     updateCommitIgnore: (projectId: string, content: string) => Promise<void>;
     getDetected: () => Promise<DetectedProject[]>;
     detectLogos: (projectPath: string) => Promise<DetectedProjectLogo[]>;
-    getSkills: (projectId: string) => Promise<Skill[]>;
+    getSkills: (
+      projectId: string,
+      backendType?: AgentBackendType | null,
+    ) => Promise<Skill[]>;
   };
   agentMemory: {
     getDashboard: (params: {

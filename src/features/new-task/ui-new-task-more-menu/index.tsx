@@ -19,7 +19,7 @@ export function NewTaskMoreMenu({ projectId }: { projectId: string | null }) {
     if (!projectId) return;
     setIsReloading(true);
     void queryClient
-      .refetchQueries({ queryKey: skillsQueryKeys.byProject(projectId) })
+      .refetchQueries({ queryKey: skillsQueryKeys.projectPrefix(projectId) })
       .finally(() => setIsReloading(false));
   }, [projectId, queryClient]);
 

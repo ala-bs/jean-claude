@@ -93,6 +93,7 @@ import type {
   TimesheetRowUpdate,
   TimesheetSyncParams,
 } from '@shared/timesheet-types';
+import type { AgentBackendType } from '@shared/agent-backend-types';
 import { AGENT_CHANNELS } from '@shared/agent-types';
 import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
@@ -247,8 +248,8 @@ contextBridge.exposeInMainWorld('api', {
     getDetected: () => ipcRenderer.invoke('projects:getDetected'),
     detectLogos: (projectPath: string) =>
       ipcRenderer.invoke('projects:detectLogos', projectPath),
-    getSkills: (projectId: string) =>
-      ipcRenderer.invoke('projects:getSkills', projectId),
+    getSkills: (projectId: string, backendType?: AgentBackendType | null) =>
+      ipcRenderer.invoke('projects:getSkills', projectId, backendType),
   },
   agentMemory: {
     getDashboard: (params: {
