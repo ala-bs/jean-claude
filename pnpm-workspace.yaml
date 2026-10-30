@@ -12,6 +12,6 @@ enablePrePostScripts: true
 # ambient node. Keeps `engines.node` satisfied and stops pnpm from wiping
 # node_modules whenever the Node major changes between installs.
 # Keep in sync with .nvmrc / .node-version / .tool-versions.
-nodeVersion: 22.23.1
+nodeVersion: 22.23.4
 overrides:
-  node-abi: 4.33.0
+  node-abi: 4.40.0

@@ -6,7 +6,7 @@
   "main": "./out/main/index.js",
   "packageManager": "pnpm@11.25.0",
   "volta": {
-    "node": "22.23.1",
+    "node": "22.23.4",
     "pnpm": "11.25.0"
   },
   "engines": {
@@ -70,7 +70,7 @@
     "@yume-chan/scrcpy-decoder-webcodecs": "^2.5.3",
     "@yume-chan/stream-extra": "2.1.0",
     "anser": "^2.3.5",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.3",
     "cheerio": "1.0.0",
     "clsx": "^2.1.1",
     "debug": "^4.4.3",
@@ -175,7 +175,7 @@
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.2.0",
     "babel-plugin-react-compiler": "^1.0.0",
-    "electron": "42.7.0",
+    "electron": "45.1.0",
     "electron-builder": "^26.4.0",
     "electron-vite": "^5.0.0",
     "happy-dom": "^20.10.6",
