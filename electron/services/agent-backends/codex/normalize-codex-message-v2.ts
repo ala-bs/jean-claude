@@ -13,7 +13,6 @@ import type { InteractionMode } from '@shared/types';
 import {
   buildAttachedFilesXml,
   JEAN_CLAUDE_ANSWER_FILES_FIELD,
-  JEAN_CLAUDE_ASK_QUESTION_SCHEMA_DESCRIPTION,
 } from '@shared/attached-files';
 import type { PromptFilePart } from '@shared/agent-backend-types';
 
@@ -78,9 +77,10 @@ export function normalizeCodexMcpElicitation({
   if (!schema || !properties) return undefined;
 
   const required = new Set(stringArray(schema.required));
-  const allowsAttachments =
-    schema.description === JEAN_CLAUDE_ASK_QUESTION_SCHEMA_DESCRIPTION &&
-    Object.hasOwn(properties, JEAN_CLAUDE_ANSWER_FILES_FIELD);
+  const allowsAttachments = Object.hasOwn(
+    properties,
+    JEAN_CLAUDE_ANSWER_FILES_FIELD,
+  );
   const questions = Object.entries(properties).flatMap(([id, value]) => {
     if (allowsAttachments && id === JEAN_CLAUDE_ANSWER_FILES_FIELD) return [];
     const property = record(value);
@@ -127,9 +127,10 @@ export function codexMcpElicitationContentFromAnswers({
   files?: Record<string, PromptFilePart[]>;
 }): Record<string, unknown> {
   const properties = record(schema.properties) ?? {};
-  const allowsAttachments =
-    schema.description === JEAN_CLAUDE_ASK_QUESTION_SCHEMA_DESCRIPTION &&
-    Object.hasOwn(properties, JEAN_CLAUDE_ANSWER_FILES_FIELD);
+  const allowsAttachments = Object.hasOwn(
+    properties,
+    JEAN_CLAUDE_ANSWER_FILES_FIELD,
+  );
   const content: Record<string, unknown> = {};
   for (const [id, value] of Object.entries(properties)) {
     if (allowsAttachments && id === JEAN_CLAUDE_ANSWER_FILES_FIELD) continue;

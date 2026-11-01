@@ -218,9 +218,11 @@ describe('CodexBackend', () => {
         threadId: 'thread-1',
         turnId: 'turn-1',
         mode: 'form',
+        // Mirrors what `buildAskQuestionElicitationSchema` sends: no root key
+        // beyond type/properties/required, because codex-cli cancels a form
+        // elicitation whose root schema carries anything else.
         requestedSchema: {
           type: 'object',
-          description: 'Jean-Claude ask_question form',
           properties: {
             target: { type: 'string', enum: ['staging', 'production'] },
             __jean_claude_answer_files: { type: 'string' },
