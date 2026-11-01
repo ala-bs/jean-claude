@@ -313,6 +313,18 @@ describe('ModelProfilesSettings', () => {
     expect(lastProfiles()[0].name).toBe('Cheap');
   });
 
+  it('reorders profiles while preserving the active profile', () => {
+    state.profiles = [profile(), profile({ id: 'p2', name: 'Codex' })];
+    state.activeProfileId = 'p1';
+    render(<ModelProfilesSettings />);
+
+    expect(queryByLabel('Reorder profile Anthropic')).not.toBeNull();
+    click(queryByLabel('Move profile Anthropic down'));
+
+    expect(lastProfiles().map((entry) => entry.id)).toEqual(['p2', 'p1']);
+    expect(queryByLabel('Anthropic is active')).not.toBeNull();
+  });
+
   it('deletes a profile', () => {
     state.profiles = [profile(), profile({ id: 'p2', name: 'Codex' })];
     state.activeProfileId = 'p1';
