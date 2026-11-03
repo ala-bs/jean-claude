@@ -3755,13 +3755,24 @@ export async function setPullRequestAutoComplete(params: {
 
   if (!response.ok) {
     const error = await response.text();
+    // The PR may have merged after the cached active state was read. Azure
+    // rejects edits to completed PRs, so confirm its current state before
+    // reporting an auto-complete failure.
+    if (params.enabled && error.includes('TF401181')) {
+      try {
+        const currentPr = await getPullRequest(params);
+        if (currentPr.status === 'completed') return currentPr;
+      } catch {
+        // Preserve the original PATCH error if the follow-up read also fails.
+      }
+    }
     throw new Error(`Failed to set auto-complete: ${error}`);
   }
 
   const pr: PullRequestResponse = await response.json();
   const isAutoCompleteSet = !!pr.autoCompleteSetBy;
 
-  if (params.enabled && !isAutoCompleteSet) {
+  if (params.enabled && !isAutoCompleteSet && pr.status !== 'completed') {
     throw new Error(
       'Azure DevOps accepted the request but did not enable auto-complete',
     );

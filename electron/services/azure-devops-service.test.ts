@@ -1942,6 +1942,77 @@ describe('setPullRequestAutoComplete', () => {
     vi.clearAllMocks();
   });
 
+  it('returns the current PR when Azure rejects arming because it already merged', async () => {
+    const currentPr = {
+      pullRequestId: 123,
+      title: 'Test PR',
+      status: 'completed',
+      isDraft: false,
+      createdBy: { id: 'owner-id', displayName: 'PR Owner', uniqueName: 'owner@example.com' },
+      creationDate: '2026-01-01T00:00:00Z',
+      sourceRefName: 'refs/heads/feature',
+      targetRefName: 'refs/heads/main',
+    };
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse({ message: 'TF401181: The pull request cannot be edited due to its state.' }, { ok: false, status: 400 }))
+      .mockResolvedValueOnce(jsonResponse(currentPr, { ok: true }));
+
+    await expect(setPullRequestAutoComplete({
+      providerId: 'provider-1',
+      projectId: 'project',
+      repoId: 'repo',
+      pullRequestId: 123,
+      enabled: true,
+      autoCompleteSetById: 'owner-id',
+    })).resolves.toMatchObject({ id: 123, status: 'completed' });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(fetch).mock.calls[1]?.[1]).not.toHaveProperty('method', 'PATCH');
+  });
+
+  it('accepts a completed PR returned by a successful arm request', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({
+      pullRequestId: 123,
+      title: 'Test PR',
+      status: 'completed',
+      isDraft: false,
+      createdBy: { id: 'owner-id', displayName: 'PR Owner', uniqueName: 'owner@example.com' },
+      creationDate: '2026-01-01T00:00:00Z',
+      sourceRefName: 'refs/heads/feature',
+      targetRefName: 'refs/heads/main',
+    }, { ok: true }));
+
+    await expect(setPullRequestAutoComplete({
+      providerId: 'provider-1',
+      projectId: 'project',
+      repoId: 'repo',
+      pullRequestId: 123,
+      enabled: true,
+    })).resolves.toMatchObject({ id: 123, status: 'completed' });
+  });
+
+  it('preserves the edit error when the PR is still active', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse({ message: 'TF401181: The pull request cannot be edited due to its state.' }, { ok: false, status: 400 }))
+      .mockResolvedValueOnce(jsonResponse({
+        pullRequestId: 123,
+        title: 'Test PR',
+        status: 'active',
+        isDraft: false,
+        createdBy: { id: 'owner-id', displayName: 'PR Owner', uniqueName: 'owner@example.com' },
+        creationDate: '2026-01-01T00:00:00Z',
+        sourceRefName: 'refs/heads/feature',
+        targetRefName: 'refs/heads/main',
+      }, { ok: true }));
+
+    await expect(setPullRequestAutoComplete({
+      providerId: 'provider-1',
+      projectId: 'project',
+      repoId: 'repo',
+      pullRequestId: 123,
+      enabled: true,
+    })).rejects.toThrow('TF401181');
+  });
+
   it('sends optional policy ids in completion options', async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse(
