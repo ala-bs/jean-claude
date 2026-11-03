@@ -1,4 +1,5 @@
 import type { PromptFilePart } from '@shared/agent-backend-types';
+export { buildAttachedFilesXml } from '@shared/attached-files';
 
 export const MAX_FILE_ATTACHMENT_SIZE = 50 * 1024 * 1024; // 50 MB
 export const MAX_INLINE_PASTED_PROMPT_LENGTH = 10_000;
@@ -27,15 +28,6 @@ function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
-/** Escape a string for safe use inside an XML attribute value. */
-function escapeXmlAttr(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
-}
-
 function getPathBasename(filePath: string): string {
   return filePath.split(/[\\/]/).pop() || filePath;
 }
@@ -44,17 +36,6 @@ function getPathBasename(filePath: string): string {
  * Build an `<attached_files>` XML block from file parts.
  * Returns empty string if no files.
  */
-export function buildAttachedFilesXml(files: PromptFilePart[]): string {
-  if (files.length === 0) return '';
-  const entries = files
-    .map(
-      (f) =>
-        `  <file name="${escapeXmlAttr(f.filename)}" path="${escapeXmlAttr(f.filePath)}" />`,
-    )
-    .join('\n');
-  return `\n\n<attached_files>\n${entries}\n</attached_files>`;
-}
-
 /**
  * Process a dropped/picked file by copying it to .jean-claude/tmp/ via IPC.
  */

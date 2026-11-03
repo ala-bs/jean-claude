@@ -250,6 +250,28 @@ describe('askQuestionViaBridge', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('reserves the internal answer-files question id', async () => {
+    const env = await createQuestionBridgeEnv();
+    const fetchImpl = vi.fn();
+
+    await expect(
+      askQuestionViaBridge({
+        input: {
+          questions: [
+            {
+              id: '__jean_claude_answer_files',
+              label: 'Question',
+              type: 'text',
+            },
+          ],
+        },
+        env,
+        fetchImpl,
+      }),
+    ).rejects.toThrow('Question id is reserved for answer attachments');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('rejects a blank context reminder', async () => {
     const env = await createQuestionBridgeEnv();
     const fetchImpl = vi.fn();

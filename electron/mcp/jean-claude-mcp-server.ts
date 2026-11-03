@@ -24,6 +24,10 @@ import {
 } from './ask-question-bridge';
 
 import type { AgentBackendType } from '@shared/agent-backend-types';
+import {
+  buildAskQuestionElicitationSchema,
+  JEAN_CLAUDE_ANSWER_FILES_FIELD,
+} from '@shared/attached-files';
 import type { ThinkingEffort } from '@shared/types';
 
 const MAX_DEPTH = 3;
@@ -54,45 +58,15 @@ function isCodexElicitationEnabled(): boolean {
   return process.env.JC_MCP_USE_CODEX_ELICITATION === '1';
 }
 
-function buildElicitationSchema(input: {
-  questions: Array<{
-    id: string;
-    label: string;
-    type: 'single_choice' | 'multi_choice' | 'text';
-    options?: Array<{ label: string }>;
-    required?: boolean;
-  }>;
-}): ElicitRequestFormParams['requestedSchema'] {
-  const properties = Object.fromEntries(
-    input.questions.map((question) => {
-      const options = question.options ?? [];
-      if (question.type === 'multi_choice') {
-        return [question.id, {
-          type: 'array',
-          title: question.label,
-          items: { type: 'string', enum: options.map((option) => option.label) },
-        }];
-      }
-      return [question.id, {
-        type: 'string',
-        title: question.label,
-        ...(options.length > 0 ? { enum: options.map((option) => option.label) } : {}),
-      }];
-    }),
-  );
-  return {
-    type: 'object',
-    properties,
-    required: input.questions
-      .filter((question) => question.required !== false)
-      .map((question) => question.id),
-  } as ElicitRequestFormParams['requestedSchema'];
-}
-
 function formatElicitationResult(content: Record<string, unknown>): string {
-  return Object.entries(content)
+  const answers = Object.entries(content)
+    .filter(([key]) => key !== JEAN_CLAUDE_ANSWER_FILES_FIELD)
     .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`)
     .join('\n');
+  const files = content[JEAN_CLAUDE_ANSWER_FILES_FIELD];
+  return typeof files === 'string' && files.trim()
+    ? `${answers}\n\n${files.trim()}`
+    : answers;
 }
 
 function getMcpWorkingDirectory(): string {
@@ -501,7 +475,9 @@ async function main(): Promise<void> {
               params: {
                 mode: 'form',
                 message: input.contextReminder ?? 'Please answer the following questions.',
-                requestedSchema: buildElicitationSchema(input),
+                requestedSchema: buildAskQuestionElicitationSchema(
+                  input,
+                ) as ElicitRequestFormParams['requestedSchema'],
               },
             },
             ElicitResultSchema,

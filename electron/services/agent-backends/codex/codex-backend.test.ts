@@ -202,6 +202,70 @@ describe('CodexBackend', () => {
     });
   });
 
+  it('returns Jean-Claude answer files in a separate elicitation field', async () => {
+    const { backend, client, emitRequest } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Ask through Jean-Claude MCP' },
+    ]);
+    const events = session.events[Symbol.asyncIterator]();
+    await events.next();
+    const nextEvent = events.next();
+
+    emitRequest({
+      id: 'elicitation-files',
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        mode: 'form',
+        // Mirrors what `buildAskQuestionElicitationSchema` sends: no root key
+        // beyond type/properties/required, because codex-cli cancels a form
+        // elicitation whose root schema carries anything else.
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            target: { type: 'string', enum: ['staging', 'production'] },
+            __jean_claude_answer_files: { type: 'string' },
+          },
+          required: ['target'],
+        },
+      },
+    });
+    await expect(nextEvent).resolves.toMatchObject({
+      value: {
+        type: 'question',
+        request: {
+          questions: [
+            { id: 'target', allowFileAttachments: true },
+          ],
+        },
+      },
+    });
+
+    await backend.respondToQuestion(
+      session.sessionId,
+      'elicitation-files',
+      { target: 'production' },
+      {
+        questionKeys: ['target'],
+        files: {
+          target: [
+            { type: 'file', filename: 'plan.txt', filePath: '/tmp/plan.txt' },
+          ],
+        },
+      },
+    );
+    expect(client.respond).toHaveBeenCalledWith('elicitation-files', {
+      action: 'accept',
+      content: {
+        target: 'production',
+        __jean_claude_answer_files: expect.stringContaining(
+          'path="/tmp/plan.txt"',
+        ),
+      },
+    });
+  });
+
   // The payload below is the verified codex-cli 0.155.0 shape: `_meta` carries
   // `tool_description`/`tool_params`/`persist` but NO `tool_name`, and
   // `requestedSchema.properties` is empty. The tool name is only available from

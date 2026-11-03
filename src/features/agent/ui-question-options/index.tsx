@@ -1,9 +1,10 @@
-import { Check, Plus, Sparkles } from 'lucide-react';
+import { Check, Paperclip, Plus, Sparkles, X } from 'lucide-react';
 import {
   memo,
   startTransition,
   useCallback,
   useEffect,
+  useId,
   useState,
 } from 'react';
 
@@ -23,12 +24,93 @@ import {
   type QuestionDraft,
   useTaskMessagesStore,
 } from '@/stores/task-messages';
+import { deleteAttachmentFiles } from '@/lib/prompt-attachment-cleanup';
 import { Kbd } from '@/common/ui/kbd';
 import { MarkdownContent } from '@/features/agent/ui-markdown-content';
+import { processAttachmentFile } from '@/lib/file-attachment-utils';
+import type { PromptFilePart } from '@shared/agent-backend-types';
 import { Textarea } from '@/common/ui/textarea';
 import { useCommands } from '@/common/hooks/use-commands';
 
 const EMPTY_ANSWERS: Record<string, string> = {};
+const EMPTY_FILES: PromptFilePart[] = [];
+
+function QuestionAttachments({
+  files,
+  projectRoot,
+  disabled,
+  onAttach,
+  onRemove,
+  onUploadingChange,
+}: {
+  files: PromptFilePart[];
+  projectRoot?: string | null;
+  disabled?: boolean;
+  onAttach: (file: PromptFilePart) => void;
+  onRemove: (file: PromptFilePart) => void;
+  onUploadingChange: (delta: number) => void;
+}) {
+  const inputId = useId();
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <div className="space-y-1.5">
+      <input
+        id={inputId}
+        type="file"
+        multiple
+        className="sr-only"
+        disabled={!projectRoot || disabled}
+        onChange={(event) => {
+          const selected = Array.from(event.currentTarget.files ?? []);
+          event.currentTarget.value = '';
+          if (!projectRoot || disabled || selected.length === 0) return;
+          setError(null);
+          onUploadingChange(selected.length);
+          for (const file of selected) {
+            void processAttachmentFile(
+              file,
+              projectRoot,
+              onAttach,
+              setError,
+            ).finally(() => onUploadingChange(-1));
+          }
+        }}
+      />
+      <label
+        htmlFor={inputId}
+        className={`inline-flex items-center gap-1 text-xs font-medium text-ink-3 ${projectRoot && !disabled ? 'cursor-pointer hover:text-ink-1' : 'cursor-not-allowed opacity-50'}`}
+      >
+        <Paperclip className="h-3 w-3" /> Attach files
+      </label>
+      {files.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {files.map((file) => (
+            <span
+              key={file.filePath}
+              className="inline-flex max-w-full items-center gap-1 rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-xs text-ink-2"
+            >
+              <span className="truncate">{file.filename}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${file.filename}`}
+                onClick={() => onRemove(file)}
+                className="text-ink-3 hover:text-ink-0"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="text-xs text-red-300">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function RecommendedBadge() {
   return (
@@ -42,12 +124,15 @@ function isQuestionAnswered({
   question,
   value,
   other,
+  hasFiles = false,
 }: {
   question: AgentQuestion;
   value: string | undefined;
   other: string | undefined;
+  hasFiles?: boolean;
 }) {
-  if (question.required === false) return true;
+  // An optional question can be skipped, but files must accompany an answer.
+  if (question.required === false && !hasFiles) return true;
   if (other?.trim()) return true;
   if (value === undefined) return false;
   if (getQuestionInputMode(question) === 'multi-choice') {
@@ -451,6 +536,7 @@ export function QuestionContextReminder({ content }: { content?: string }) {
 export function QuestionOptions({
   request,
   onRespond,
+  projectRoot,
 }: {
   request: {
     taskId: string;
@@ -462,6 +548,7 @@ export function QuestionOptions({
     requestId: string,
     response: QuestionResponse,
   ) => void | Promise<void | boolean>;
+  projectRoot?: string | null;
 }) {
   const draftKey = getQuestionDraftKey(request.taskId, request.requestId);
   const draft = useTaskMessagesStore((state) => state.questionDrafts[draftKey]);
@@ -470,6 +557,21 @@ export function QuestionOptions({
   );
   const clearQuestionDraft = useTaskMessagesStore(
     (state) => state.clearQuestionDraft,
+  );
+  const uploadingCount = useTaskMessagesStore(
+    (state) => state.questionFileUploads[draftKey] ?? 0,
+  );
+  const isResponding = useTaskMessagesStore(
+    (state) => !!state.questionResponsesInFlight[draftKey],
+  );
+  const startQuestionFileUploads = useTaskMessagesStore(
+    (state) => state.startQuestionFileUploads,
+  );
+  const finishQuestionFileUpload = useTaskMessagesStore(
+    (state) => state.finishQuestionFileUpload,
+  );
+  const attachQuestionFile = useTaskMessagesStore(
+    (state) => state.attachQuestionFile,
   );
   const tryStartQuestionResponse = useTaskMessagesStore(
     (state) => state.tryStartQuestionResponse,
@@ -480,6 +582,7 @@ export function QuestionOptions({
   const answers = draft?.answers ?? EMPTY_ANSWERS;
   const otherAnswers = draft?.otherAnswers ?? EMPTY_ANSWERS;
   const notes = draft?.notes ?? EMPTY_ANSWERS;
+  const files = draft?.files;
   const [notesOpenByQuestion, setNotesOpenByQuestion] = useState<
     Record<string, boolean>
   >({});
@@ -512,6 +615,34 @@ export function QuestionOptions({
     (update: (draft: QuestionDraft) => QuestionDraft) =>
       updateQuestionDraft(draftKey, update),
     [draftKey, updateQuestionDraft],
+  );
+
+  const attachFile = useCallback(
+    (questionKey: string, file: PromptFilePart) => {
+      if (
+        !projectRoot ||
+        !attachQuestionFile(draftKey, questionKey, file, projectRoot)
+      ) {
+        void deleteAttachmentFiles({ projectPath: projectRoot, files: [file] });
+      }
+    },
+    [attachQuestionFile, draftKey, projectRoot],
+  );
+
+  const removeFile = useCallback(
+    (questionKey: string, file: PromptFilePart) => {
+      updateDraft((prev) => ({
+        ...prev,
+        files: {
+          ...prev.files,
+          [questionKey]: (prev.files?.[questionKey] ?? []).filter(
+            (candidate) => candidate.filePath !== file.filePath,
+          ),
+        },
+      }));
+      void deleteAttachmentFiles({ projectPath: projectRoot, files: [file] });
+    },
+    [projectRoot, updateDraft],
   );
 
   useEffect(() => {
@@ -789,6 +920,7 @@ export function QuestionOptions({
       question,
       value: answers[key],
       other: otherAnswers[key],
+      hasFiles: (files?.[key]?.length ?? 0) > 0,
     });
   });
   const answeredCount = request.questions.filter((question) => {
@@ -797,11 +929,12 @@ export function QuestionOptions({
       question,
       value: answers[key],
       other: otherAnswers[key],
+      hasFiles: (files?.[key]?.length ?? 0) > 0,
     });
   }).length;
 
   const submitAnswers = async () => {
-    if (!allAnswered) return;
+    if (!allAnswered || uploadingCount > 0) return;
     // Keyed per request, not per task: sibling steps of the same task can each
     // have their own question in flight concurrently.
     if (!tryStartQuestionResponse(draftKey)) return;
@@ -824,16 +957,16 @@ export function QuestionOptions({
         }
       }
 
-      const responseResult = await onRespond(
-        request.requestId,
-        buildQuestionResponse({
+      const responseResult = await onRespond(request.requestId, {
+        ...buildQuestionResponse({
           questions: request.questions,
           answers,
           customAnswers: otherAnswers,
           notes,
           wasFreeformByQuestion: effectiveWasFreeformByQuestion,
         }),
-      );
+        files,
+      });
       if (responseResult !== false) {
         clearQuestionDraft(draftKey, draft ?? null);
       }
@@ -843,7 +976,7 @@ export function QuestionOptions({
   };
 
   const handleSubmit = () => {
-    if (!allAnswered) return false;
+    if (!allAnswered || uploadingCount > 0) return false;
     void submitAnswers();
     return true;
   };
@@ -924,6 +1057,19 @@ export function QuestionOptions({
                 onOpenNotes={openNotes}
                 onCloseNotes={closeNotes}
               />
+              {question.allowFileAttachments !== false && (
+                <QuestionAttachments
+                  files={files?.[questionKey] ?? EMPTY_FILES}
+                  projectRoot={projectRoot}
+                  disabled={isResponding}
+                  onAttach={(file) => attachFile(questionKey, file)}
+                  onRemove={(file) => removeFile(questionKey, file)}
+                  onUploadingChange={(delta) => {
+                    if (delta > 0) startQuestionFileUploads(draftKey, delta);
+                    else finishQuestionFileUpload(draftKey);
+                  }}
+                />
+              )}
               </section>
             );
           })}
@@ -932,7 +1078,7 @@ export function QuestionOptions({
           <button
             type="button"
             onClick={submitAnswers}
-            disabled={!allAnswered}
+            disabled={!allAnswered || uploadingCount > 0}
             className="flex items-center gap-2 rounded-lg bg-teal-300 px-3 py-1.5 text-[13px] font-bold text-bg-0 transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-ink-3 disabled:hover:brightness-100"
           >
             Submit answers

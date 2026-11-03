@@ -1,10 +1,6 @@
 import { create } from 'zustand';
 
-import {
-  acceptsRunCommandLogGeneration,
-  type RunCommandLogStream,
-  type RunStatus,
-} from '@shared/run-command-types';
+import type { PromptFilePart } from '@shared/agent-backend-types';
 import type {
   AgentBackgroundTask,
   AgentQuestion,
@@ -14,8 +10,14 @@ import type {
   NormalizedEntry,
   NormalizedPermissionRequest,
 } from '@shared/normalized-message-v2';
+import {
+  acceptsRunCommandLogGeneration,
+  type RunCommandLogStream,
+  type RunStatus,
+} from '@shared/run-command-types';
 import type { TaskStatus, TaskStepStatus } from '@shared/types';
 
+import { deleteAttachmentFiles } from '@/lib/prompt-attachment-cleanup';
 import { clearReviewCommentsForTask } from './review-comments';
 import { parseRunCommandLogBatch } from './utils-run-command-log-parser';
 
@@ -133,12 +135,29 @@ function removeQuestionStateForTask(
   keepDraftKeys?: Iterable<string>,
 ) {
   const keepKeys = new Set(keepDraftKeys ?? []);
+  for (const [key, draft] of Object.entries(state.questionDrafts)) {
+    if (
+      isQuestionStateForTask(key, taskId) &&
+      !keepKeys.has(key) &&
+      !state.questionResponsesInFlight[key]
+    ) {
+      void deleteAttachmentFiles({
+        projectPath: draft.attachmentProjectRoot,
+        files: Object.values(draft.files ?? {}).flat(),
+      });
+    }
+  }
   const questionDrafts = Object.fromEntries(
     Object.entries(state.questionDrafts).filter(
       ([key]) => keepKeys.has(key) || !isQuestionStateForTask(key, taskId),
     ),
   );
-  return { questionDrafts };
+  const questionFileUploads = Object.fromEntries(
+    Object.entries(state.questionFileUploads).filter(
+      ([key]) => keepKeys.has(key) || !isQuestionStateForTask(key, taskId),
+    ),
+  );
+  return { questionDrafts, questionFileUploads };
 }
 
 function areRunCommandPortsEqual(
@@ -178,6 +197,8 @@ export interface QuestionDraft {
   answers: Record<string, string>;
   otherAnswers: Record<string, string>;
   notes: Record<string, string>;
+  files?: Record<string, Array<{ type: 'file'; filePath: string; filename: string }>>;
+  attachmentProjectRoot?: string;
 }
 
 export function getQuestionDraftKey(taskId: string, requestId: string): string {
@@ -283,6 +304,7 @@ interface TaskMessagesStore {
   /** Latest mobile preview build result per task, retained after process exit. */
   mobileBuildStatuses: Record<string, MobileBuildStatus>;
   questionDrafts: Record<string, QuestionDraft>;
+  questionFileUploads: Record<string, number>;
   questionResponsesInFlight: Record<string, boolean>;
   /** True after initial run-command status discovery settles. */
   areRunCommandStatusesHydrated: boolean;
@@ -327,6 +349,14 @@ interface TaskMessagesStore {
     update: (draft: QuestionDraft) => QuestionDraft,
   ) => void;
   clearQuestionDraft: (key: string, expected?: QuestionDraft | null) => void;
+  startQuestionFileUploads: (key: string, count: number) => void;
+  finishQuestionFileUpload: (key: string) => void;
+  attachQuestionFile: (
+    key: string,
+    questionKey: string,
+    file: PromptFilePart,
+    projectRoot: string,
+  ) => boolean;
   tryStartQuestionResponse: (key: string) => boolean;
   finishQuestionResponse: (key: string) => void;
   setQueuedPrompts: (stepId: string, queuedPrompts: QueuedPrompt[]) => void;
@@ -559,6 +589,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
   runCommandRunning: {},
   mobileBuildStatuses: {},
   questionDrafts: {},
+  questionFileUploads: {},
   questionResponsesInFlight: {},
   areRunCommandStatusesHydrated: false,
   cacheLimit: DEFAULT_CACHE_LIMIT,
@@ -832,6 +863,41 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
       void _removed;
       return { questionDrafts: rest };
     });
+  },
+
+  startQuestionFileUploads: (key, count) => {
+    set((state) => ({
+      questionFileUploads: {
+        ...state.questionFileUploads,
+        [key]: (state.questionFileUploads[key] ?? 0) + count,
+      },
+    }));
+  },
+
+  finishQuestionFileUpload: (key) => {
+    set((state) => {
+      const count = state.questionFileUploads[key];
+      if (!count) return state;
+      const { [key]: _finished, ...remaining } = state.questionFileUploads;
+      void _finished;
+      return {
+        questionFileUploads:
+          count > 1 ? { ...remaining, [key]: count - 1 } : remaining,
+      };
+    });
+  },
+
+  attachQuestionFile: (key, questionKey, file, projectRoot) => {
+    if (!get().questionFileUploads[key]) return false;
+    get().updateQuestionDraft(key, (draft) => ({
+      ...draft,
+      attachmentProjectRoot: projectRoot,
+      files: {
+        ...draft.files,
+        [questionKey]: [...(draft.files?.[questionKey] ?? []), file],
+      },
+    }));
+    return true;
   },
 
   tryStartQuestionResponse: (key) => {

@@ -187,6 +187,7 @@ export interface AgentQuestion {
   multiSelect: boolean;
   required?: boolean;
   allowFreeform?: boolean;
+  allowFileAttachments?: boolean;
 }
 
 export interface QuestionRequest {
@@ -211,6 +212,8 @@ export interface PermissionResponse {
 
 export interface QuestionResponse {
   answers: Record<string, string>;
+  /** Files supplied with each answer, keyed by the stable question key. */
+  files?: Record<string, Array<{ type: 'file'; filePath: string; filename: string }>>;
   wasFreeform?: boolean;
   wasFreeformByQuestion?: Record<string, boolean>;
   memoryDetails: AgentMemoryQuestionResponseDetail[];
@@ -221,6 +224,7 @@ export type QuestionResponseMetadata = Pick<
   'wasFreeform' | 'wasFreeformByQuestion'
 > & {
   questionKeys: string[];
+  files?: QuestionResponse['files'];
 };
 
 /**

@@ -99,7 +99,10 @@ const SKILL_PATH_CONFIGS: Record<
   vibe: {
     userSkillsDir: path.join(os.homedir(), '.vibe', 'skills'),
     projectSkillsDir: '.vibe/skills',
-    projectSkillsDirs: ['.vibe/skills'],
+    // Vibe discovers the shared `.agents/skills` location upstream, so list it
+    // for read-only discovery to keep the UI in sync with what the agent loads.
+    // `projectSkillsDir` stays `.vibe/skills` — that remains the write target.
+    projectSkillsDirs: ['.vibe/skills', '.agents/skills'],
   },
 };
 

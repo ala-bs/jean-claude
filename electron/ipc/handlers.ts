@@ -1927,20 +1927,29 @@ export function registerIpcHandlers() {
       await updateProjectCommitIgnore({ projectPath: project.path, content });
     },
   );
-  ipcMain.handle('projects:getSkills', async (_, projectId: string) => {
+  ipcMain.handle(
+    'projects:getSkills',
+    async (
+      _,
+      projectId: string,
+      backendTypeOverride?: AgentBackendType | null,
+    ) => {
     const project = await ProjectRepository.findById(projectId);
     if (!project) {
       throw new Error(`Project ${projectId} not found`);
     }
+    // The caller (e.g. the new-task overlay) may have a backend selected that
+    // differs from the project's `agent` role, so prefer its explicit choice.
+    const backendType =
+      backendTypeOverride && VALID_SKILL_BACKENDS.has(backendTypeOverride)
+        ? backendTypeOverride
+        : await resolveProjectAgentBackend(project.id);
     dbg.ipc(
-      'projects:getSkills for project: %s, path: %s',
+      'projects:getSkills for project: %s, path: %s, backend: %s',
       projectId,
       project.path,
+      backendType,
     );
-    const backendType = await resolveProjectAgentBackend(project.id);
-    if (backendType === 'vibe') {
-      return [];
-    }
     const managed = await getAllManagedSkills({
       backendType,
       projectPath: project.path,
@@ -1954,7 +1963,8 @@ export function registerIpcHandlers() {
         pluginName,
         skillPath,
       }));
-  });
+    },
+  );
 
   ipcMain.handle(
     'agentMemory:getDashboard',
@@ -7241,10 +7251,6 @@ export function registerIpcHandlers() {
 
       const backendType: AgentBackendType =
         stepBackend ?? (await resolveProjectAgentBackend(task.projectId));
-
-      if (backendType === 'vibe') {
-        return [];
-      }
 
       // Resolve project path (prefer worktree path, fall back to project path)
       const projectPath = task.worktreePath ?? project?.path;

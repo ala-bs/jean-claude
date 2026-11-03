@@ -655,9 +655,6 @@ export function NewTaskOverlay({
     }),
     [selectedProject],
   );
-  const { data: projectSkills = [] } = useProjectSkills(
-    selectedProjectId ?? undefined,
-  );
   const isNoteMode = selectedProjectId === null;
   const { data: selectedProjectFeatureMap = null } =
     useProjectFeatureMap(selectedProjectId);
@@ -983,6 +980,10 @@ export function NewTaskOverlay({
   // Null until the enabled-backend list has loaded: resolving against an empty
   // list would fall back to a backend the user may not even have enabled.
   const currentBackend = backendsSetting ? resolvedAgentModel.backend : null;
+  const { data: projectSkills = [] } = useProjectSkills(
+    selectedProjectId ?? undefined,
+    currentBackend,
+  );
 
   const { data: dynamicModels, isFetched: areBackendModelsFetched } =
     useBackendModels(currentBackend);

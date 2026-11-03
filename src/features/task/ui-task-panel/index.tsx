@@ -3806,6 +3806,7 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
           <QuestionOptions
             request={agentState.pendingQuestion}
             onRespond={respondToQuestion}
+            projectRoot={rootPath}
           />
         </div>
       )}

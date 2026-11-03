@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import {
+  JEAN_CLAUDE_ANSWER_FILES_FIELD,
+} from '@shared/attached-files';
 
 import {
   codexMcpElicitationContentFromAnswers,
@@ -66,6 +69,69 @@ describe('Codex MCP elicitation normalization', () => {
         params: { mode: 'url', message: 'Sign in', url: 'https://example.test' },
       }),
     ).toBeUndefined();
+  });
+
+  it('keeps Jean-Claude answer files separate from typed elicitation fields', () => {
+    const schema = {
+      properties: {
+        target: { type: 'string', enum: ['staging', 'production'] },
+        dryRun: { type: 'boolean' },
+        count: { type: 'integer' },
+        [JEAN_CLAUDE_ANSWER_FILES_FIELD]: { type: 'string' },
+      },
+      required: ['target'],
+    };
+    const elicitation = normalizeCodexMcpElicitation({
+      requestId: 'files-1',
+      params: { mode: 'form', requestedSchema: schema },
+    });
+
+    expect(elicitation?.request.questions).toHaveLength(3);
+    expect(elicitation?.request.questions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'dryRun', allowFileAttachments: true }),
+      ]),
+    );
+    const content = codexMcpElicitationContentFromAnswers({
+      schema,
+      answers: { target: 'production', dryRun: 'true', count: '42' },
+      files: {
+        target: [
+          { type: 'file', filename: 'plan.txt', filePath: '/tmp/plan.txt' },
+        ],
+      },
+    });
+    expect(content).toMatchObject({
+      target: 'production',
+      dryRun: true,
+      count: 42,
+      [JEAN_CLAUDE_ANSWER_FILES_FIELD]: expect.stringContaining(
+        'path="/tmp/plan.txt"',
+      ),
+    });
+  });
+
+  // The reserved property name is the only marker available: codex-cli cancels
+  // any form elicitation carrying extra root keys, so the previous root-level
+  // `description` marker could not be used.
+  it('treats the reserved field name as ours on any server', () => {
+    const elicitation = normalizeCodexMcpElicitation({
+      requestId: 'foreign-1',
+      params: {
+        mode: 'form',
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            notes: { type: 'string', title: 'Notes' },
+            [JEAN_CLAUDE_ANSWER_FILES_FIELD]: { type: 'string' },
+          },
+        },
+      },
+    });
+
+    expect(elicitation?.request.questions).toEqual([
+      expect.objectContaining({ id: 'notes', allowFileAttachments: true }),
+    ]);
   });
 });
 

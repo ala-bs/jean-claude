@@ -1,4 +1,29 @@
-import { Check, ChevronDown, Plus, RotateCcw, Star, Trash2 } from 'lucide-react';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import {
+  Check,
+  ChevronDown,
+  ChevronUp,
+  GripVertical,
+  Plus,
+  RotateCcw,
+  Star,
+  Trash2,
+} from 'lucide-react';
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
 import {
   type ReactNode,
   useCallback,
@@ -8,6 +33,7 @@ import {
   useState,
 } from 'react';
 import clsx from 'clsx';
+import { CSS } from '@dnd-kit/utilities';
 import { nanoid } from 'nanoid';
 
 import {
@@ -792,6 +818,103 @@ function PresetRow({
  * The profile rail, on the shared settings list primitives so it resizes and
  * reads like Skills / Agents / Sources rather than a bespoke flex column.
  */
+function SortableProfileRow({
+  profile,
+  selectedId,
+  activeProfileId,
+  profileCount,
+  index,
+  onSelect,
+  onDelete,
+  onMove,
+}: {
+  profile: ModelProfile;
+  selectedId: string | null;
+  activeProfileId: string | null;
+  profileCount: number;
+  index: number;
+  onSelect: (profileId: string) => void;
+  onDelete: (profileId: string) => void;
+  onMove: (index: number, direction: -1 | 1) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: profile.id });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.55 : 1,
+      }}
+      className="group flex items-center"
+    >
+      <button
+        type="button"
+        aria-label={`Reorder profile ${profile.name}`}
+        title="Drag to reorder; use Space and arrow keys with a keyboard"
+        className="text-ink-4 hover:text-ink-1 ml-2 shrink-0 cursor-grab touch-none rounded p-1 focus-visible:outline"
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical className="h-3.5 w-3.5" aria-hidden />
+      </button>
+      <div className="min-w-0 flex-1">
+        <ListItemButton
+          label={profile.name || 'Untitled'}
+          isActive={profile.id === selectedId}
+          size="compact"
+          onClick={() => onSelect(profile.id)}
+          suffix={
+            profile.id === activeProfileId ? (
+              <span
+                className="text-acc-ink ml-auto shrink-0"
+                title="Active profile"
+                aria-label={`${profile.name} is active`}
+              >
+                <Check className="h-3.5 w-3.5" />
+              </span>
+            ) : undefined
+          }
+        />
+      </div>
+      <div className="flex shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+        <button
+          type="button"
+          onClick={() => onMove(index, -1)}
+          disabled={index === 0}
+          aria-label={`Move profile ${profile.name} up`}
+          className="text-ink-4 hover:text-ink-1 grid h-6 w-5 place-items-center rounded disabled:opacity-40"
+        >
+          <ChevronUp className="h-3 w-3" aria-hidden />
+        </button>
+        <button
+          type="button"
+          onClick={() => onMove(index, 1)}
+          disabled={index === profileCount - 1}
+          aria-label={`Move profile ${profile.name} down`}
+          className="text-ink-4 hover:text-ink-1 grid h-6 w-5 place-items-center rounded disabled:opacity-40"
+        >
+          <ChevronDown className="h-3 w-3" aria-hidden />
+        </button>
+      </div>
+      <button
+        type="button"
+        onClick={() => onDelete(profile.id)}
+        disabled={profileCount <= 1}
+        title={
+          profileCount <= 1 ? 'You need at least one model profile' : undefined
+        }
+        aria-label={`Delete profile ${profile.name}`}
+        className="text-ink-4 hover:bg-status-fail/15 hover:text-status-fail mr-2 grid h-6 w-6 shrink-0 place-items-center rounded opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 disabled:cursor-not-allowed disabled:opacity-0"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
 function ProfileRail({
   profiles,
   selectedId,
@@ -799,6 +922,7 @@ function ProfileRail({
   onSelect,
   onAdd,
   onDelete,
+  onReorder,
 }: {
   profiles: ModelProfile[];
   selectedId: string | null;
@@ -806,9 +930,28 @@ function ProfileRail({
   onSelect: (profileId: string) => void;
   onAdd: () => void;
   onDelete: (profileId: string) => void;
+  onReorder: (profiles: ModelProfile[]) => void;
 }) {
   const { width, setWidth, minWidth, maxWidth } = useSkillsRailWidth();
   const onWidthChange = useCallback((next: number) => setWidth(next), [setWidth]);
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return;
+    const oldIndex = profiles.findIndex((profile) => profile.id === active.id);
+    const newIndex = profiles.findIndex((profile) => profile.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    onReorder(arrayMove(profiles, oldIndex, newIndex));
+  };
+
+  const moveProfile = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= profiles.length) return;
+    onReorder(arrayMove(profiles, index, target));
+  };
 
   return (
     <ListPane
@@ -836,41 +979,37 @@ function ProfileRail({
           No profiles yet.
         </div>
       ) : (
-        profiles.map((profile) => (
-          <div key={profile.id} className="group relative">
-            <ListItemButton
-              label={profile.name || 'Untitled'}
-              isActive={profile.id === selectedId}
-              size="compact"
-              onClick={() => onSelect(profile.id)}
-              suffix={
-                profile.id === activeProfileId ? (
-                  <span
-                    className="text-acc-ink ml-auto shrink-0 pr-6"
-                    title="Active profile"
-                    aria-label={`${profile.name} is active`}
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                  </span>
-                ) : undefined
-              }
-            />
-            <button
-              type="button"
-              onClick={() => onDelete(profile.id)}
-              disabled={profiles.length <= 1}
-              title={
-                profiles.length <= 1
-                  ? 'You need at least one model profile'
-                  : undefined
-              }
-              aria-label={`Delete profile ${profile.name}`}
-              className="text-ink-4 hover:bg-status-fail/15 hover:text-status-fail absolute top-1/2 right-2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 disabled:cursor-not-allowed disabled:opacity-0"
+        <>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext
+              items={profiles.map((profile) => profile.id)}
+              strategy={verticalListSortingStrategy}
             >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        ))
+              {profiles.map((profile, index) => (
+                <SortableProfileRow
+                  key={profile.id}
+                  profile={profile}
+                  selectedId={selectedId}
+                  activeProfileId={activeProfileId}
+                  profileCount={profiles.length}
+                  index={index}
+                  onSelect={onSelect}
+                  onDelete={onDelete}
+                  onMove={moveProfile}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
+          {profiles.length > 1 && (
+            <p className="text-ink-4 px-4 py-2 text-[11px]">
+              The first nine profiles use ⌘⌥1–9 in this order.
+            </p>
+          )}
+        </>
       )}
     </ListPane>
   );
@@ -1072,6 +1211,7 @@ export function ModelProfilesSettings() {
             onSelect={setSelectedId}
             onAdd={handleAddProfile}
             onDelete={handleDeleteProfile}
+            onReorder={commit}
           />
         }
         detail={

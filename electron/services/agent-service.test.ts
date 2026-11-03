@@ -5537,11 +5537,20 @@ describe('agentService provider runtime', () => {
       'Choose one#1': 'A',
     };
     const canonicalAnswers = {
-      'Choose one#1': 'A',
+      'Choose one#1': 'A\n\n<attached_files>\n  <file name="design &amp; notes.txt" path="/tmp/design.txt" />\n</attached_files>',
       'Choose one#2': 'B',
     };
     await agentService.respond('step-1', 'question-duplicates', {
       answers: rendererAnswers,
+      files: {
+        'Choose one#1': [
+          {
+            type: 'file',
+            filename: 'design & notes.txt',
+            filePath: '/tmp/design.txt',
+          },
+        ],
+      },
       memoryDetails: [
         {
           questionKey: 'Choose one#2',
@@ -5576,6 +5585,124 @@ describe('agentService provider runtime', () => {
       ['question:question-duplicates:Choose one#2', ['B']],
     ]);
 
+    release();
+    await startPromise;
+  });
+
+  it('keeps multi-choice selections separate from attached file references', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'question',
+      request: {
+        requestId: 'question-multi-file',
+        questions: [
+          {
+            id: 'choices',
+            type: 'multi_choice',
+            question: 'Which options?',
+            header: 'Choices',
+            multiSelect: true,
+            options: [{ label: 'A', description: '' }],
+          },
+        ],
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'question',
+        data: { requestId: 'question-multi-file' },
+      });
+    });
+
+    await agentService.respond('step-1', 'question-multi-file', {
+      answers: { choices: '["A"]' },
+      files: {
+        choices: [{ type: 'file', filename: 'details.txt', filePath: '/tmp/details.txt' }],
+      },
+      memoryDetails: [
+        {
+          questionKey: 'choices',
+          selectedLabels: ['A'],
+          customAnswer: null,
+          notes: null,
+        },
+      ],
+    });
+
+    const delivered = (
+      providerCalls.questions[0] as { answer: Record<string, string> }
+    ).answer.choices;
+    expect(JSON.parse(delivered)).toEqual([
+      'A',
+      '<attached_files>\n  <file name="details.txt" path="/tmp/details.txt" />\n</attached_files>',
+    ]);
+    expect(captureAgentMemoryEventSafeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'A' }),
+    );
+
+    release();
+    await startPromise;
+  });
+
+  it('rejects malformed files and files on unsupported typed questions', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'question',
+      request: {
+        requestId: 'question-typed-files',
+        questions: [
+          {
+            id: 'target',
+            question: 'Target?',
+            header: 'Target',
+            multiSelect: false,
+            allowFileAttachments: false,
+            options: [{ label: 'production', description: '' }],
+          },
+        ],
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'question',
+        data: { requestId: 'question-typed-files' },
+      });
+    });
+    const validResponse = {
+      answers: { target: 'production' },
+      memoryDetails: [
+        {
+          questionKey: 'target',
+          selectedLabels: ['production'],
+          customAnswer: null,
+          notes: null,
+        },
+      ],
+    };
+
+    await expect(
+      agentService.respond('step-1', 'question-typed-files', {
+        ...validResponse,
+        files: { target: null as never },
+      }),
+    ).rejects.toThrow('Invalid question response');
+    await expect(
+      agentService.respond('step-1', 'question-typed-files', {
+        ...validResponse,
+        files: {
+          target: [
+            { type: 'file', filename: 'plan.txt', filePath: '/tmp/plan.txt' },
+          ],
+        },
+      }),
+    ).rejects.toThrow('Invalid question response');
+    expect(providerCalls.questions).toHaveLength(0);
+
+    await agentService.respond('step-1', 'question-typed-files', validResponse);
+    expect(providerCalls.questions).toHaveLength(1);
     release();
     await startPromise;
   });
