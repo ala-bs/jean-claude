@@ -118,6 +118,9 @@ describe('applyDeltaToMessageParts', () => {
 });
 
 describe('toOpenCodeQuestionAnswer', () => {
+  it('keeps an intentionally empty answer as an unanswered slot', () => {
+    expect(toOpenCodeQuestionAnswer('')).toEqual([]);
+  });
   it('expands JSON-array multi-choice answers', () => {
     expect(toOpenCodeQuestionAnswer(JSON.stringify(['Fast', 'Safe']))).toEqual([
       'Fast',

@@ -74,7 +74,7 @@ export function buildAskQuestionElicitationSchema(input: {
             type: 'string',
             title: question.label,
             ...(options.length > 0
-              ? { enum: options.map((option) => option.label) }
+              ? { enum: [...options.map((option) => option.label), ''] }
               : {}),
           },
         ];

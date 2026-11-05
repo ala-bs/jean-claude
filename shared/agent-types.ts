@@ -188,6 +188,7 @@ export interface AgentQuestion {
   required?: boolean;
   allowFreeform?: boolean;
   allowFileAttachments?: boolean;
+  allowLeaveEmpty?: boolean;
 }
 
 export interface QuestionRequest {
@@ -212,6 +213,8 @@ export interface PermissionResponse {
 
 export interface QuestionResponse {
   answers: Record<string, string>;
+  /** Questions the user explicitly chose to leave unanswered. */
+  leftEmptyQuestionKeys?: string[];
   /** Files supplied with each answer, keyed by the stable question key. */
   files?: Record<string, Array<{ type: 'file'; filePath: string; filename: string }>>;
   wasFreeform?: boolean;
@@ -221,7 +224,7 @@ export interface QuestionResponse {
 
 export type QuestionResponseMetadata = Pick<
   QuestionResponse,
-  'wasFreeform' | 'wasFreeformByQuestion'
+  'wasFreeform' | 'wasFreeformByQuestion' | 'leftEmptyQuestionKeys'
 > & {
   questionKeys: string[];
   files?: QuestionResponse['files'];

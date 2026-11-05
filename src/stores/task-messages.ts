@@ -195,6 +195,7 @@ export interface RunCommandLogState {
 
 export interface QuestionDraft {
   answers: Record<string, string>;
+  leftEmptyQuestionKeys?: Record<string, boolean>;
   otherAnswers: Record<string, string>;
   notes: Record<string, string>;
   files?: Record<string, Array<{ type: 'file'; filePath: string; filename: string }>>;

@@ -33,6 +33,20 @@ const questions: AgentQuestion[] = [
 ];
 
 describe('buildQuestionResponse', () => {
+  it('delivers an explicitly empty answer without a memory detail', () => {
+    const response = buildQuestionResponse({
+      questions,
+      answers: { approach: 'Small change', constraints: '' },
+      customAnswers: {},
+      notes: {},
+      wasFreeformByQuestion: {},
+      leftEmptyQuestionKeys: { constraints: true },
+    });
+
+    expect(response.answers).toEqual({ approach: 'Small change', constraints: '' });
+    expect(response.leftEmptyQuestionKeys).toEqual(['constraints']);
+    expect(response.memoryDetails.map((detail) => detail.questionKey)).toEqual(['approach']);
+  });
   it('keeps flattened answers unchanged while adding selected labels and notes', () => {
     const response = buildQuestionResponse({
       questions,

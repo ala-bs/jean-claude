@@ -163,16 +163,21 @@ export function toNormalizedQuestionRequest({
 export function formatAnswerSummary({
   questions,
   answers,
+  leftEmptyQuestionKeys = [],
 }: {
   questions: QuestionSpec[];
   answers: QuestionAnswers;
+  leftEmptyQuestionKeys?: string[];
 }): string {
   validateQuestionSpecs(questions);
-  validateAnswers({ questions, answers });
+  validateAnswers({ questions, answers, leftEmptyQuestionKeys });
 
   return questions
     .flatMap((question) => {
       const answer = resolveQuestionAnswer({ answers, question });
+      if (leftEmptyQuestionKeys.includes(question.id)) {
+        return [`${question.label}: [left empty]`];
+      }
       const value = answer.value;
       if (isEmptyAnswer(value)) {
         if (question.required === false) {
@@ -189,14 +194,26 @@ export function formatAnswerSummary({
 export function validateAnswers({
   questions,
   answers,
+  leftEmptyQuestionKeys = [],
 }: {
   questions: QuestionSpec[];
   answers: QuestionAnswers;
+  leftEmptyQuestionKeys?: string[];
 }): void {
   validateQuestionSpecs(questions);
 
+  if (leftEmptyQuestionKeys.some((key) => !questions.some((question) => question.id === key))) {
+    throw new QuestionValidationError('Unknown left-empty question');
+  }
+
   for (const question of questions) {
     const answer = resolveQuestionAnswer({ answers, question });
+    if (leftEmptyQuestionKeys.includes(question.id)) {
+      if (answer.value !== '') {
+        throw new QuestionValidationError(`Question ${question.id} must be empty`);
+      }
+      continue;
+    }
     const isRequired = question.required ?? true;
     if (answer.normalizedValues.length === 0) {
       if (isRequired) {
@@ -257,7 +274,7 @@ export class QuestionBrokerService {
     };
   }
 
-  answerRequest(requestId: string, answers: QuestionAnswers): string {
+  answerRequest(requestId: string, answers: QuestionAnswers, leftEmptyQuestionKeys: string[] = []): string {
     const pending = this.pendingRequests.get(requestId);
     if (!pending) {
       throw new QuestionRequestNotFoundError(requestId);
@@ -266,6 +283,7 @@ export class QuestionBrokerService {
     const summary = formatAnswerSummary({
       questions: pending.questions,
       answers,
+      leftEmptyQuestionKeys,
     });
     this.pendingRequests.delete(requestId);
     pending.resolve(summary);

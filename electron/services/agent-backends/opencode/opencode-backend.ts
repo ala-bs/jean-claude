@@ -2283,6 +2283,7 @@ function cloneOpenCodePart(part: OcPart): OcPart {
 
 export function toOpenCodeQuestionAnswer(value: string): string[] {
   const trimmed = value.trim();
+  if (!trimmed) return [];
   if (trimmed.startsWith('[')) {
     try {
       const parsed = JSON.parse(trimmed);

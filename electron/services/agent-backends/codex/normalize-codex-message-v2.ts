@@ -85,7 +85,7 @@ export function normalizeCodexMcpElicitation({
     if (allowsAttachments && id === JEAN_CLAUDE_ANSWER_FILES_FIELD) return [];
     const property = record(value);
     if (!property) return [];
-    const options = elicitationOptions(property);
+    const options = elicitationOptions(property, allowsAttachments);
     const isMulti = property.type === 'array';
     return [{
       id,
@@ -100,6 +100,7 @@ export function normalizeCodexMcpElicitation({
       multiSelect: isMulti,
       required: required.has(id),
       allowFileAttachments: allowsAttachments,
+      allowLeaveEmpty: allowsAttachments,
     } satisfies NormalizedQuestion];
   });
 
@@ -121,10 +122,12 @@ export function codexMcpElicitationContentFromAnswers({
   schema,
   answers,
   files,
+  leftEmptyQuestionKeys = [],
 }: {
   schema: Record<string, unknown>;
   answers: Record<string, string>;
   files?: Record<string, PromptFilePart[]>;
+  leftEmptyQuestionKeys?: string[];
 }): Record<string, unknown> {
   const properties = record(schema.properties) ?? {};
   const allowsAttachments = Object.hasOwn(
@@ -137,6 +140,13 @@ export function codexMcpElicitationContentFromAnswers({
     const property = record(value);
     const answer = answers[id];
     if (!property || answer === undefined) continue;
+    if (leftEmptyQuestionKeys.includes(id)) {
+      if (property.type === 'array') content[id] = [];
+      else if (property.type === 'string') content[id] = '';
+      // Other typed schemas have no empty value; omit them instead of
+      // converting a blank into a stated number or boolean answer.
+      continue;
+    }
     if (property.type === 'array') {
       try {
         const parsed: unknown = JSON.parse(answer);
@@ -173,13 +183,18 @@ export function codexMcpElicitationContentFromAnswers({
 
 function elicitationOptions(
   property: Record<string, unknown>,
+  excludeEmpty: boolean,
 ): NormalizedQuestionOption[] {
   const values = Array.isArray(property.enum)
-    ? property.enum.filter((value): value is string => typeof value === 'string')
+    ? property.enum.filter((value): value is string =>
+        typeof value === 'string' && (!excludeEmpty || value !== ''),
+      )
     : [];
   const item = record(property.items);
   const itemValues = Array.isArray(item?.enum)
-    ? item.enum.filter((value): value is string => typeof value === 'string')
+    ? item.enum.filter((value): value is string =>
+        typeof value === 'string' && (!excludeEmpty || value !== ''),
+      )
     : [];
   return (values.length > 0 ? values : itemValues).map((label) => ({
     label,
