@@ -109,6 +109,7 @@ describe('interleavePromptParts', () => {
       ]),
     ).toEqual([
       { type: 'text', text: '1. header\n' },
+      { type: 'text', text: '[Image #1: a.png]' },
       anchored,
       { type: 'text', text: '\n2. modal' },
     ]);
@@ -129,6 +130,7 @@ describe('interleavePromptParts', () => {
       ]),
     ).toEqual([
       { type: 'text', text: 'see ' },
+      { type: 'text', text: '[Image #1: a.png]' },
       anchored,
       loose,
       { type: 'file', filePath: '/tmp/x.ts', filename: 'x.ts' },

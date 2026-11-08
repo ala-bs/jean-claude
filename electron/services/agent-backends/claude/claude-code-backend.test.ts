@@ -2114,10 +2114,11 @@ describe('ClaudeCodeBackend user message content blocks', () => {
     ]);
   });
 
-  it('appends untokened images after the text, as it always has', async () => {
-    expect(
-      await contentFor([{ type: 'text', text: 'go' }, loose]),
-    ).toEqual([{ type: 'text', text: 'go' }, imgBlock('b-data')]);
+  it('appends untokened images after the text, bare, as it always has', async () => {
+    expect(await contentFor([{ type: 'text', text: 'go' }, loose])).toEqual([
+      { type: 'text', text: 'go' },
+      imgBlock('b-data'),
+    ]);
   });
 
   it('omits the text block for an image-only prompt', async () => {
@@ -2138,6 +2139,7 @@ describe('ClaudeCodeBackend user message content blocks', () => {
       ]),
     ).toEqual([
       { type: 'text', text: '1. header\n' },
+      { type: 'text', text: '[Image #1: a.png]' },
       imgBlock('a-data'),
       { type: 'text', text: '\n2. modal' },
     ]);
@@ -2152,6 +2154,7 @@ describe('ClaudeCodeBackend user message content blocks', () => {
       ]),
     ).toEqual([
       { type: 'text', text: 'see ' },
+      { type: 'text', text: '[Image #1: a.png]' },
       imgBlock('a-data'),
       imgBlock('b-data'),
     ]);
