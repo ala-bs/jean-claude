@@ -46,6 +46,7 @@ import { agentService } from './services/agent-service';
 import { cleanupOrphanedWorkspaces } from './services/system-project-service';
 import { createReloadPreviewReadinessRegistrar } from './services/reload-preview-service';
 import { dbg } from './lib/debug';
+import { logPerformanceEvent } from './lib/performance-log';
 import { killOrphanedCoreSimulatorHelpers } from './services/mobile-preview-ios-idb-adapter';
 import { migrateDatabase } from './database';
 import { pipelineTrackingService } from './services/pipeline-tracking-service';
@@ -427,6 +428,20 @@ app.whenReady().then(async () => {
   // of this fix sat after them and was therefore inert. Anything added above
   // this block must be verified not to touch `session.defaultSession`.
   registerReloadPreviewReadiness.signalNow();
+  // A synchronous query or other CPU-heavy main-process work delays every
+  // renderer IPC reply. Measure that delay independently of IPC round trips.
+  let lastMainLoopTick = performance.now();
+  const mainLoopMonitor = setInterval(() => {
+    const now = performance.now();
+    const delay = now - lastMainLoopTick - 100;
+    lastMainLoopTick = now;
+    if (delay >= 250) {
+      const message = `Main event loop delayed by ${Math.round(delay)} ms`;
+      dbg.main('%s', message);
+      void logPerformanceEvent({ source: 'main', message });
+    }
+  }, 100);
+  mainLoopMonitor.unref();
 
   const previousPreviewPid = Number(
     process.env[RELOAD_PREVIEW_PREVIOUS_PID_ENV],

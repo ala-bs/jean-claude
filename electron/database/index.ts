@@ -5,6 +5,7 @@ import { app } from 'electron';
 import Database from 'better-sqlite3';
 
 import { dbg } from '../lib/debug';
+import { logPerformanceEvent } from '../lib/performance-log';
 
 import type { AppSettings } from '@shared/types';
 
@@ -24,6 +25,18 @@ export const db = new Kysely<DatabaseSchema>({
   dialect: new SqliteDialect({
     database: client,
   }),
+  log(event) {
+    if (event.level !== 'query') return;
+    if (event.queryDurationMillis < 100) return;
+    // Parameters can contain secrets and large message bodies. The SQL shape
+    // and duration are enough to locate the blocking query.
+    const sqlShape = event.query.sql
+      .replace(/'(?:''|[^'])*'/g, '?')
+      .slice(0, 700);
+    const message = `Slow query (${Math.round(event.queryDurationMillis)} ms): ${sqlShape}`;
+    dbg.db('%s', message);
+    void logPerformanceEvent({ source: 'database', message });
+  },
 });
 
 export async function migrateDatabase() {

@@ -6,6 +6,7 @@ import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
 import { deleteAttachmentFile } from './attachment-file-deletion';
+import { logPerformanceEvent } from '../lib/performance-log';
 import { resolveSourceBranchStartPoint } from './pull-source-branch';
 
 
@@ -5808,13 +5809,18 @@ export function registerIpcHandlers() {
       }
       // Format-string placeholders keep renderer input out of the format
       // directive itself, so a `%j` in the message stays literal text.
-      dbg.renderer('%s %s %s', clamp(params?.scope, 64), clamp(params?.message, 200), data);
+      const scope = clamp(params?.scope, 64);
+      const message = clamp(params?.message, 200);
+      dbg.renderer('%s %s %s', scope, message, data);
+      if (scope === 'performance') {
+        void logPerformanceEvent({ source: 'renderer', message });
+      }
       // PR image uploads are reported long after the fact, so mirror just that
       // scope to a file the user can hand back.
-      if (clamp(params?.scope, 64) === '[pr-create]') {
+      if (scope === '[pr-create]') {
         logPrImageEventSync({
           source: 'renderer',
-          message: clamp(params?.message, 200),
+          message,
           data: params?.data,
         });
       }

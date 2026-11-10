@@ -103,6 +103,32 @@ import type { StartAdHocRunCommandParams } from '@shared/run-command-types';
 
 const devBadgeLabel = process.env.JC_DEV_BADGE_LABEL?.trim() || undefined;
 
+// A slow IPC round trip can be caused by its handler, a blocked main loop, or
+// a blocked renderer loop. Log the channel only; arguments may contain secrets.
+function invokeWithDiagnostics(channel: string, ...args: unknown[]) {
+  const startedAt = performance.now();
+  return Promise.resolve(ipcRenderer.invoke(channel, ...args)).finally(() => {
+    const elapsed = performance.now() - startedAt;
+    if (elapsed >= 500 && channel !== 'debug:log') {
+      const message = `IPC ${channel} took ${Math.round(elapsed)} ms`;
+      console.warn(`[performance] ${message}`);
+      void ipcRenderer.invoke('debug:log', { scope: 'performance', message }).catch(() => {});
+    }
+  });
+}
+
+let lastRendererLoopTick = performance.now();
+setInterval(() => {
+  const now = performance.now();
+  const delay = now - lastRendererLoopTick - 100;
+  lastRendererLoopTick = now;
+  if (delay >= 250) {
+    const message = `Renderer event loop delayed by ${Math.round(delay)} ms`;
+    console.warn(`[performance] ${message}`);
+    void ipcRenderer.invoke('debug:log', { scope: 'performance', message }).catch(() => {});
+  }
+}, 100);
+
 /**
  * Whether this Chromium profile already had a localStorage bucket before this
  * launch, sampled by the main process (see `hasExistingLocalStorageBucket`) and
@@ -120,7 +146,7 @@ const hasExistingLocalStorageBucket = !process.argv.includes(
 contextBridge.exposeInMainWorld('api', {
   platform: process.platform,
   windowState: {
-    getIsFullscreen: () => ipcRenderer.invoke('windowState:getIsFullscreen'),
+    getIsFullscreen: () => invokeWithDiagnostics('windowState:getIsFullscreen'),
     onFullscreenChange: (callback: (isFullscreen: boolean) => void) => {
       const handler = (_: unknown, isFullscreen: boolean) =>
         callback(isFullscreen);
@@ -131,7 +157,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   cache: {
     setSubscriptions: (update: CacheSubscriptionUpdate) =>
-      ipcRenderer.invoke('cache:setSubscriptions', update),
+      invokeWithDiagnostics('cache:setSubscriptions', update),
     onEvent: (callback: (event: CacheEvent) => void) => {
       const handler = (_: unknown, event: CacheEvent) => callback(event);
       ipcRenderer.on('cache:event', handler);
@@ -139,74 +165,74 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
   projects: {
-    findAll: () => ipcRenderer.invoke('projects:findAll'),
+    findAll: () => invokeWithDiagnostics('projects:findAll'),
     listEnvVars: (projectId: string) =>
-      ipcRenderer.invoke('projects:listEnvVars', projectId),
+      invokeWithDiagnostics('projects:listEnvVars', projectId),
     createEnvVar: (data: unknown) =>
-      ipcRenderer.invoke('projects:createEnvVar', data),
+      invokeWithDiagnostics('projects:createEnvVar', data),
     updateEnvVar: (id: string, data: unknown) =>
-      ipcRenderer.invoke('projects:updateEnvVar', id, data),
+      invokeWithDiagnostics('projects:updateEnvVar', id, data),
     deleteEnvVar: (id: string) =>
-      ipcRenderer.invoke('projects:deleteEnvVar', id),
+      invokeWithDiagnostics('projects:deleteEnvVar', id),
     isSecretStorageAvailable: () =>
-      ipcRenderer.invoke('projects:isSecretStorageAvailable'),
-    findById: (id: string) => ipcRenderer.invoke('projects:findById', id),
+      invokeWithDiagnostics('projects:isSecretStorageAvailable'),
+    findById: (id: string) => invokeWithDiagnostics('projects:findById', id),
     getEffectivePolicy: (projectId: string) =>
-      ipcRenderer.invoke('projects:getEffectivePolicy', projectId),
+      invokeWithDiagnostics('projects:getEffectivePolicy', projectId),
     setModelPolicy: (projectId: string, policy: unknown) =>
-      ipcRenderer.invoke('projects:setModelPolicy', projectId, policy),
-    create: (data: unknown) => ipcRenderer.invoke('projects:create', data),
+      invokeWithDiagnostics('projects:setModelPolicy', projectId, policy),
+    create: (data: unknown) => invokeWithDiagnostics('projects:create', data),
     update: (id: string, data: unknown) =>
-      ipcRenderer.invoke('projects:update', id, data),
+      invokeWithDiagnostics('projects:update', id, data),
     detectMobilePreview: (projectId: string) =>
-      ipcRenderer.invoke('projects:detectMobilePreview', projectId),
+      invokeWithDiagnostics('projects:detectMobilePreview', projectId),
     detectAzureRemote: (projectPath: string) =>
-      ipcRenderer.invoke('projects:detectAzureRemote', projectPath),
+      invokeWithDiagnostics('projects:detectAzureRemote', projectPath),
     uploadLogo: (projectId: string, sourcePath: string) =>
-      ipcRenderer.invoke('projects:uploadLogo', projectId, sourcePath),
+      invokeWithDiagnostics('projects:uploadLogo', projectId, sourcePath),
     generateLogo: (projectId: string, customPrompt?: string) =>
-      ipcRenderer.invoke('projects:generateLogo', projectId, customPrompt),
+      invokeWithDiagnostics('projects:generateLogo', projectId, customPrompt),
     listGeneratedLogos: (projectId: string) =>
-      ipcRenderer.invoke('projects:listGeneratedLogos', projectId),
+      invokeWithDiagnostics('projects:listGeneratedLogos', projectId),
     selectGeneratedLogo: (projectId: string, logoId: string) =>
-      ipcRenderer.invoke('projects:selectGeneratedLogo', projectId, logoId),
+      invokeWithDiagnostics('projects:selectGeneratedLogo', projectId, logoId),
     deleteGeneratedLogo: (projectId: string, logoId: string) =>
-      ipcRenderer.invoke('projects:deleteGeneratedLogo', projectId, logoId),
+      invokeWithDiagnostics('projects:deleteGeneratedLogo', projectId, logoId),
     regenerateSummary: (projectId: string) =>
-      ipcRenderer.invoke('projects:regenerateSummary', projectId),
+      invokeWithDiagnostics('projects:regenerateSummary', projectId),
     getFeatureMap: (projectId: string) =>
-      ipcRenderer.invoke('projects:getFeatureMap', projectId),
+      invokeWithDiagnostics('projects:getFeatureMap', projectId),
     createFeatureMapTask: (projectId: string) =>
-      ipcRenderer.invoke('projects:createFeatureMapTask', projectId),
+      invokeWithDiagnostics('projects:createFeatureMapTask', projectId),
     getFeatureMapDraftDiff: (stepId: string) =>
-      ipcRenderer.invoke('projects:getFeatureMapDraftDiff', stepId),
+      invokeWithDiagnostics('projects:getFeatureMapDraftDiff', stepId),
     saveFeatureMapFromTask: (stepId: string) =>
-      ipcRenderer.invoke('projects:saveFeatureMapFromTask', stepId),
+      invokeWithDiagnostics('projects:saveFeatureMapFromTask', stepId),
     removeLogo: (projectId: string) =>
-      ipcRenderer.invoke('projects:removeLogo', projectId),
-    delete: (id: string) => ipcRenderer.invoke('projects:delete', id),
+      invokeWithDiagnostics('projects:removeLogo', projectId),
+    delete: (id: string) => invokeWithDiagnostics('projects:delete', id),
     deleteWorktreesFolder: (projectId: string) =>
-      ipcRenderer.invoke('projects:deleteWorktreesFolder', projectId),
+      invokeWithDiagnostics('projects:deleteWorktreesFolder', projectId),
     reorder: (orderedIds: string[]) =>
-      ipcRenderer.invoke('projects:reorder', orderedIds),
+      invokeWithDiagnostics('projects:reorder', orderedIds),
     getBranches: (projectId: string) =>
-      ipcRenderer.invoke('projects:getBranches', projectId),
+      invokeWithDiagnostics('projects:getBranches', projectId),
     getBranchesForPath: (projectPath: string) =>
-      ipcRenderer.invoke('projects:getBranchesForPath', projectPath),
+      invokeWithDiagnostics('projects:getBranchesForPath', projectPath),
     getCurrentBranch: (projectId: string) =>
-      ipcRenderer.invoke('projects:getCurrentBranch', projectId),
+      invokeWithDiagnostics('projects:getCurrentBranch', projectId),
     isGitRepository: (projectId: string) =>
-      ipcRenderer.invoke('projects:isGitRepository', projectId),
+      invokeWithDiagnostics('projects:isGitRepository', projectId),
     git: {
       getStatus: (projectId: string) =>
-        ipcRenderer.invoke('projects:git:getStatus', projectId),
+        invokeWithDiagnostics('projects:git:getStatus', projectId),
       getGraph: (
         projectId: string,
         limit?: number,
         skip?: number,
         filter?: ProjectGitLogFilter,
       ) =>
-        ipcRenderer.invoke(
+        invokeWithDiagnostics(
           'projects:git:getGraph',
           projectId,
           limit,
@@ -214,42 +240,42 @@ contextBridge.exposeInMainWorld('api', {
           filter,
         ),
       getCommitCount: (projectId: string, filter?: ProjectGitLogFilter) =>
-        ipcRenderer.invoke('projects:git:getCommitCount', projectId, filter),
+        invokeWithDiagnostics('projects:git:getCommitCount', projectId, filter),
       getCommitDetail: (projectId: string, commitHash: string) =>
-        ipcRenderer.invoke('projects:git:getCommitDetail', projectId, commitHash),
+        invokeWithDiagnostics('projects:git:getCommitDetail', projectId, commitHash),
       getCommitFileContent: (
         projectId: string,
         commitHash: string,
         filePath: string,
       ) =>
-        ipcRenderer.invoke(
+        invokeWithDiagnostics(
           'projects:git:getCommitFileContent',
           projectId,
           commitHash,
           filePath,
         ),
       getWorkingTreeFiles: (projectId: string) =>
-        ipcRenderer.invoke('projects:git:getWorkingTreeFiles', projectId),
+        invokeWithDiagnostics('projects:git:getWorkingTreeFiles', projectId),
       fetch: (projectId: string, interactive?: boolean) =>
-        ipcRenderer.invoke('projects:git:fetch', projectId, interactive),
+        invokeWithDiagnostics('projects:git:fetch', projectId, interactive),
       push: (projectId: string) =>
-        ipcRenderer.invoke('projects:git:push', projectId),
+        invokeWithDiagnostics('projects:git:push', projectId),
       pull: (projectId: string) =>
-        ipcRenderer.invoke('projects:git:pull', projectId),
+        invokeWithDiagnostics('projects:git:pull', projectId),
       checkoutBranch: (projectId: string, branchName: string) =>
-        ipcRenderer.invoke('projects:git:checkoutBranch', projectId, branchName),
+        invokeWithDiagnostics('projects:git:checkoutBranch', projectId, branchName),
       init: (projectId: string) =>
-        ipcRenderer.invoke('projects:git:init', projectId),
+        invokeWithDiagnostics('projects:git:init', projectId),
     },
     getCommitIgnore: (projectId: string) =>
-      ipcRenderer.invoke('projects:getCommitIgnore', projectId),
+      invokeWithDiagnostics('projects:getCommitIgnore', projectId),
     updateCommitIgnore: (projectId: string, content: string) =>
-      ipcRenderer.invoke('projects:updateCommitIgnore', projectId, content),
-    getDetected: () => ipcRenderer.invoke('projects:getDetected'),
+      invokeWithDiagnostics('projects:updateCommitIgnore', projectId, content),
+    getDetected: () => invokeWithDiagnostics('projects:getDetected'),
     detectLogos: (projectPath: string) =>
-      ipcRenderer.invoke('projects:detectLogos', projectPath),
+      invokeWithDiagnostics('projects:detectLogos', projectPath),
     getSkills: (projectId: string, backendType?: AgentBackendType | null) =>
-      ipcRenderer.invoke('projects:getSkills', projectId, backendType),
+      invokeWithDiagnostics('projects:getSkills', projectId, backendType),
   },
   agentMemory: {
     getDashboard: (params: {
@@ -258,17 +284,17 @@ contextBridge.exposeInMainWorld('api', {
       extractionRunPage?: number;
       pageSize?: number;
     }): Promise<AgentMemoryDashboard> =>
-      ipcRenderer.invoke('agentMemory:getDashboard', params),
+      invokeWithDiagnostics('agentMemory:getDashboard', params),
     extractNow: (
       projectId: string,
     ): Promise<{ processed: boolean; run: AgentMemoryExtractionRun | null }> =>
-      ipcRenderer.invoke('agentMemory:extractNow', projectId),
+      invokeWithDiagnostics('agentMemory:extractNow', projectId),
     retryRun: (params: {
       projectId?: string;
       runId: string;
       scope: 'project' | 'global';
     }): Promise<{ processed: boolean; run: AgentMemoryExtractionRun | null }> =>
-      ipcRenderer.invoke('agentMemory:retryRun', params),
+      invokeWithDiagnostics('agentMemory:retryRun', params),
     onCaptureWarning: (
       callback: (warning: AgentMemoryCaptureWarning) => void,
     ) => {
@@ -281,56 +307,56 @@ contextBridge.exposeInMainWorld('api', {
   },
   tasks: {
     focused: (taskId: string) => ipcRenderer.send('tasks:focused', taskId),
-    findAll: () => ipcRenderer.invoke('tasks:findAll'),
+    findAll: () => invokeWithDiagnostics('tasks:findAll'),
     findByProjectId: (projectId: string) =>
-      ipcRenderer.invoke('tasks:findByProjectId', projectId),
-    findAllActive: () => ipcRenderer.invoke('tasks:findAllActive'),
+      invokeWithDiagnostics('tasks:findByProjectId', projectId),
+    findAllActive: () => invokeWithDiagnostics('tasks:findAllActive'),
     findAllCompleted: (params: { limit: number; offset: number }) =>
-      ipcRenderer.invoke('tasks:findAllCompleted', params),
-    findById: (id: string) => ipcRenderer.invoke('tasks:findById', id),
-    create: (data: unknown) => ipcRenderer.invoke('tasks:create', data),
+      invokeWithDiagnostics('tasks:findAllCompleted', params),
+    findById: (id: string) => invokeWithDiagnostics('tasks:findById', id),
+    create: (data: unknown) => invokeWithDiagnostics('tasks:create', data),
     createWithWorktree: (data: unknown) =>
-      ipcRenderer.invoke('tasks:createWithWorktree', data),
+      invokeWithDiagnostics('tasks:createWithWorktree', data),
     update: (id: string, data: unknown) =>
-      ipcRenderer.invoke('tasks:update', id, data),
+      invokeWithDiagnostics('tasks:update', id, data),
     updatePendingMessage: (id: string, pendingMessage: string | null) =>
-      ipcRenderer.invoke('tasks:updatePendingMessage', id, pendingMessage),
+      invokeWithDiagnostics('tasks:updatePendingMessage', id, pendingMessage),
     setSourceBranch: (params: { taskId: string; sourceBranch: string }) =>
-      ipcRenderer.invoke('tasks:setSourceBranch', params),
+      invokeWithDiagnostics('tasks:setSourceBranch', params),
     setBranchName: (params: { taskId: string; branchName: string }) =>
-      ipcRenderer.invoke('tasks:setBranchName', params),
+      invokeWithDiagnostics('tasks:setBranchName', params),
     delete: (id: string, options?: { deleteWorktree?: boolean }) =>
-      ipcRenderer.invoke('tasks:delete', id, options),
+      invokeWithDiagnostics('tasks:delete', id, options),
     deletePrWorkspaceTask: (params: { taskId: string }) =>
-      ipcRenderer.invoke('tasks:deletePrWorkspaceTask', params),
+      invokeWithDiagnostics('tasks:deletePrWorkspaceTask', params),
     deleteAllPrWorkspaces: (params: {
       projectId: string;
       pullRequestId: number;
-    }) => ipcRenderer.invoke('tasks:deleteAllPrWorkspaces', params),
+    }) => invokeWithDiagnostics('tasks:deleteAllPrWorkspaces', params),
     toggleUserCompleted: (id: string) =>
-      ipcRenderer.invoke('tasks:toggleUserCompleted', id),
+      invokeWithDiagnostics('tasks:toggleUserCompleted', id),
     complete: (id: string, options: { cleanupWorktree?: boolean }) =>
-      ipcRenderer.invoke('tasks:complete', id, options),
+      invokeWithDiagnostics('tasks:complete', id, options),
     clearUserCompleted: (id: string) =>
-      ipcRenderer.invoke('tasks:clearUserCompleted', id),
+      invokeWithDiagnostics('tasks:clearUserCompleted', id),
     reorder: (projectId: string, activeIds: string[], completedIds: string[]) =>
-      ipcRenderer.invoke('tasks:reorder', projectId, activeIds, completedIds),
+      invokeWithDiagnostics('tasks:reorder', projectId, activeIds, completedIds),
     worktree: {
       getDiff: (taskId: string) =>
-        ipcRenderer.invoke('tasks:worktree:getDiff', taskId),
+        invokeWithDiagnostics('tasks:worktree:getDiff', taskId),
       getLocalChanges: (taskId: string) =>
-        ipcRenderer.invoke('tasks:worktree:getLocalChanges', taskId),
+        invokeWithDiagnostics('tasks:worktree:getLocalChanges', taskId),
       getCommits: (taskId: string) =>
-        ipcRenderer.invoke('tasks:worktree:getCommits', taskId),
+        invokeWithDiagnostics('tasks:worktree:getCommits', taskId),
       getCommitDiff: (taskId: string, commitHash: string) =>
-        ipcRenderer.invoke('tasks:worktree:getCommitDiff', taskId, commitHash),
+        invokeWithDiagnostics('tasks:worktree:getCommitDiff', taskId, commitHash),
       getCommitFileContent: (
         taskId: string,
         commitHash: string,
         filePath: string,
         status: 'added' | 'modified' | 'deleted',
       ) =>
-        ipcRenderer.invoke(
+        invokeWithDiagnostics(
           'tasks:worktree:getCommitFileContent',
           taskId,
           commitHash,
@@ -343,7 +369,7 @@ contextBridge.exposeInMainWorld('api', {
         status: 'added' | 'modified' | 'deleted',
         originalPath?: string,
       ) =>
-        ipcRenderer.invoke(
+        invokeWithDiagnostics(
           'tasks:worktree:getFileContent',
           taskId,
           filePath,
@@ -357,7 +383,7 @@ contextBridge.exposeInMainWorld('api', {
         scope: 'staged' | 'unstaged',
         originalPath?: string,
       ) =>
-        ipcRenderer.invoke(
+        invokeWithDiagnostics(
           'tasks:worktree:getLocalFileContent',
           taskId,
           filePath,
@@ -366,19 +392,19 @@ contextBridge.exposeInMainWorld('api', {
           originalPath,
         ),
       getStatus: (taskId: string) =>
-        ipcRenderer.invoke('tasks:worktree:getStatus', taskId),
+        invokeWithDiagnostics('tasks:worktree:getStatus', taskId),
       commit: (
         taskId: string,
         params: { message?: string; stageAll: boolean },
-      ) => ipcRenderer.invoke('tasks:worktree:commit', taskId, params),
+      ) => invokeWithDiagnostics('tasks:worktree:commit', taskId, params),
       generateCommitMessage: (taskId: string, params: { stageAll: boolean }) =>
-        ipcRenderer.invoke(
+        invokeWithDiagnostics(
           'tasks:worktree:generateCommitMessage',
           taskId,
           params,
         ),
       checkMergeConflicts: (taskId: string, params: { targetBranch: string }) =>
-        ipcRenderer.invoke(
+        invokeWithDiagnostics(
           'tasks:worktree:checkMergeConflicts',
           taskId,
           params,
@@ -391,23 +417,23 @@ contextBridge.exposeInMainWorld('api', {
           commitMessage?: string;
           commitAllUnstaged?: boolean;
         },
-      ) => ipcRenderer.invoke('tasks:worktree:merge', taskId, params),
+      ) => invokeWithDiagnostics('tasks:worktree:merge', taskId, params),
       getBranches: (taskId: string) =>
-        ipcRenderer.invoke('tasks:worktree:getBranches', taskId),
+        invokeWithDiagnostics('tasks:worktree:getBranches', taskId),
       pushBranch: (taskId: string, params?: { commitUnstaged?: boolean }) =>
-        ipcRenderer.invoke('tasks:worktree:pushBranch', taskId, params),
+        invokeWithDiagnostics('tasks:worktree:pushBranch', taskId, params),
       pullBranch: (taskId: string) =>
-        ipcRenderer.invoke('tasks:worktree:pullBranch', taskId),
+        invokeWithDiagnostics('tasks:worktree:pullBranch', taskId),
       delete: (taskId: string, options?: { keepBranch?: boolean }) =>
-        ipcRenderer.invoke('tasks:worktree:delete', taskId, options),
+        invokeWithDiagnostics('tasks:worktree:delete', taskId, options),
     },
     summary: {
-      get: (taskId: string) => ipcRenderer.invoke('tasks:summary:get', taskId),
+      get: (taskId: string) => invokeWithDiagnostics('tasks:summary:get', taskId),
       generate: (taskId: string) =>
-        ipcRenderer.invoke('tasks:summary:generate', taskId),
+        invokeWithDiagnostics('tasks:summary:generate', taskId),
     },
     generatePrDescription: (params: { taskId: string }) =>
-      ipcRenderer.invoke('tasks:generatePrDescription', params),
+      invokeWithDiagnostics('tasks:generatePrDescription', params),
     createPullRequest: (params: {
       taskId: string;
       title: string;
@@ -415,19 +441,19 @@ contextBridge.exposeInMainWorld('api', {
       isDraft: boolean;
       deleteWorktree?: boolean;
       commitUnstaged?: boolean;
-    }) => ipcRenderer.invoke('tasks:createPullRequest', params),
+    }) => invokeWithDiagnostics('tasks:createPullRequest', params),
     createPrReviewTask: (params: {
       projectId: string;
       pullRequestId: number;
-    }) => ipcRenderer.invoke('tasks:createPrReviewTask', params),
+    }) => invokeWithDiagnostics('tasks:createPrReviewTask', params),
     startPrCommand: (params: StartPrCommandParams) =>
-      ipcRenderer.invoke(START_PR_COMMAND_CHANNEL, params),
+      invokeWithDiagnostics(START_PR_COMMAND_CHANNEL, params),
   },
   steps: {
     findByTaskId: (taskId: string) =>
-      ipcRenderer.invoke('steps:findByTaskId', taskId),
-    findById: (stepId: string) => ipcRenderer.invoke('steps:findById', stepId),
-    create: (data: unknown) => ipcRenderer.invoke('steps:create', data),
+      invokeWithDiagnostics('steps:findByTaskId', taskId),
+    findById: (stepId: string) => invokeWithDiagnostics('steps:findById', stepId),
+    create: (data: unknown) => invokeWithDiagnostics('steps:create', data),
     createPrReviewChatStep: (params: {
       taskId: string;
       pullRequestId: number;
@@ -437,79 +463,79 @@ contextBridge.exposeInMainWorld('api', {
       side?: 'old' | 'new';
       selectedText: string;
       question: string;
-    }) => ipcRenderer.invoke('steps:createPrReviewChatStep', params),
+    }) => invokeWithDiagnostics('steps:createPrReviewChatStep', params),
     continuePrReviewChatStep: (params: { stepId: string; question: string }) =>
-      ipcRenderer.invoke('steps:continuePrReviewChatStep', params),
+      invokeWithDiagnostics('steps:continuePrReviewChatStep', params),
     update: (stepId: string, data: unknown) =>
-      ipcRenderer.invoke('steps:update', stepId, data),
-    archive: (stepId: string) => ipcRenderer.invoke('steps:archive', stepId),
+      invokeWithDiagnostics('steps:update', stepId, data),
+    archive: (stepId: string) => invokeWithDiagnostics('steps:archive', stepId),
     resolvePrompt: (stepId: string) =>
-      ipcRenderer.invoke('steps:resolvePrompt', stepId),
+      invokeWithDiagnostics('steps:resolvePrompt', stepId),
     setMode: (stepId: string, mode: string) =>
-      ipcRenderer.invoke('steps:setMode', stepId, mode),
+      invokeWithDiagnostics('steps:setMode', stepId, mode),
     setAutoAccept: (stepId: string, enabled: boolean) =>
-      ipcRenderer.invoke('steps:setAutoAccept', stepId, enabled),
+      invokeWithDiagnostics('steps:setAutoAccept', stepId, enabled),
     getAutoAccept: (stepId: string) =>
-      ipcRenderer.invoke('steps:getAutoAccept', stepId),
+      invokeWithDiagnostics('steps:getAutoAccept', stepId),
     submitPrReview: (stepId: string) =>
-      ipcRenderer.invoke('steps:submitPrReview', stepId),
+      invokeWithDiagnostics('steps:submitPrReview', stepId),
     addSessionAllowedTool: (params: {
       stepId: string;
       toolName: string;
       input: Record<string, unknown>;
-    }) => ipcRenderer.invoke('steps:addSessionAllowedTool', params),
+    }) => invokeWithDiagnostics('steps:addSessionAllowedTool', params),
     removeSessionAllowedTool: (params: {
       stepId: string;
       toolName: string;
       pattern?: string;
-    }) => ipcRenderer.invoke('steps:removeSessionAllowedTool', params),
+    }) => invokeWithDiagnostics('steps:removeSessionAllowedTool', params),
     allowForProject: (params: {
       stepId: string;
       toolName: string;
       input: Record<string, unknown>;
-    }) => ipcRenderer.invoke('steps:allowForProject', params),
+    }) => invokeWithDiagnostics('steps:allowForProject', params),
     allowForProjectWorktrees: (params: {
       stepId: string;
       toolName: string;
       input: Record<string, unknown>;
-    }) => ipcRenderer.invoke('steps:allowForProjectWorktrees', params),
+    }) => invokeWithDiagnostics('steps:allowForProjectWorktrees', params),
     allowGlobally: (params: {
       stepId: string;
       toolName: string;
       input: Record<string, unknown>;
-    }) => ipcRenderer.invoke('steps:allowGlobally', params),
+    }) => invokeWithDiagnostics('steps:allowGlobally', params),
   },
   providers: {
-    findAll: () => ipcRenderer.invoke('providers:findAll'),
-    findById: (id: string) => ipcRenderer.invoke('providers:findById', id),
+    findAll: () => invokeWithDiagnostics('providers:findAll'),
+    findById: (id: string) => invokeWithDiagnostics('providers:findById', id),
     findByTokenId: (tokenId: string) =>
-      ipcRenderer.invoke('providers:findByTokenId', tokenId),
-    create: (data: unknown) => ipcRenderer.invoke('providers:create', data),
+      invokeWithDiagnostics('providers:findByTokenId', tokenId),
+    create: (data: unknown) => invokeWithDiagnostics('providers:create', data),
     update: (id: string, data: unknown) =>
-      ipcRenderer.invoke('providers:update', id, data),
-    delete: (id: string) => ipcRenderer.invoke('providers:delete', id),
+      invokeWithDiagnostics('providers:update', id, data),
+    delete: (id: string) => invokeWithDiagnostics('providers:delete', id),
     getDetails: (providerId: string) =>
-      ipcRenderer.invoke('providers:getDetails', providerId),
+      invokeWithDiagnostics('providers:getDetails', providerId),
   },
   tokens: {
-    findAll: () => ipcRenderer.invoke('tokens:findAll'),
-    findById: (id: string) => ipcRenderer.invoke('tokens:findById', id),
+    findAll: () => invokeWithDiagnostics('tokens:findAll'),
+    findById: (id: string) => invokeWithDiagnostics('tokens:findById', id),
     findByProviderType: (providerType: string) =>
-      ipcRenderer.invoke('tokens:findByProviderType', providerType),
-    create: (data: unknown) => ipcRenderer.invoke('tokens:create', data),
+      invokeWithDiagnostics('tokens:findByProviderType', providerType),
+    create: (data: unknown) => invokeWithDiagnostics('tokens:create', data),
     update: (id: string, data: unknown) =>
-      ipcRenderer.invoke('tokens:update', id, data),
-    delete: (id: string) => ipcRenderer.invoke('tokens:delete', id),
+      invokeWithDiagnostics('tokens:update', id, data),
+    delete: (id: string) => invokeWithDiagnostics('tokens:delete', id),
   },
   azureDevOps: {
     getOrganizations: (tokenId: string) =>
-      ipcRenderer.invoke('azureDevOps:getOrganizations', tokenId),
+      invokeWithDiagnostics('azureDevOps:getOrganizations', tokenId),
     validateToken: (token: string) =>
-      ipcRenderer.invoke('azureDevOps:validateToken', token),
+      invokeWithDiagnostics('azureDevOps:validateToken', token),
     getTokenExpiration: (tokenId: string) =>
-      ipcRenderer.invoke('azureDevOps:getTokenExpiration', tokenId),
+      invokeWithDiagnostics('azureDevOps:getTokenExpiration', tokenId),
     getCurrentUser: (providerId: string) =>
-      ipcRenderer.invoke('azureDevOps:getCurrentUser', providerId),
+      invokeWithDiagnostics('azureDevOps:getCurrentUser', providerId),
     queryWorkItems: (params: {
       providerId: string;
       projectId: string;
@@ -524,51 +550,51 @@ contextBridge.exposeInMainWorld('api', {
         assignedTo?: string;
       };
       extraFieldRefNames?: string[];
-    }) => ipcRenderer.invoke('azureDevOps:queryWorkItems', params),
+    }) => invokeWithDiagnostics('azureDevOps:queryWorkItems', params),
     queryWorkItemOwners: (params: {
       providerId: string;
       projectName: string;
-    }) => ipcRenderer.invoke('azureDevOps:queryWorkItemOwners', params),
+    }) => invokeWithDiagnostics('azureDevOps:queryWorkItemOwners', params),
     getWorkItemById: (params: {
       providerId: string;
       workItemId: number;
       extraFieldRefNames?: string[];
-    }) => ipcRenderer.invoke('azureDevOps:getWorkItemById', params),
+    }) => invokeWithDiagnostics('azureDevOps:getWorkItemById', params),
     getWorkItemsByIds: (params: {
       providerId: string;
       projectName: string;
       workItemIds: number[];
       extraFieldRefNames?: string[];
-    }) => ipcRenderer.invoke('azureDevOps:getWorkItemsByIds', params),
+    }) => invokeWithDiagnostics('azureDevOps:getWorkItemsByIds', params),
     getWorkItemTypeFields: (params: {
       providerId: string;
       azureProjectId: string;
-    }) => ipcRenderer.invoke('azureDevOps:getWorkItemTypeFields', params),
+    }) => invokeWithDiagnostics('azureDevOps:getWorkItemTypeFields', params),
     getPullRequestStatuses: (params: {
       providerId: string;
       linkedPrs: Array<{ prId: number; projectId: string; repoId: string }>;
-    }) => ipcRenderer.invoke('azureDevOps:getPullRequestStatuses', params),
+    }) => invokeWithDiagnostics('azureDevOps:getPullRequestStatuses', params),
     getWorkItemStates: (params: {
       providerId: string;
       projectName: string;
       workItemType: string;
-    }) => ipcRenderer.invoke('azureDevOps:getWorkItemStates', params),
+    }) => invokeWithDiagnostics('azureDevOps:getWorkItemStates', params),
     getBoardColumns: (params: {
       providerId: string;
       projectId: string;
       projectName: string;
-    }) => ipcRenderer.invoke('azureDevOps:getBoardColumns', params),
+    }) => invokeWithDiagnostics('azureDevOps:getBoardColumns', params),
     updateWorkItemState: (params: {
       providerId: string;
       workItemId: number;
       state: string;
-    }) => ipcRenderer.invoke('azureDevOps:updateWorkItemState', params),
+    }) => invokeWithDiagnostics('azureDevOps:updateWorkItemState', params),
     updateWorkItemField: (params: {
       providerId: string;
       workItemId: number;
       field: string;
       value: string | number | null;
-    }) => ipcRenderer.invoke('azureDevOps:updateWorkItemField', params),
+    }) => invokeWithDiagnostics('azureDevOps:updateWorkItemField', params),
     updateWorkItemBoardColumn: (params: {
       providerId: string;
       projectId: string;
@@ -577,51 +603,51 @@ contextBridge.exposeInMainWorld('api', {
       column: string;
       teamId: string;
       boardId: string;
-    }) => ipcRenderer.invoke('azureDevOps:updateWorkItemBoardColumn', params),
+    }) => invokeWithDiagnostics('azureDevOps:updateWorkItemBoardColumn', params),
     getRelatedTestCases: (params: {
       providerId: string;
       projectName: string;
       workItemId: number;
-    }) => ipcRenderer.invoke('azureDevOps:getRelatedTestCases', params),
+    }) => invokeWithDiagnostics('azureDevOps:getRelatedTestCases', params),
     getWorkItemComments: (params: {
       providerId: string;
       projectName: string;
       workItemId: number;
-    }) => ipcRenderer.invoke('azureDevOps:getWorkItemComments', params),
+    }) => invokeWithDiagnostics('azureDevOps:getWorkItemComments', params),
     getWorkItemSummary: (params: {
       projectId: string;
       providerId: string;
       projectName: string;
       workItemId: number;
-    }) => ipcRenderer.invoke('azureDevOps:getWorkItemSummary', params),
+    }) => invokeWithDiagnostics('azureDevOps:getWorkItemSummary', params),
     generateWorkItemSummary: (params: {
       projectId: string;
       providerId: string;
       projectName: string;
       workItemId: number;
-    }) => ipcRenderer.invoke('azureDevOps:generateWorkItemSummary', params),
+    }) => invokeWithDiagnostics('azureDevOps:generateWorkItemSummary', params),
     getCachedWorkItemSummaries: (params: {
       providerId: string;
       workItemIds: number[];
-    }) => ipcRenderer.invoke('azureDevOps:getCachedWorkItemSummaries', params),
+    }) => invokeWithDiagnostics('azureDevOps:getCachedWorkItemSummaries', params),
     getWorkItemHistory: (params: {
       providerId: string;
       projectName: string;
       workItemId: number;
-    }) => ipcRenderer.invoke('azureDevOps:getWorkItemHistory', params),
+    }) => invokeWithDiagnostics('azureDevOps:getWorkItemHistory', params),
     addWorkItemComment: (params: {
       providerId: string;
       projectName: string;
       workItemId: number;
       text: string;
-    }) => ipcRenderer.invoke('azureDevOps:addWorkItemComment', params),
+    }) => invokeWithDiagnostics('azureDevOps:addWorkItemComment', params),
      updateWorkItemComment: (params: {
       providerId: string;
       projectName: string;
       workItemId: number;
       commentId: number;
       text: string;
-     }) => ipcRenderer.invoke('azureDevOps:updateWorkItemComment', params),
+     }) => invokeWithDiagnostics('azureDevOps:updateWorkItemComment', params),
      setWorkItemCommentReaction: (params: {
        providerId: string;
        projectName: string;
@@ -629,7 +655,7 @@ contextBridge.exposeInMainWorld('api', {
        commentId: number;
        reactionType: 'like' | 'dislike' | 'heart' | 'hooray' | 'smile' | 'confused';
        engaged: boolean;
-     }) => ipcRenderer.invoke('azureDevOps:setWorkItemCommentReaction', params),
+     }) => invokeWithDiagnostics('azureDevOps:setWorkItemCommentReaction', params),
     uploadWorkItemAttachment: (params: {
       providerId: string;
       projectName: string;
@@ -637,9 +663,9 @@ contextBridge.exposeInMainWorld('api', {
       filename: string;
       mimeType: string;
       base64: string;
-    }) => ipcRenderer.invoke('azureDevOps:uploadWorkItemAttachment', params),
+    }) => invokeWithDiagnostics('azureDevOps:uploadWorkItemAttachment', params),
     getIterations: (params: { providerId: string; projectName: string }) =>
-      ipcRenderer.invoke('azureDevOps:getIterations', params),
+      invokeWithDiagnostics('azureDevOps:getIterations', params),
     createPullRequest: (params: {
       providerId: string;
       projectId: string;
@@ -649,32 +675,32 @@ contextBridge.exposeInMainWorld('api', {
       title: string;
       description: string;
       isDraft: boolean;
-    }) => ipcRenderer.invoke('azureDevOps:createPullRequest', params),
+    }) => invokeWithDiagnostics('azureDevOps:createPullRequest', params),
     cloneRepository: (params: {
       orgName: string;
       projectName: string;
       repoName: string;
       targetPath: string;
-    }) => ipcRenderer.invoke('azureDevOps:cloneRepository', params),
+    }) => invokeWithDiagnostics('azureDevOps:cloneRepository', params),
     listPullRequests: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       status?: 'active' | 'completed' | 'abandoned' | 'all';
-    }) => ipcRenderer.invoke('azureDevOps:listPullRequests', params),
+    }) => invokeWithDiagnostics('azureDevOps:listPullRequests', params),
     getPullRequest: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
-    }) => ipcRenderer.invoke('azureDevOps:getPullRequest', params),
+    }) => invokeWithDiagnostics('azureDevOps:getPullRequest', params),
     updatePullRequestTitle: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
       title: string;
-    }) => ipcRenderer.invoke('azureDevOps:updatePullRequestTitle', params),
+    }) => invokeWithDiagnostics('azureDevOps:updatePullRequestTitle', params),
     updatePullRequestDescription: (params: {
       providerId: string;
       projectId: string;
@@ -682,27 +708,27 @@ contextBridge.exposeInMainWorld('api', {
       pullRequestId: number;
       description: string;
     }) =>
-      ipcRenderer.invoke('azureDevOps:updatePullRequestDescription', params),
+      invokeWithDiagnostics('azureDevOps:updatePullRequestDescription', params),
     getPullRequestTags: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
-    }) => ipcRenderer.invoke('azureDevOps:getPullRequestTags', params),
+    }) => invokeWithDiagnostics('azureDevOps:getPullRequestTags', params),
     addPullRequestTag: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
       name: string;
-    }) => ipcRenderer.invoke('azureDevOps:addPullRequestTag', params),
+    }) => invokeWithDiagnostics('azureDevOps:addPullRequestTag', params),
     removePullRequestTag: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
       name: string;
-    }) => ipcRenderer.invoke('azureDevOps:removePullRequestTag', params),
+    }) => invokeWithDiagnostics('azureDevOps:removePullRequestTag', params),
     uploadPullRequestAttachment: (params: {
       providerId: string;
       projectId: string;
@@ -711,13 +737,13 @@ contextBridge.exposeInMainWorld('api', {
       fileName: string;
       mimeType: string;
       dataBase64: string;
-    }) => ipcRenderer.invoke('azureDevOps:uploadPullRequestAttachment', params),
+    }) => invokeWithDiagnostics('azureDevOps:uploadPullRequestAttachment', params),
     getPullRequestCommits: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
-    }) => ipcRenderer.invoke('azureDevOps:getPullRequestCommits', params),
+    }) => invokeWithDiagnostics('azureDevOps:getPullRequestCommits', params),
     getPullRequestDivergence: (params: {
       providerId: string;
       projectId: string;
@@ -725,19 +751,19 @@ contextBridge.exposeInMainWorld('api', {
       pullRequestId: number;
       sourceRefName?: string;
       targetRefName?: string;
-    }) => ipcRenderer.invoke('azureDevOps:getPullRequestDivergence', params),
+    }) => invokeWithDiagnostics('azureDevOps:getPullRequestDivergence', params),
     getPullRequestChanges: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
-    }) => ipcRenderer.invoke('azureDevOps:getPullRequestChanges', params),
+    }) => invokeWithDiagnostics('azureDevOps:getPullRequestChanges', params),
     getCommitChanges: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       commitId: string;
-    }) => ipcRenderer.invoke('azureDevOps:getCommitChanges', params),
+    }) => invokeWithDiagnostics('azureDevOps:getCommitChanges', params),
     getFileContentAtCommit: (params: {
       providerId: string;
       projectId: string;
@@ -745,7 +771,7 @@ contextBridge.exposeInMainWorld('api', {
       commitId: string;
       filePath: string;
       version: 'current' | 'parent';
-    }) => ipcRenderer.invoke('azureDevOps:getFileContentAtCommit', params),
+    }) => invokeWithDiagnostics('azureDevOps:getFileContentAtCommit', params),
     getPullRequestFileContent: (params: {
       providerId: string;
       projectId: string;
@@ -753,33 +779,33 @@ contextBridge.exposeInMainWorld('api', {
       pullRequestId: number;
       filePath: string;
       version: 'base' | 'head';
-    }) => ipcRenderer.invoke('azureDevOps:getPullRequestFileContent', params),
+    }) => invokeWithDiagnostics('azureDevOps:getPullRequestFileContent', params),
     getPullRequestThreads: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
-    }) => ipcRenderer.invoke('azureDevOps:getPullRequestThreads', params),
+    }) => invokeWithDiagnostics('azureDevOps:getPullRequestThreads', params),
     getPullRequestWorkItems: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
-    }) => ipcRenderer.invoke('azureDevOps:getPullRequestWorkItems', params),
+    }) => invokeWithDiagnostics('azureDevOps:getPullRequestWorkItems', params),
     linkWorkItemToPr: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
       workItemId: number;
-    }) => ipcRenderer.invoke('azureDevOps:linkWorkItemToPr', params),
+    }) => invokeWithDiagnostics('azureDevOps:linkWorkItemToPr', params),
     unlinkWorkItemFromPr: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
       workItemId: number;
-    }) => ipcRenderer.invoke('azureDevOps:unlinkWorkItemFromPr', params),
+    }) => invokeWithDiagnostics('azureDevOps:unlinkWorkItemFromPr', params),
     addPullRequestComment: (params: {
       localProjectId?: string;
       providerId: string;
@@ -787,7 +813,7 @@ contextBridge.exposeInMainWorld('api', {
       repoId: string;
       pullRequestId: number;
       content: string;
-    }) => ipcRenderer.invoke('azureDevOps:addPullRequestComment', params),
+    }) => invokeWithDiagnostics('azureDevOps:addPullRequestComment', params),
     addPullRequestFileComment: (params: {
       localProjectId?: string;
       providerId: string;
@@ -799,7 +825,7 @@ contextBridge.exposeInMainWorld('api', {
       lineEnd?: number;
       selectedLines?: string;
       content: string;
-    }) => ipcRenderer.invoke('azureDevOps:addPullRequestFileComment', params),
+    }) => invokeWithDiagnostics('azureDevOps:addPullRequestFileComment', params),
     addThreadReply: (params: {
       localProjectId?: string;
       providerId: string;
@@ -808,7 +834,7 @@ contextBridge.exposeInMainWorld('api', {
       pullRequestId: number;
       threadId: number;
       content: string;
-    }) => ipcRenderer.invoke('azureDevOps:addThreadReply', params),
+    }) => invokeWithDiagnostics('azureDevOps:addThreadReply', params),
     updateThreadComment: (params: {
       providerId: string;
       projectId: string;
@@ -817,7 +843,7 @@ contextBridge.exposeInMainWorld('api', {
       threadId: number;
       commentId: number;
       content: string;
-    }) => ipcRenderer.invoke('azureDevOps:updateThreadComment', params),
+    }) => invokeWithDiagnostics('azureDevOps:updateThreadComment', params),
     deleteThreadComment: (params: {
       providerId: string;
       projectId: string;
@@ -825,7 +851,7 @@ contextBridge.exposeInMainWorld('api', {
       pullRequestId: number;
       threadId: number;
       commentId: number;
-    }) => ipcRenderer.invoke('azureDevOps:deleteThreadComment', params),
+    }) => invokeWithDiagnostics('azureDevOps:deleteThreadComment', params),
     setThreadCommentLike: (params: {
       providerId: string;
       projectId: string;
@@ -834,7 +860,7 @@ contextBridge.exposeInMainWorld('api', {
       threadId: number;
       commentId: number;
       liked: boolean;
-    }) => ipcRenderer.invoke('azureDevOps:setThreadCommentLike', params),
+    }) => invokeWithDiagnostics('azureDevOps:setThreadCommentLike', params),
     updateThreadStatus: (params: {
       providerId: string;
       projectId: string;
@@ -842,28 +868,28 @@ contextBridge.exposeInMainWorld('api', {
       pullRequestId: number;
       threadId: number;
       status: string;
-    }) => ipcRenderer.invoke('azureDevOps:updateThreadStatus', params),
+    }) => invokeWithDiagnostics('azureDevOps:updateThreadStatus', params),
     searchIdentities: (params: { providerId: string; query: string }) =>
-      ipcRenderer.invoke('azureDevOps:searchIdentities', params),
+      invokeWithDiagnostics('azureDevOps:searchIdentities', params),
     fetchImageAsBase64: (params: { providerId: string; imageUrl: string }) =>
-      ipcRenderer.invoke('azureDevOps:fetchImageAsBase64', params),
+      invokeWithDiagnostics('azureDevOps:fetchImageAsBase64', params),
     downloadWorkItemAttachment: (params: {
       providerId: string;
       attachmentUrl: string;
       filename: string;
       projectPath: string;
-    }) => ipcRenderer.invoke('azureDevOps:downloadWorkItemAttachment', params),
+    }) => invokeWithDiagnostics('azureDevOps:downloadWorkItemAttachment', params),
     getPullRequestPolicyEvaluations: (params: {
       providerId: string;
       projectId: string;
       pullRequestId: number;
     }) =>
-      ipcRenderer.invoke('azureDevOps:getPullRequestPolicyEvaluations', params),
+      invokeWithDiagnostics('azureDevOps:getPullRequestPolicyEvaluations', params),
     requeuePolicyEvaluation: (params: {
       providerId: string;
       projectId: string;
       evaluationId: string;
-    }) => ipcRenderer.invoke('azureDevOps:requeuePolicyEvaluation', params),
+    }) => invokeWithDiagnostics('azureDevOps:requeuePolicyEvaluation', params),
     votePullRequest: (params: {
       providerId: string;
       projectId: string;
@@ -871,7 +897,7 @@ contextBridge.exposeInMainWorld('api', {
       pullRequestId: number;
       reviewerId: string;
       vote: number;
-    }) => ipcRenderer.invoke('azureDevOps:votePullRequest', params),
+    }) => invokeWithDiagnostics('azureDevOps:votePullRequest', params),
     setPullRequestAutoComplete: (params: {
       providerId: string;
       projectId: string;
@@ -886,88 +912,88 @@ contextBridge.exposeInMainWorld('api', {
         mergeCommitMessage?: string;
         autoCompleteIgnoreConfigIds?: number[];
       };
-    }) => ipcRenderer.invoke('azureDevOps:setPullRequestAutoComplete', params),
+    }) => invokeWithDiagnostics('azureDevOps:setPullRequestAutoComplete', params),
     publishPullRequest: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
-    }) => ipcRenderer.invoke('azureDevOps:publishPullRequest', params),
+    }) => invokeWithDiagnostics('azureDevOps:publishPullRequest', params),
     markPullRequestDraft: (params: {
       providerId: string;
       projectId: string;
       repoId: string;
       pullRequestId: number;
-    }) => ipcRenderer.invoke('azureDevOps:markPullRequestDraft', params),
+    }) => invokeWithDiagnostics('azureDevOps:markPullRequestDraft', params),
   },
   git: {
     cloneFromUrl: (params: {
       url: string;
       protocol: 'ssh' | 'https';
       targetPath: string;
-    }) => ipcRenderer.invoke('git:cloneFromUrl', params),
+    }) => invokeWithDiagnostics('git:cloneFromUrl', params),
   },
   dialog: {
-    openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
-    openImageFile: () => ipcRenderer.invoke('dialog:openImageFile'),
-    openFiles: () => ipcRenderer.invoke('dialog:openFiles'),
-    openApplication: () => ipcRenderer.invoke('dialog:openApplication'),
+    openDirectory: () => invokeWithDiagnostics('dialog:openDirectory'),
+    openImageFile: () => invokeWithDiagnostics('dialog:openImageFile'),
+    openFiles: () => invokeWithDiagnostics('dialog:openFiles'),
+    openApplication: () => invokeWithDiagnostics('dialog:openApplication'),
     saveFile: (params: {
       defaultPath?: string;
       filters?: Array<{ name: string; extensions: string[] }>;
       content?: Uint8Array;
-    }) => ipcRenderer.invoke('dialog:saveFile', params),
+    }) => invokeWithDiagnostics('dialog:saveFile', params),
   },
   settings: {
-    get: (key: string) => ipcRenderer.invoke('settings:get', key),
+    get: (key: string) => invokeWithDiagnostics('settings:get', key),
     set: (key: string, value: unknown) =>
-      ipcRenderer.invoke('settings:set', key, value),
+      invokeWithDiagnostics('settings:set', key, value),
   },
   modelProfiles: {
     resolve: (params: {
       role: import('@shared/model-profiles').ModelRole;
       projectId?: string | null;
       override?: import('@shared/model-profiles').ModelOverride | null;
-    }) => ipcRenderer.invoke('modelProfiles:resolve', params),
+    }) => invokeWithDiagnostics('modelProfiles:resolve', params),
     activate: (profileId: string, projectId?: string | null) =>
-      ipcRenderer.invoke('modelProfiles:activate', profileId, projectId ?? null),
+      invokeWithDiagnostics('modelProfiles:activate', profileId, projectId ?? null),
   },
   backendConfig: {
     getUserConfig: (
       backend: import('@shared/agent-backend-types').AgentBackendType,
-    ) => ipcRenderer.invoke('backendConfig:getUserConfig', backend),
+    ) => invokeWithDiagnostics('backendConfig:getUserConfig', backend),
     setUserConfig: (
       backend: import('@shared/agent-backend-types').AgentBackendType,
       content: string,
-    ) => ipcRenderer.invoke('backendConfig:setUserConfig', backend, content),
+    ) => invokeWithDiagnostics('backendConfig:setUserConfig', backend, content),
   },
   projectPromptPreface: {
     get: (projectPath: string) =>
-      ipcRenderer.invoke('projectPromptPreface:get', projectPath),
+      invokeWithDiagnostics('projectPromptPreface:get', projectPath),
     set: (
       projectPath: string,
       value: import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting,
-    ) => ipcRenderer.invoke('projectPromptPreface:set', projectPath, value),
+    ) => invokeWithDiagnostics('projectPromptPreface:set', projectPath, value),
   },
   globalPermissions: {
-    get: () => ipcRenderer.invoke('globalPermissions:get'),
+    get: () => invokeWithDiagnostics('globalPermissions:get'),
     set: (permissions: import('@shared/permission-types').PermissionScope) =>
-      ipcRenderer.invoke('globalPermissions:set', permissions),
+      invokeWithDiagnostics('globalPermissions:set', permissions),
     addRule: (
       toolName: string,
       input: Record<string, unknown>,
       action?: import('@shared/permission-types').PermissionAction,
     ) =>
-      ipcRenderer.invoke('globalPermissions:addRule', toolName, input, action),
+      invokeWithDiagnostics('globalPermissions:addRule', toolName, input, action),
     removeRule: (tool: string, pattern?: string) =>
-      ipcRenderer.invoke('globalPermissions:removeRule', tool, pattern),
+      invokeWithDiagnostics('globalPermissions:removeRule', tool, pattern),
     editRule: (
       tool: string,
       oldPattern: string | undefined,
       newPattern: string | undefined,
       action: import('@shared/permission-types').PermissionAction,
     ) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'globalPermissions:editRule',
         tool,
         oldPattern,
@@ -991,14 +1017,14 @@ contextBridge.exposeInMainWorld('api', {
   },
   projectPermissions: {
     get: (projectPath: string) =>
-      ipcRenderer.invoke('projectPermissions:get', projectPath),
+      invokeWithDiagnostics('projectPermissions:get', projectPath),
     addRule: (
       projectPath: string,
       toolName: string,
       input: Record<string, unknown>,
       action?: import('@shared/permission-types').PermissionAction,
     ) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'projectPermissions:addRule',
         projectPath,
         toolName,
@@ -1006,7 +1032,7 @@ contextBridge.exposeInMainWorld('api', {
         action,
       ),
     removeRule: (projectPath: string, tool: string, pattern?: string) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'projectPermissions:removeRule',
         projectPath,
         tool,
@@ -1019,7 +1045,7 @@ contextBridge.exposeInMainWorld('api', {
       newPattern: string | undefined,
       action: import('@shared/permission-types').PermissionAction,
     ) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'projectPermissions:editRule',
         projectPath,
         tool,
@@ -1030,37 +1056,37 @@ contextBridge.exposeInMainWorld('api', {
   },
   worktreeConfig: {
     getCopyEntries: (projectPath: string) =>
-      ipcRenderer.invoke('worktreeConfig:get', projectPath),
+      invokeWithDiagnostics('worktreeConfig:get', projectPath),
     setCopyEntries: (
       projectPath: string,
       entries: import('@shared/permission-types').WorktreeFileCopyEntry[],
     ) =>
-      ipcRenderer.invoke('worktreeConfig:setCopyEntries', projectPath, entries),
+      invokeWithDiagnostics('worktreeConfig:setCopyEntries', projectPath, entries),
   },
   fs: {
     readPackageJson: (dirPath: string) =>
-      ipcRenderer.invoke('fs:readPackageJson', dirPath),
+      invokeWithDiagnostics('fs:readPackageJson', dirPath),
     readFile: (filePath: string, maxBytes?: number) =>
-      ipcRenderer.invoke('fs:readFile', filePath, maxBytes),
+      invokeWithDiagnostics('fs:readFile', filePath, maxBytes),
     getFileSize: (filePath: string) =>
-      ipcRenderer.invoke('fs:getFileSize', filePath),
+      invokeWithDiagnostics('fs:getFileSize', filePath),
     readImageAsDataUrl: (filePath: string) =>
-      ipcRenderer.invoke('fs:readImageAsDataUrl', filePath),
+      invokeWithDiagnostics('fs:readImageAsDataUrl', filePath),
     readSpreadsheetAsBase64: (filePath: string) =>
-      ipcRenderer.invoke('fs:readSpreadsheetAsBase64', filePath),
+      invokeWithDiagnostics('fs:readSpreadsheetAsBase64', filePath),
     getImageUrl: (filePath: string) =>
-      ipcRenderer.invoke('fs:getImageUrl', filePath),
+      invokeWithDiagnostics('fs:getImageUrl', filePath),
     listDirectory: (dirPath: string, projectRoot: string) =>
-      ipcRenderer.invoke('fs:listDirectory', dirPath, projectRoot),
+      invokeWithDiagnostics('fs:listDirectory', dirPath, projectRoot),
     listProjectFiles: (projectRoot: string) =>
-      ipcRenderer.invoke('fs:listProjectFiles', projectRoot),
+      invokeWithDiagnostics('fs:listProjectFiles', projectRoot),
     writeAttachmentFile: (
       projectPath: string,
       filename: string,
       content: string,
       encoding?: 'utf-8' | 'base64',
     ) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'fs:writeAttachmentFile',
         projectPath,
         filename,
@@ -1068,73 +1094,73 @@ contextBridge.exposeInMainWorld('api', {
         encoding,
       ),
     copyAttachmentFile: (projectPath: string, sourcePath: string) =>
-      ipcRenderer.invoke('fs:copyAttachmentFile', projectPath, sourcePath),
+      invokeWithDiagnostics('fs:copyAttachmentFile', projectPath, sourcePath),
     deleteAttachmentFile: (projectPath: string, filePath: string) =>
-      ipcRenderer.invoke('fs:deleteAttachmentFile', projectPath, filePath),
+      invokeWithDiagnostics('fs:deleteAttachmentFile', projectPath, filePath),
     getPathForFile: (file: File) => webUtils.getPathForFile(file) || null,
   },
   shell: {
     openInEditor: (dirPath: string, folderContext?: string) =>
-      ipcRenderer.invoke('shell:openInEditor', dirPath, folderContext),
+      invokeWithDiagnostics('shell:openInEditor', dirPath, folderContext),
     openPath: (targetPath: string) =>
-      ipcRenderer.invoke('shell:openPath', targetPath),
+      invokeWithDiagnostics('shell:openPath', targetPath),
     openTeamsJoinUrl: (url: string) =>
-      ipcRenderer.invoke('shell:openTeamsJoinUrl', url),
-    getAvailableEditors: () => ipcRenderer.invoke('shell:getAvailableEditors'),
-    getAgentCliStatus: () => ipcRenderer.invoke('shell:getAgentCliStatus'),
+      invokeWithDiagnostics('shell:openTeamsJoinUrl', url),
+    getAvailableEditors: () => invokeWithDiagnostics('shell:getAvailableEditors'),
+    getAgentCliStatus: () => invokeWithDiagnostics('shell:getAgentCliStatus'),
     setupGlobalGitignore: () =>
-      ipcRenderer.invoke('shell:setupGlobalGitignore') as Promise<{
+      invokeWithDiagnostics('shell:setupGlobalGitignore') as Promise<{
         success: boolean;
         path: string;
       }>,
   },
   calendar: {
     listUpcomingMeetings: () =>
-      ipcRenderer.invoke('calendar:listUpcomingMeetings') as Promise<
+      invokeWithDiagnostics('calendar:listUpcomingMeetings') as Promise<
         import('@shared/calendar-types').UpcomingMeeting[]
       >,
     listTodayMeetings: () =>
-      ipcRenderer.invoke('calendar:listTodayMeetings') as Promise<
+      invokeWithDiagnostics('calendar:listTodayMeetings') as Promise<
         import('@shared/calendar-types').UpcomingMeeting[]
       >,
     revealMeeting: (
       meeting: import('@shared/calendar-types').UpcomingMeeting,
-    ) => ipcRenderer.invoke('calendar:revealMeeting', meeting) as Promise<void>,
+    ) => invokeWithDiagnostics('calendar:revealMeeting', meeting) as Promise<void>,
     suppressMeetingStartPopup: (
       meeting: import('@shared/calendar-types').UpcomingMeeting,
     ) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'calendar:suppressMeetingStartPopup',
         meeting,
       ) as Promise<void>,
     setIgnoredMeetingIds: (ids: string[]) =>
-      ipcRenderer.invoke('calendar:setIgnoredMeetingIds', ids) as Promise<void>,
+      invokeWithDiagnostics('calendar:setIgnoredMeetingIds', ids) as Promise<void>,
   },
   agent: {
-    start: (stepId: string) => ipcRenderer.invoke(AGENT_CHANNELS.START, stepId),
-    stop: (stepId: string) => ipcRenderer.invoke(AGENT_CHANNELS.STOP, stepId),
-    stopAll: () => ipcRenderer.invoke(AGENT_CHANNELS.STOP_ALL),
+    start: (stepId: string) => invokeWithDiagnostics(AGENT_CHANNELS.START, stepId),
+    stop: (stepId: string) => invokeWithDiagnostics(AGENT_CHANNELS.STOP, stepId),
+    stopAll: () => invokeWithDiagnostics(AGENT_CHANNELS.STOP_ALL),
     respond: (stepId: string, requestId: string, response: unknown) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.RESPOND, stepId, requestId, response),
+      invokeWithDiagnostics(AGENT_CHANNELS.RESPOND, stepId, requestId, response),
     sendMessage: (
       stepId: string,
       parts: unknown[],
       capture?: AgentMemoryFollowUpCapture,
     ) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.SEND_MESSAGE, stepId, parts, capture),
+      invokeWithDiagnostics(AGENT_CHANNELS.SEND_MESSAGE, stepId, parts, capture),
     queuePrompt: (
       stepId: string,
       parts: unknown[],
       capture?: AgentMemoryQueuedPromptCapture,
     ) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.QUEUE_PROMPT, stepId, parts, capture),
+      invokeWithDiagnostics(AGENT_CHANNELS.QUEUE_PROMPT, stepId, parts, capture),
     updateQueuedPrompt: (
       stepId: string,
       promptId: string,
       content: string,
       capture?: AgentMemoryPromptCapture,
     ) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         AGENT_CHANNELS.UPDATE_QUEUED_PROMPT,
         stepId,
         promptId,
@@ -1142,35 +1168,35 @@ contextBridge.exposeInMainWorld('api', {
         capture,
       ),
     cancelQueuedPrompt: (stepId: string, promptId: string) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.CANCEL_QUEUED_PROMPT, stepId, promptId),
+      invokeWithDiagnostics(AGENT_CHANNELS.CANCEL_QUEUED_PROMPT, stepId, promptId),
     getBackendModels: (backend: string) =>
-      ipcRenderer.invoke('agent:getBackendModels', backend),
+      invokeWithDiagnostics('agent:getBackendModels', backend),
     getMessages: (stepId: string) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.GET_MESSAGES, stepId),
+      invokeWithDiagnostics(AGENT_CHANNELS.GET_MESSAGES, stepId),
     getMessageCount: (stepId: string) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.GET_MESSAGE_COUNT, stepId),
+      invokeWithDiagnostics(AGENT_CHANNELS.GET_MESSAGE_COUNT, stepId),
     getPendingRequest: (stepId: string) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.GET_PENDING_REQUEST, stepId),
+      invokeWithDiagnostics(AGENT_CHANNELS.GET_PENDING_REQUEST, stepId),
     getBackgroundTasks: (stepId: string) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.GET_BACKGROUND_TASKS, stepId),
+      invokeWithDiagnostics(AGENT_CHANNELS.GET_BACKGROUND_TASKS, stepId),
     getMessagesWithRawData: (taskId: string, stepId: string) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         AGENT_CHANNELS.GET_MESSAGES_WITH_RAW_DATA,
         taskId,
         stepId,
       ),
     getResourceSnapshots: () =>
-      ipcRenderer.invoke('agent:resources:getSnapshots'),
-    getResourceHistory: () => ipcRenderer.invoke('agent:resources:getHistory'),
+      invokeWithDiagnostics('agent:resources:getSnapshots'),
+    getResourceHistory: () => invokeWithDiagnostics('agent:resources:getHistory'),
     setHighFrequencyResourceSampling: (enabled: boolean) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'agent:resources:setHighFrequencySampling',
         enabled,
       ),
     compactRawMessages: (taskId: string) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.COMPACT_RAW_MESSAGES, taskId),
+      invokeWithDiagnostics(AGENT_CHANNELS.COMPACT_RAW_MESSAGES, taskId),
     reprocessNormalization: (taskId: string) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.REPROCESS_NORMALIZATION, taskId),
+      invokeWithDiagnostics(AGENT_CHANNELS.REPROCESS_NORMALIZATION, taskId),
     onEvent: (callback: (event: unknown) => void) => {
       const handler = (_: unknown, event: unknown) => callback(event);
       ipcRenderer.on(AGENT_CHANNELS.EVENT, handler);
@@ -1179,129 +1205,129 @@ contextBridge.exposeInMainWorld('api', {
   },
   mobilePreview: {
     listDevices: (platform: MobilePlatform) =>
-      ipcRenderer.invoke('mobilePreview:listDevices', platform),
+      invokeWithDiagnostics('mobilePreview:listDevices', platform),
     listSessions: (params: MobilePreviewListSessionsParams) =>
-      ipcRenderer.invoke('mobilePreview:listSessions', params),
+      invokeWithDiagnostics('mobilePreview:listSessions', params),
     listDeviceAssignments: () =>
-      ipcRenderer.invoke('mobilePreview:listDeviceAssignments'),
+      invokeWithDiagnostics('mobilePreview:listDeviceAssignments'),
     getAndroidToolStatus: () =>
-      ipcRenderer.invoke('mobilePreview:getAndroidToolStatus'),
+      invokeWithDiagnostics('mobilePreview:getAndroidToolStatus'),
     listAndroidDeviceProfiles: () =>
-      ipcRenderer.invoke('mobilePreview:listAndroidDeviceProfiles'),
+      invokeWithDiagnostics('mobilePreview:listAndroidDeviceProfiles'),
     listAndroidSystemImages: () =>
-      ipcRenderer.invoke('mobilePreview:listAndroidSystemImages'),
+      invokeWithDiagnostics('mobilePreview:listAndroidSystemImages'),
     createAndroidDevice: (params: MobilePreviewAndroidCreateDeviceParams) =>
-      ipcRenderer.invoke('mobilePreview:createAndroidDevice', params),
+      invokeWithDiagnostics('mobilePreview:createAndroidDevice', params),
     deleteAndroidDevice: (name: string) =>
-      ipcRenderer.invoke('mobilePreview:deleteAndroidDevice', name),
+      invokeWithDiagnostics('mobilePreview:deleteAndroidDevice', name),
     installAndroidSystemImage: (
       params: MobilePreviewAndroidInstallSystemImageParams,
-    ) => ipcRenderer.invoke('mobilePreview:installAndroidSystemImage', params),
+    ) => invokeWithDiagnostics('mobilePreview:installAndroidSystemImage', params),
     getIosToolStatus: () =>
-      ipcRenderer.invoke('mobilePreview:getIosToolStatus'),
+      invokeWithDiagnostics('mobilePreview:getIosToolStatus'),
     listIosRuntimes: () =>
-      ipcRenderer.invoke('mobilePreview:listIosRuntimes'),
+      invokeWithDiagnostics('mobilePreview:listIosRuntimes'),
     listIosDeviceTypes: () =>
-      ipcRenderer.invoke('mobilePreview:listIosDeviceTypes'),
+      invokeWithDiagnostics('mobilePreview:listIosDeviceTypes'),
     createIosDevice: (params: MobilePreviewIosCreateDeviceParams) =>
-      ipcRenderer.invoke('mobilePreview:createIosDevice', params),
+      invokeWithDiagnostics('mobilePreview:createIosDevice', params),
     deleteIosDevice: (deviceId: string) =>
-      ipcRenderer.invoke('mobilePreview:deleteIosDevice', deviceId),
+      invokeWithDiagnostics('mobilePreview:deleteIosDevice', deviceId),
     eraseIosDevice: (deviceId: string) =>
-      ipcRenderer.invoke('mobilePreview:eraseIosDevice', deviceId),
+      invokeWithDiagnostics('mobilePreview:eraseIosDevice', deviceId),
     renameIosDevice: (params: MobilePreviewIosRenameDeviceParams) =>
-      ipcRenderer.invoke('mobilePreview:renameIosDevice', params),
+      invokeWithDiagnostics('mobilePreview:renameIosDevice', params),
     getIosAppStatus: (params: MobilePreviewIosAppStatusRequestParams) =>
-      ipcRenderer.invoke('mobilePreview:getIosAppStatus', params),
+      invokeWithDiagnostics('mobilePreview:getIosAppStatus', params),
     cancelIosAppStatus: (params: MobilePreviewIosAppStatusCancelParams) =>
-      ipcRenderer.invoke('mobilePreview:cancelIosAppStatus', params),
+      invokeWithDiagnostics('mobilePreview:cancelIosAppStatus', params),
     restartIosApp: (params: MobilePreviewIosAppRequestParams) =>
-      ipcRenderer.invoke('mobilePreview:restartIosApp', params),
+      invokeWithDiagnostics('mobilePreview:restartIosApp', params),
     launchExpo: (params: MobilePreviewExpoLaunchParams) =>
-      ipcRenderer.invoke('mobilePreview:launchExpo', params),
+      invokeWithDiagnostics('mobilePreview:launchExpo', params),
     cancelExpoLaunch: (requestId: string) =>
-      ipcRenderer.invoke('mobilePreview:cancelExpoLaunch', requestId),
+      invokeWithDiagnostics('mobilePreview:cancelExpoLaunch', requestId),
     start: (params: MobilePreviewStartParams) =>
-      ipcRenderer.invoke('mobilePreview:start', params),
+      invokeWithDiagnostics('mobilePreview:start', params),
     attachSession: (params: MobilePreviewAttachSessionParams) =>
-      ipcRenderer.invoke('mobilePreview:attachSession', params),
+      invokeWithDiagnostics('mobilePreview:attachSession', params),
     detachSession: (params: MobilePreviewDetachSessionParams) =>
-      ipcRenderer.invoke('mobilePreview:detachSession', params),
+      invokeWithDiagnostics('mobilePreview:detachSession', params),
     stop: (sessionId: string) =>
-      ipcRenderer.invoke('mobilePreview:stop', sessionId),
+      invokeWithDiagnostics('mobilePreview:stop', sessionId),
     sendInput: (sessionId: string, event: MobilePreviewInputEvent) =>
-      ipcRenderer.invoke('mobilePreview:sendInput', sessionId, event),
+      invokeWithDiagnostics('mobilePreview:sendInput', sessionId, event),
     openDeeplink: (params: MobilePreviewOpenDeeplinkParams) =>
-      ipcRenderer.invoke('mobilePreview:openDeeplink', params),
+      invokeWithDiagnostics('mobilePreview:openDeeplink', params),
     openDevMenu: (params: MobilePreviewOpenDevMenuParams) =>
-      ipcRenderer.invoke('mobilePreview:openDevMenu', params),
+      invokeWithDiagnostics('mobilePreview:openDevMenu', params),
     reloadExpo: (params: MobilePreviewReloadExpoParams) =>
-      ipcRenderer.invoke('mobilePreview:reloadExpo', params),
+      invokeWithDiagnostics('mobilePreview:reloadExpo', params),
     waitForMetroClient: (params: MobilePreviewWaitForMetroClientParams) =>
-      ipcRenderer.invoke('mobilePreview:waitForMetroClient', params),
+      invokeWithDiagnostics('mobilePreview:waitForMetroClient', params),
     listMetroPeers: (params: MobilePreviewListMetroPeersParams) =>
-      ipcRenderer.invoke('mobilePreview:listMetroPeers', params),
+      invokeWithDiagnostics('mobilePreview:listMetroPeers', params),
     bootDevice: (params: MobilePreviewBootDeviceParams) =>
-      ipcRenderer.invoke('mobilePreview:bootDevice', params),
+      invokeWithDiagnostics('mobilePreview:bootDevice', params),
     captureScreenshot: (params: MobilePreviewCaptureScreenshotParams) =>
-      ipcRenderer.invoke('mobilePreview:captureScreenshot', params),
+      invokeWithDiagnostics('mobilePreview:captureScreenshot', params),
     forwardPort: (params: MobilePreviewForwardPortParams) =>
-      ipcRenderer.invoke('mobilePreview:forwardPort', params),
+      invokeWithDiagnostics('mobilePreview:forwardPort', params),
     ensureMetroReverse: (params: { deviceId: string; metroPort: number }) =>
-      ipcRenderer.invoke('mobilePreview:ensureMetroReverse', params),
+      invokeWithDiagnostics('mobilePreview:ensureMetroReverse', params),
     setTextSize: (params: MobilePreviewSetTextSizeParams) =>
-      ipcRenderer.invoke('mobilePreview:setTextSize', params),
+      invokeWithDiagnostics('mobilePreview:setTextSize', params),
     setColorScheme: (sessionId: string, scheme: MobileColorScheme) =>
-      ipcRenderer.invoke('mobilePreview:setColorScheme', sessionId, scheme),
+      invokeWithDiagnostics('mobilePreview:setColorScheme', sessionId, scheme),
     rotate: (sessionId: string, direction: MobileRotationDirection) =>
-      ipcRenderer.invoke('mobilePreview:rotate', sessionId, direction),
+      invokeWithDiagnostics('mobilePreview:rotate', sessionId, direction),
     startNativeLogs: (params: MobilePreviewNativeLogStartParams) =>
-      ipcRenderer.invoke('mobilePreview:startNativeLogs', params),
+      invokeWithDiagnostics('mobilePreview:startNativeLogs', params),
     stopNativeLogs: (sessionId: string) =>
-      ipcRenderer.invoke('mobilePreview:stopNativeLogs', sessionId),
+      invokeWithDiagnostics('mobilePreview:stopNativeLogs', sessionId),
     resolveReactNativeDevTools: (params: ReactNativeDevToolsResolveParams) =>
-      ipcRenderer.invoke('mobilePreview:resolveReactNativeDevTools', params),
+      invokeWithDiagnostics('mobilePreview:resolveReactNativeDevTools', params),
     openReactNativeDevTools: (params: ReactNativeDevToolsOpenParams) =>
-      ipcRenderer.invoke('mobilePreview:openReactNativeDevTools', params),
+      invokeWithDiagnostics('mobilePreview:openReactNativeDevTools', params),
     openEmbeddedReactNativeDevTools: (
       params: ReactNativeDevToolsEmbeddedOpenParams,
     ) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'mobilePreview:openEmbeddedReactNativeDevTools',
         params,
       ),
     setEmbeddedReactNativeDevToolsBounds: (
       params: ReactNativeDevToolsEmbeddedBoundsParams,
     ) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'mobilePreview:setEmbeddedReactNativeDevToolsBounds',
         params,
       ),
     setEmbeddedReactNativeDevToolsVisibility: (
       params: ReactNativeDevToolsEmbeddedVisibilityParams,
     ) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'mobilePreview:setEmbeddedReactNativeDevToolsVisibility',
         params,
       ),
     reloadEmbeddedReactNativeDevTools: (
       params: ReactNativeDevToolsEmbeddedReloadParams,
     ) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'mobilePreview:reloadEmbeddedReactNativeDevTools',
         params,
       ),
     closeEmbeddedReactNativeDevTools: (
       params: ReactNativeDevToolsEmbeddedCloseParams,
     ) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'mobilePreview:closeEmbeddedReactNativeDevTools',
         params,
       ),
     getAndroidAppStatus: (params: MobilePreviewAndroidAppStatusParams) =>
-      ipcRenderer.invoke('mobilePreview:getAndroidAppStatus', params),
+      invokeWithDiagnostics('mobilePreview:getAndroidAppStatus', params),
     restartAndroidApp: (params: MobilePreviewAndroidAppRestartParams) =>
-      ipcRenderer.invoke('mobilePreview:restartAndroidApp', params),
+      invokeWithDiagnostics('mobilePreview:restartAndroidApp', params),
     onNativeLogSession: (
       callback: (event: MobilePreviewNativeLogSessionEvent) => void,
     ) => {
@@ -1332,81 +1358,81 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
   mobileBuildStore: {
-    list: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:list', params),
-    build: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:build', params),
-    store: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:store', params),
-    install: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:install', params),
-    delete: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:delete', params),
-    rename: (params: unknown) => ipcRenderer.invoke('mobileBuildStore:rename', params),
+    list: (params: unknown) => invokeWithDiagnostics('mobileBuildStore:list', params),
+    build: (params: unknown) => invokeWithDiagnostics('mobileBuildStore:build', params),
+    store: (params: unknown) => invokeWithDiagnostics('mobileBuildStore:store', params),
+    install: (params: unknown) => invokeWithDiagnostics('mobileBuildStore:install', params),
+    delete: (params: unknown) => invokeWithDiagnostics('mobileBuildStore:delete', params),
+    rename: (params: unknown) => invokeWithDiagnostics('mobileBuildStore:rename', params),
   },
   debug: {
     log: (params: { scope: string; message: string; data?: unknown }) =>
-      ipcRenderer.invoke('debug:log', params),
-    getTableNames: () => ipcRenderer.invoke('debug:getTableNames'),
-    getDatabaseSize: () => ipcRenderer.invoke('debug:getDatabaseSize'),
+      invokeWithDiagnostics('debug:log', params),
+    getTableNames: () => invokeWithDiagnostics('debug:getTableNames'),
+    getDatabaseSize: () => invokeWithDiagnostics('debug:getDatabaseSize'),
     countOldCompletedTasks: () =>
-      ipcRenderer.invoke('debug:countOldCompletedTasks'),
+      invokeWithDiagnostics('debug:countOldCompletedTasks'),
     deleteOldCompletedTasks: () =>
-      ipcRenderer.invoke('debug:deleteOldCompletedTasks'),
+      invokeWithDiagnostics('debug:deleteOldCompletedTasks'),
     queryTable: (params: {
       table: string;
       search?: string;
       limit: number;
       offset: number;
-    }) => ipcRenderer.invoke('debug:queryTable', params),
+    }) => invokeWithDiagnostics('debug:queryTable', params),
   },
   usage: {
     getAll: (backends: string[]) =>
-      ipcRenderer.invoke('agent:usage:getAll', backends),
+      invokeWithDiagnostics('agent:usage:getAll', backends),
     getHistory: (params: {
       provider: string;
       limitKey: string;
       since: string;
       until?: string;
-    }) => ipcRenderer.invoke('agent:usage:getHistory', params),
+    }) => invokeWithDiagnostics('agent:usage:getHistory', params),
     getDashboard: (params: AiUsageDashboardParams) =>
-      ipcRenderer.invoke('agent:usage:getDashboard', params),
+      invokeWithDiagnostics('agent:usage:getDashboard', params),
     getTaskUsage: (taskId: string) =>
-      ipcRenderer.invoke('agent:usage:getTaskUsage', taskId),
+      invokeWithDiagnostics('agent:usage:getTaskUsage', taskId),
   },
   workActivity: {
     record: (event: NewWorkActivityEvent) =>
-      ipcRenderer.invoke('workActivity:record', event),
+      invokeWithDiagnostics('workActivity:record', event),
     getRange: (params: WorkActivityWeekParams) =>
-      ipcRenderer.invoke('workActivity:getRange', params),
+      invokeWithDiagnostics('workActivity:getRange', params),
     deleteBefore: (before: string) =>
-      ipcRenderer.invoke('workActivity:deleteBefore', before),
-    deleteAll: () => ipcRenderer.invoke('workActivity:deleteAll'),
+      invokeWithDiagnostics('workActivity:deleteBefore', before),
+    deleteAll: () => invokeWithDiagnostics('workActivity:deleteAll'),
   },
   timesheets: {
-    listAdapters: () => ipcRenderer.invoke('timesheets:listAdapters'),
+    listAdapters: () => invokeWithDiagnostics('timesheets:listAdapters'),
     buildDraft: (params: TimesheetDraftParams) =>
-      ipcRenderer.invoke('timesheets:buildDraft', params),
+      invokeWithDiagnostics('timesheets:buildDraft', params),
     sync: (params: TimesheetSyncParams) =>
-      ipcRenderer.invoke('timesheets:sync', params),
+      invokeWithDiagnostics('timesheets:sync', params),
     authStatus: (provider: TimesheetProviderType) =>
-      ipcRenderer.invoke('timesheets:authStatus', provider),
+      invokeWithDiagnostics('timesheets:authStatus', provider),
     login: (provider: TimesheetProviderType) =>
-      ipcRenderer.invoke('timesheets:login', provider),
+      invokeWithDiagnostics('timesheets:login', provider),
     logout: (provider: TimesheetProviderType) =>
-      ipcRenderer.invoke('timesheets:logout', provider),
+      invokeWithDiagnostics('timesheets:logout', provider),
     listSheets: (provider: TimesheetProviderType) =>
-      ipcRenderer.invoke('timesheets:listSheets', provider),
+      invokeWithDiagnostics('timesheets:listSheets', provider),
     inspectSheet: (params: {
       provider: TimesheetProviderType;
       sheetId: string;
       navigationUrl: string;
-    }) => ipcRenderer.invoke('timesheets:inspectSheet', params),
+    }) => invokeWithDiagnostics('timesheets:inspectSheet', params),
     lookupAxisOptions: (
       params: TimesheetAxisLookupRequest & { provider: TimesheetProviderType },
-    ) => ipcRenderer.invoke('timesheets:lookupAxisOptions', params),
+    ) => invokeWithDiagnostics('timesheets:lookupAxisOptions', params),
     dryRun: (params: {
       provider: TimesheetProviderType;
       sheetId: string;
       entries: TimesheetEntryInput[];
       deletions?: TimesheetRowDeletion[];
       action: TimesheetAction;
-    }) => ipcRenderer.invoke('timesheets:dryRun', params),
+    }) => invokeWithDiagnostics('timesheets:dryRun', params),
     save: (params: {
       provider: TimesheetProviderType;
       sheetId: string;
@@ -1414,18 +1440,18 @@ contextBridge.exposeInMainWorld('api', {
       deletions?: TimesheetRowDeletion[];
       updates?: TimesheetRowUpdate[];
       action: TimesheetAction;
-    }) => ipcRenderer.invoke('timesheets:save', params),
+    }) => invokeWithDiagnostics('timesheets:save', params),
   },
   rateLimitSwap: {
     getStatus: () =>
-      ipcRenderer.invoke('rate-limit-swap:status') as Promise<{
+      invokeWithDiagnostics('rate-limit-swap:status') as Promise<{
         active: boolean;
         swaps: Array<{ from: string; to: string }>;
       }>,
     resolve: (
       backend: import('@shared/agent-backend-types').AgentBackendType,
     ) =>
-      ipcRenderer.invoke('rate-limit-swap:resolve', backend) as Promise<{
+      invokeWithDiagnostics('rate-limit-swap:resolve', backend) as Promise<{
         backend: import('@shared/agent-backend-types').AgentBackendType;
         model?: string;
         thinkingEffort?: import('@shared/types').ThinkingEffort;
@@ -1440,7 +1466,7 @@ contextBridge.exposeInMainWorld('api', {
       backend: import('@shared/agent-backend-types').AgentBackendType;
       projectId?: string | null;
     }) =>
-      ipcRenderer.invoke('rate-limit-swap:react', params) as Promise<{
+      invokeWithDiagnostics('rate-limit-swap:react', params) as Promise<{
         backend: import('@shared/agent-backend-types').AgentBackendType;
         model?: string;
         thinkingEffort?: import('@shared/types').ThinkingEffort;
@@ -1457,116 +1483,116 @@ contextBridge.exposeInMainWorld('api', {
   },
   usageDisplay: {
     saveSettings: (value: import('@shared/types').UsageDisplaySetting) =>
-      ipcRenderer.invoke('usageDisplay:saveSettings', value),
+      invokeWithDiagnostics('usageDisplay:saveSettings', value),
   },
   codexbar: {
-    getStatus: () => ipcRenderer.invoke('codexbar:getStatus'),
-    openInstallPage: () => ipcRenderer.invoke('codexbar:openInstallPage'),
+    getStatus: () => invokeWithDiagnostics('codexbar:getStatus'),
+    openInstallPage: () => invokeWithDiagnostics('codexbar:openInstallPage'),
   },
   copilotAuth: {
     requestDeviceCode: () =>
-      ipcRenderer.invoke('copilotAuth:requestDeviceCode'),
+      invokeWithDiagnostics('copilotAuth:requestDeviceCode'),
     completeDeviceLogin: (deviceCode: unknown) =>
-      ipcRenderer.invoke('copilotAuth:completeDeviceLogin', deviceCode),
+      invokeWithDiagnostics('copilotAuth:completeDeviceLogin', deviceCode),
   },
   projectCommands: {
     findByProjectId: (projectId: string) =>
-      ipcRenderer.invoke('project:commands:findByProjectId', projectId),
-    findAll: () => ipcRenderer.invoke('project:commands:findAll'),
-    findFavorites: () => ipcRenderer.invoke('project:commands:findFavorites'),
+      invokeWithDiagnostics('project:commands:findByProjectId', projectId),
+    findAll: () => invokeWithDiagnostics('project:commands:findAll'),
+    findFavorites: () => invokeWithDiagnostics('project:commands:findFavorites'),
     create: (data: unknown) =>
-      ipcRenderer.invoke('project:commands:create', data),
+      invokeWithDiagnostics('project:commands:create', data),
     update: (id: string, data: unknown) =>
-      ipcRenderer.invoke('project:commands:update', { id, data }),
-    delete: (id: string) => ipcRenderer.invoke('project:commands:delete', id),
+      invokeWithDiagnostics('project:commands:update', { id, data }),
+    delete: (id: string) => invokeWithDiagnostics('project:commands:delete', id),
     reorder: (projectId: string, commandIds: string[]) =>
-      ipcRenderer.invoke('project:commands:reorder', { projectId, commandIds }),
+      invokeWithDiagnostics('project:commands:reorder', { projectId, commandIds }),
   },
   projectCommandGroups: {
     findByProjectId: (projectId: string) =>
-      ipcRenderer.invoke('project:commandGroups:findByProjectId', projectId),
-    findAll: () => ipcRenderer.invoke('project:commandGroups:findAll'),
+      invokeWithDiagnostics('project:commandGroups:findByProjectId', projectId),
+    findAll: () => invokeWithDiagnostics('project:commandGroups:findAll'),
     findFavorites: () =>
-      ipcRenderer.invoke('project:commandGroups:findFavorites'),
+      invokeWithDiagnostics('project:commandGroups:findFavorites'),
     create: (data: unknown) =>
-      ipcRenderer.invoke('project:commandGroups:create', data),
+      invokeWithDiagnostics('project:commandGroups:create', data),
     update: (id: string, data: unknown) =>
-      ipcRenderer.invoke('project:commandGroups:update', { id, data }),
+      invokeWithDiagnostics('project:commandGroups:update', { id, data }),
     delete: (id: string) =>
-      ipcRenderer.invoke('project:commandGroups:delete', id),
+      invokeWithDiagnostics('project:commandGroups:delete', id),
     reorder: (projectId: string, groupIds: string[]) =>
-      ipcRenderer.invoke('project:commandGroups:reorder', {
+      invokeWithDiagnostics('project:commandGroups:reorder', {
         projectId,
         groupIds,
       }),
   },
   projectRunConfig: {
     reorder: (projectId: string, items: unknown[]) =>
-      ipcRenderer.invoke('project:runConfig:reorder', { projectId, items }),
+      invokeWithDiagnostics('project:runConfig:reorder', { projectId, items }),
   },
   runCommands: {
     startCommand: (params: {
       taskId: string;
       runCommandId: string;
     }) =>
-      ipcRenderer.invoke('project:commands:run:startCommand', {
+      invokeWithDiagnostics('project:commands:run:startCommand', {
         taskId: params.taskId,
         runCommandId: params.runCommandId,
       }),
     startAdHocCommand: (params: StartAdHocRunCommandParams) =>
-      ipcRenderer.invoke('project:commands:run:startAdHocCommand', params),
+      invokeWithDiagnostics('project:commands:run:startAdHocCommand', params),
     startFavorite: (params: { projectId: string; runCommandId: string }) =>
-      ipcRenderer.invoke('project:commands:run:startFavorite', params),
+      invokeWithDiagnostics('project:commands:run:startFavorite', params),
     startFavoriteGroup: (params: { projectId: string; groupId: string }) =>
-      ipcRenderer.invoke('project:commands:run:startFavoriteGroup', params),
+      invokeWithDiagnostics('project:commands:run:startFavoriteGroup', params),
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];
       groupId?: string;
     }) =>
-      ipcRenderer.invoke('project:commands:run:startGroup', {
+      invokeWithDiagnostics('project:commands:run:startGroup', {
         taskId: params.taskId,
         runCommandIds: params.runCommandIds,
         groupId: params.groupId,
       }),
     stopCommand: (params: { taskId: string; runCommandId: string }) =>
-      ipcRenderer.invoke('project:commands:run:stopCommand', params),
-    stopAll: () => ipcRenderer.invoke('project:commands:run:stopAll'),
+      invokeWithDiagnostics('project:commands:run:stopCommand', params),
+    stopAll: () => invokeWithDiagnostics('project:commands:run:stopAll'),
     sendInput: (params: {
       taskId: string;
       runCommandId: string;
       input: string;
-    }) => ipcRenderer.invoke('project:commands:run:sendInput', params),
+    }) => invokeWithDiagnostics('project:commands:run:sendInput', params),
     resetLogs: (params: {
       taskId: string;
       runCommandId: string;
       generation: number;
-    }) => ipcRenderer.invoke('project:commands:run:resetLogs', params),
+    }) => invokeWithDiagnostics('project:commands:run:resetLogs', params),
     sendSignal: (params: {
       taskId: string;
       runCommandId: string;
       signal: 'SIGINT' | 'SIGTERM';
-    }) => ipcRenderer.invoke('project:commands:run:sendSignal', params),
+    }) => invokeWithDiagnostics('project:commands:run:sendSignal', params),
     getStatus: (taskId: string) =>
-      ipcRenderer.invoke('project:commands:run:getStatus', taskId),
+      invokeWithDiagnostics('project:commands:run:getStatus', taskId),
     getTaskIdsWithRunningCommands: () =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'project:commands:run:getTaskIdsWithRunningCommands',
       ) as Promise<string[]>,
     killPortsForCommand: (projectId: string, commandId: string) =>
-      ipcRenderer.invoke('project:commands:run:killPortsForCommand', {
+      invokeWithDiagnostics('project:commands:run:killPortsForCommand', {
         projectId,
         commandId,
       }),
     getPackageScripts: (projectPath: string) =>
-      ipcRenderer.invoke('project:commands:run:getPackageScripts', projectPath),
+      invokeWithDiagnostics('project:commands:run:getPackageScripts', projectPath),
     getProjectSuggestions: (projectPath: string) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'project:commands:run:getProjectSuggestions',
         projectPath,
       ),
     saveProjectSuggestions: (projectPath: string, suggestions: unknown) =>
-      ipcRenderer.invoke('project:commands:run:saveProjectSuggestions', {
+      invokeWithDiagnostics('project:commands:run:saveProjectSuggestions', {
         projectPath,
         suggestions,
       }),
@@ -1632,13 +1658,13 @@ contextBridge.exposeInMainWorld('api', {
       cwd: string;
       cols: number;
       rows: number;
-    }) => ipcRenderer.invoke('project:terminal:ensure', params),
+    }) => invokeWithDiagnostics('project:terminal:ensure', params),
     write: (params: { sessionId: string; data: string }) =>
-      ipcRenderer.invoke('project:terminal:write', params),
+      invokeWithDiagnostics('project:terminal:write', params),
     resize: (params: { sessionId: string; cols: number; rows: number }) =>
-      ipcRenderer.invoke('project:terminal:resize', params),
+      invokeWithDiagnostics('project:terminal:resize', params),
     close: (sessionId: string) =>
-      ipcRenderer.invoke('project:terminal:close', sessionId),
+      invokeWithDiagnostics('project:terminal:close', sessionId),
     onData: (callback: (event: TerminalDataEvent) => void) => {
       const handler = (_: unknown, event: TerminalDataEvent) => callback(event);
       ipcRenderer.on(TERMINAL_DATA_CHANNEL, handler);
@@ -1662,26 +1688,26 @@ contextBridge.exposeInMainWorld('api', {
       return () => ipcRenderer.removeListener('globalPrompt:dismiss', handler);
     },
     respond: (response: GlobalPromptResponse) =>
-      ipcRenderer.invoke('globalPrompt:respond', response),
+      invokeWithDiagnostics('globalPrompt:respond', response),
   },
   mcpTemplates: {
-    findAll: () => ipcRenderer.invoke('mcpTemplates:findAll'),
-    findById: (id: string) => ipcRenderer.invoke('mcpTemplates:findById', id),
-    create: (data: unknown) => ipcRenderer.invoke('mcpTemplates:create', data),
+    findAll: () => invokeWithDiagnostics('mcpTemplates:findAll'),
+    findById: (id: string) => invokeWithDiagnostics('mcpTemplates:findById', id),
+    create: (data: unknown) => invokeWithDiagnostics('mcpTemplates:create', data),
     update: (id: string, data: unknown) =>
-      ipcRenderer.invoke('mcpTemplates:update', id, data),
-    delete: (id: string) => ipcRenderer.invoke('mcpTemplates:delete', id),
-    getPresets: () => ipcRenderer.invoke('mcpTemplates:getPresets'),
+      invokeWithDiagnostics('mcpTemplates:update', id, data),
+    delete: (id: string) => invokeWithDiagnostics('mcpTemplates:delete', id),
+    getPresets: () => invokeWithDiagnostics('mcpTemplates:getPresets'),
     getEnabledForProject: (projectId: string) =>
-      ipcRenderer.invoke('mcpTemplates:getEnabledForProject', projectId),
+      invokeWithDiagnostics('mcpTemplates:getEnabledForProject', projectId),
   },
   projectMcpOverrides: {
     findByProjectId: (projectId: string) =>
-      ipcRenderer.invoke('projectMcpOverrides:findByProjectId', projectId),
+      invokeWithDiagnostics('projectMcpOverrides:findByProjectId', projectId),
     upsert: (data: unknown) =>
-      ipcRenderer.invoke('projectMcpOverrides:upsert', data),
+      invokeWithDiagnostics('projectMcpOverrides:upsert', data),
     delete: (projectId: string, mcpTemplateId: string) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'projectMcpOverrides:delete',
         projectId,
         mcpTemplateId,
@@ -1689,11 +1715,11 @@ contextBridge.exposeInMainWorld('api', {
   },
   unifiedMcp: {
     getServers: (projectId: string, projectPath: string) =>
-      ipcRenderer.invoke('unifiedMcp:getServers', projectId, projectPath),
+      invokeWithDiagnostics('unifiedMcp:getServers', projectId, projectPath),
     activate: (projectPath: string, name: string, command: string) =>
-      ipcRenderer.invoke('unifiedMcp:activate', projectPath, name, command),
+      invokeWithDiagnostics('unifiedMcp:activate', projectPath, name, command),
     deactivate: (projectPath: string, name: string) =>
-      ipcRenderer.invoke('unifiedMcp:deactivate', projectPath, name),
+      invokeWithDiagnostics('unifiedMcp:deactivate', projectPath, name),
     substituteVariables: (
       commandTemplate: string,
       userVariables: Record<string, string>,
@@ -1704,7 +1730,7 @@ contextBridge.exposeInMainWorld('api', {
         mainRepoPath: string;
       },
     ) =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'unifiedMcp:substituteVariables',
         commandTemplate,
         userVariables,
@@ -1712,29 +1738,29 @@ contextBridge.exposeInMainWorld('api', {
       ),
   },
   globalMcp: {
-    findAll: () => ipcRenderer.invoke('globalMcp:findAll'),
-    findById: (id: string) => ipcRenderer.invoke('globalMcp:findById', id),
-    create: (data: import('@shared/global-mcp-types').NewGlobalMcpServer) => ipcRenderer.invoke('globalMcp:create', data),
+    findAll: () => invokeWithDiagnostics('globalMcp:findAll'),
+    findById: (id: string) => invokeWithDiagnostics('globalMcp:findById', id),
+    create: (data: import('@shared/global-mcp-types').NewGlobalMcpServer) => invokeWithDiagnostics('globalMcp:create', data),
     update: (id: string, data: import('@shared/global-mcp-types').UpdateGlobalMcpServer) =>
-      ipcRenderer.invoke('globalMcp:update', id, data),
+      invokeWithDiagnostics('globalMcp:update', id, data),
     enable: (id: string, backends: import('@shared/agent-backend-types').AgentBackendType[]) =>
-      ipcRenderer.invoke('globalMcp:enable', id, backends),
+      invokeWithDiagnostics('globalMcp:enable', id, backends),
     disable: (id: string, backends: import('@shared/agent-backend-types').AgentBackendType[]) =>
-      ipcRenderer.invoke('globalMcp:disable', id, backends),
-    uninstall: (id: string) => ipcRenderer.invoke('globalMcp:uninstall', id),
-    discover: () => ipcRenderer.invoke('globalMcp:discover'),
+      invokeWithDiagnostics('globalMcp:disable', id, backends),
+    uninstall: (id: string) => invokeWithDiagnostics('globalMcp:uninstall', id),
+    discover: () => invokeWithDiagnostics('globalMcp:discover'),
     import: (entry: import('@shared/global-mcp-types').DiscoveredMcpVariant, backends: import('@shared/agent-backend-types').AgentBackendType[]) =>
-      ipcRenderer.invoke('globalMcp:import', entry, backends),
+      invokeWithDiagnostics('globalMcp:import', entry, backends),
   },
   claudeProjects: {
-    findNonExistent: () => ipcRenderer.invoke('claudeProjects:findNonExistent'),
+    findNonExistent: () => invokeWithDiagnostics('claudeProjects:findNonExistent'),
     cleanup: (params: { paths: string[]; contentHash: string }) =>
-      ipcRenderer.invoke('claudeProjects:cleanup', params),
+      invokeWithDiagnostics('claudeProjects:cleanup', params),
   },
   unusedWorktrees: {
-    scan: () => ipcRenderer.invoke('unusedWorktrees:scan'),
+    scan: () => invokeWithDiagnostics('unusedWorktrees:scan'),
     cleanup: (params: { paths: string[] }) =>
-      ipcRenderer.invoke('unusedWorktrees:cleanup', params),
+      invokeWithDiagnostics('unusedWorktrees:cleanup', params),
   },
   completion: {
     complete: (params: {
@@ -1742,17 +1768,17 @@ contextBridge.exposeInMainWorld('api', {
       suffix?: string;
       projectId?: string;
       contextBeforePrompt?: string;
-    }) => ipcRenderer.invoke('completion:complete', params),
-    test: () => ipcRenderer.invoke('completion:test'),
+    }) => invokeWithDiagnostics('completion:complete', params),
+    test: () => invokeWithDiagnostics('completion:test'),
     saveSettings: (params: {
       enabled: boolean;
       apiKey: string;
       model: string;
       serverUrl: string;
-    }) => ipcRenderer.invoke('completion:saveSettings', params),
+    }) => invokeWithDiagnostics('completion:saveSettings', params),
     generateContext: (params: { projectId: string }) =>
-      ipcRenderer.invoke('completion:generateContext', params),
-    getDailyUsage: () => ipcRenderer.invoke('completion:getDailyUsage'),
+      invokeWithDiagnostics('completion:generateContext', params),
+    getDailyUsage: () => invokeWithDiagnostics('completion:getDailyUsage'),
   },
   aiGeneration: {
     saveSettings: (params: {
@@ -1760,59 +1786,59 @@ contextBridge.exposeInMainWorld('api', {
       openAiImageGenerationEnabled: boolean;
       openAiImageModel: string;
       openAiLogoPromptContext: string;
-    }) => ipcRenderer.invoke('aiGeneration:saveSettings', params),
+    }) => invokeWithDiagnostics('aiGeneration:saveSettings', params),
     saveBaseImage: (params: { sourcePath: string }) =>
-      ipcRenderer.invoke('aiGeneration:saveBaseImage', params),
-    listBaseImages: () => ipcRenderer.invoke('aiGeneration:listBaseImages'),
+      invokeWithDiagnostics('aiGeneration:saveBaseImage', params),
+    listBaseImages: () => invokeWithDiagnostics('aiGeneration:listBaseImages'),
     setBaseImageSelection: (params: {
       mode: 'builtin' | 'custom';
       builtinId?: string;
-    }) => ipcRenderer.invoke('aiGeneration:setBaseImageSelection', params),
-    removeBaseImage: () => ipcRenderer.invoke('aiGeneration:removeBaseImage'),
+    }) => invokeWithDiagnostics('aiGeneration:setBaseImageSelection', params),
+    removeBaseImage: () => invokeWithDiagnostics('aiGeneration:removeBaseImage'),
   },
   projectTodos: {
     list: (projectId: string) =>
-      ipcRenderer.invoke('project-todos:list', projectId),
+      invokeWithDiagnostics('project-todos:list', projectId),
     count: (projectId: string) =>
-      ipcRenderer.invoke('project-todos:count', projectId),
-    create: (data: unknown) => ipcRenderer.invoke('project-todos:create', data),
+      invokeWithDiagnostics('project-todos:count', projectId),
+    create: (data: unknown) => invokeWithDiagnostics('project-todos:create', data),
     update: (id: string, data: unknown) =>
-      ipcRenderer.invoke('project-todos:update', id, data),
-    delete: (id: string) => ipcRenderer.invoke('project-todos:delete', id),
+      invokeWithDiagnostics('project-todos:update', id, data),
+    delete: (id: string) => invokeWithDiagnostics('project-todos:delete', id),
     reorder: (projectId: string, orderedIds: string[]) =>
-      ipcRenderer.invoke('project-todos:reorder', projectId, orderedIds),
+      invokeWithDiagnostics('project-todos:reorder', projectId, orderedIds),
   },
   agentManagement: {
-    getAll: () => ipcRenderer.invoke('agents:getAll'),
+    getAll: () => invokeWithDiagnostics('agents:getAll'),
     getContent: (agentPath: string) =>
-      ipcRenderer.invoke('agents:getContent', agentPath),
+      invokeWithDiagnostics('agents:getContent', agentPath),
     create: (params: {
       enabledBackends: string[];
       name: string;
       description: string;
       content: string;
-    }) => ipcRenderer.invoke('agents:create', params),
+    }) => invokeWithDiagnostics('agents:create', params),
     update: (params: { agentPath: string; content: string }) =>
-      ipcRenderer.invoke('agents:update', params),
+      invokeWithDiagnostics('agents:update', params),
     delete: (agentPath: string) =>
-      ipcRenderer.invoke('agents:delete', agentPath),
+      invokeWithDiagnostics('agents:delete', agentPath),
     disable: (agentPath: string, backendType: string) =>
-      ipcRenderer.invoke('agents:disable', agentPath, backendType),
+      invokeWithDiagnostics('agents:disable', agentPath, backendType),
     enable: (agentPath: string, backendType: string) =>
-      ipcRenderer.invoke('agents:enable', agentPath, backendType),
-    migrationPreview: () => ipcRenderer.invoke('agents:migrationPreview'),
+      invokeWithDiagnostics('agents:enable', agentPath, backendType),
+    migrationPreview: () => invokeWithDiagnostics('agents:migrationPreview'),
     migrationExecute: (params: { itemIds: string[] }) =>
-      ipcRenderer.invoke('agents:migrationExecute', params),
+      invokeWithDiagnostics('agents:migrationExecute', params),
   },
   skillManagement: {
     getForStep: (params: { taskId: string; stepId?: string }) =>
-      ipcRenderer.invoke('skills:getForStep', params),
+      invokeWithDiagnostics('skills:getForStep', params),
     getAll: (backendType: string, projectPath?: string) =>
-      ipcRenderer.invoke('skills:getAll', backendType, projectPath),
+      invokeWithDiagnostics('skills:getAll', backendType, projectPath),
     getAllUnified: (projectPath?: string) =>
-      ipcRenderer.invoke('skills:getAllUnified', projectPath),
+      invokeWithDiagnostics('skills:getAllUnified', projectPath),
     getContent: (skillPath: string) =>
-      ipcRenderer.invoke('skills:getContent', skillPath),
+      invokeWithDiagnostics('skills:getContent', skillPath),
     create: (params: {
       enabledBackends: string[];
       scope: string;
@@ -1820,32 +1846,32 @@ contextBridge.exposeInMainWorld('api', {
       name: string;
       description: string;
       content: string;
-    }) => ipcRenderer.invoke('skills:create', params),
+    }) => invokeWithDiagnostics('skills:create', params),
     update: (params: {
       skillPath: string;
       backendType: string;
       name?: string;
       description?: string;
       content?: string;
-    }) => ipcRenderer.invoke('skills:update', params),
+    }) => invokeWithDiagnostics('skills:update', params),
     delete: (skillPath: string, backendType: string) =>
-      ipcRenderer.invoke('skills:delete', skillPath, backendType),
+      invokeWithDiagnostics('skills:delete', skillPath, backendType),
     disable: (skillPath: string, backendType: string) =>
-      ipcRenderer.invoke('skills:disable', skillPath, backendType),
+      invokeWithDiagnostics('skills:disable', skillPath, backendType),
     enable: (skillPath: string, backendType: string) =>
-      ipcRenderer.invoke('skills:enable', skillPath, backendType),
-    migrationPreview: () => ipcRenderer.invoke('skills:migrationPreview'),
+      invokeWithDiagnostics('skills:enable', skillPath, backendType),
+    migrationPreview: () => invokeWithDiagnostics('skills:migrationPreview'),
     migrationExecute: (params: { itemIds: string[] }) =>
-      ipcRenderer.invoke('skills:migrationExecute', params),
+      invokeWithDiagnostics('skills:migrationExecute', params),
     registrySearch: (query: string) =>
-      ipcRenderer.invoke('skills:registrySearch', query),
+      invokeWithDiagnostics('skills:registrySearch', query),
     registryFetchContent: (source: string, skillId: string) =>
-      ipcRenderer.invoke('skills:registryFetchContent', source, skillId),
+      invokeWithDiagnostics('skills:registryFetchContent', source, skillId),
     registryInstall: (params: {
       source: string;
       skillId: string;
       enabledBackends: string[];
-    }) => ipcRenderer.invoke('skills:registryInstall', params),
+    }) => invokeWithDiagnostics('skills:registryInstall', params),
     createWithAgent: (params: {
       prompt: string;
       enabledBackends: string[];
@@ -1854,27 +1880,27 @@ contextBridge.exposeInMainWorld('api', {
       interactionMode?: string | null;
       modelPreference?: string | null;
       agentBackend?: string | null;
-    }) => ipcRenderer.invoke('skills:createWithAgent', params),
+    }) => invokeWithDiagnostics('skills:createWithAgent', params),
     publishFromWorkspace: (params: {
       stepId: string;
       workspacePath: string;
       enabledBackends: string[];
       mode: 'create' | 'improve';
       sourceSkillPath?: string;
-    }) => ipcRenderer.invoke('skills:publishFromWorkspace', params),
+    }) => invokeWithDiagnostics('skills:publishFromWorkspace', params),
   },
   sourceManagement: {
-    list: () => ipcRenderer.invoke('sources:list'),
+    list: () => invokeWithDiagnostics('sources:list'),
     addGithub: (params: AddGitHubSourceParams) =>
-      ipcRenderer.invoke('sources:addGithub', params),
+      invokeWithDiagnostics('sources:addGithub', params),
     refresh: (sourceId: string) =>
-      ipcRenderer.invoke('sources:refresh', sourceId),
+      invokeWithDiagnostics('sources:refresh', sourceId),
     installItems: (params: InstallSourceItemsParams) =>
-      ipcRenderer.invoke('sources:installItems', params),
+      invokeWithDiagnostics('sources:installItems', params),
     updateInstall: (params: UpdateSourceInstallParams) =>
-      ipcRenderer.invoke('sources:updateInstall', params),
+      invokeWithDiagnostics('sources:updateInstall', params),
     remove: (sourceId: string) =>
-      ipcRenderer.invoke('sources:remove', sourceId),
+      invokeWithDiagnostics('sources:remove', sourceId),
   },
   prSnapshots: {
     record: (params: {
@@ -1883,22 +1909,22 @@ contextBridge.exposeInMainWorld('api', {
       providerId: string;
       repoProjectId: string;
       repoId: string;
-    }) => ipcRenderer.invoke('pr-snapshots:record', params),
+    }) => invokeWithDiagnostics('pr-snapshots:record', params),
   },
   notifications: {
-    list: () => ipcRenderer.invoke('notifications:list'),
+    list: () => invokeWithDiagnostics('notifications:list'),
     getDesktopStatus: async () => ({
-      ...(await ipcRenderer.invoke('notifications:getDesktopStatus')),
+      ...(await invokeWithDiagnostics('notifications:getDesktopStatus')),
       permission:
         typeof Notification === 'undefined'
           ? 'unknown'
           : Notification.permission,
     }),
     openSystemSettings: () =>
-      ipcRenderer.invoke('notifications:openSystemSettings'),
+      invokeWithDiagnostics('notifications:openSystemSettings'),
     markRead: (id: string | 'all') =>
-      ipcRenderer.invoke('notifications:markRead', id),
-    delete: (id: string) => ipcRenderer.invoke('notifications:delete', id),
+      invokeWithDiagnostics('notifications:markRead', id),
+    delete: (id: string) => invokeWithDiagnostics('notifications:delete', id),
     onNew: (callback: (notification: AppNotification) => void) => {
       const handler = (_: unknown, notification: AppNotification) =>
         callback(notification);
@@ -1915,16 +1941,16 @@ contextBridge.exposeInMainWorld('api', {
   },
   trackedPipelines: {
     list: (projectId: string) =>
-      ipcRenderer.invoke('tracked-pipelines:list', projectId),
-    listAll: () => ipcRenderer.invoke('tracked-pipelines:listAll'),
+      invokeWithDiagnostics('tracked-pipelines:list', projectId),
+    listAll: () => invokeWithDiagnostics('tracked-pipelines:listAll'),
     toggle: (id: string, enabled: boolean) =>
-      ipcRenderer.invoke('tracked-pipelines:toggle', id, enabled),
+      invokeWithDiagnostics('tracked-pipelines:toggle', id, enabled),
     toggleVisible: (id: string, visible: boolean) =>
-      ipcRenderer.invoke('tracked-pipelines:toggleVisible', id, visible),
+      invokeWithDiagnostics('tracked-pipelines:toggleVisible', id, visible),
     reorder: (projectId: string, orderedIds: string[]) =>
-      ipcRenderer.invoke('tracked-pipelines:reorder', projectId, orderedIds),
+      invokeWithDiagnostics('tracked-pipelines:reorder', projectId, orderedIds),
     discover: (projectId: string) =>
-      ipcRenderer.invoke('tracked-pipelines:discover', projectId),
+      invokeWithDiagnostics('tracked-pipelines:discover', projectId),
   },
   pipelines: {
     listRuns: (params: {
@@ -1932,90 +1958,90 @@ contextBridge.exposeInMainWorld('api', {
       azureProjectId: string;
       definitionId: number;
       kind: 'build' | 'release';
-    }) => ipcRenderer.invoke('pipelines:listRuns', params),
+    }) => invokeWithDiagnostics('pipelines:listRuns', params),
     getBuild: (params: {
       providerId: string;
       azureProjectId: string;
       buildId: number;
-    }) => ipcRenderer.invoke('pipelines:getBuild', params),
+    }) => invokeWithDiagnostics('pipelines:getBuild', params),
     getBuildTimeline: (params: {
       providerId: string;
       azureProjectId: string;
       buildId: number;
-    }) => ipcRenderer.invoke('pipelines:getBuildTimeline', params),
+    }) => invokeWithDiagnostics('pipelines:getBuildTimeline', params),
     getBuildLog: (params: {
       providerId: string;
       azureProjectId: string;
       buildId: number;
       logId: number;
-    }) => ipcRenderer.invoke('pipelines:getBuildLog', params),
+    }) => invokeWithDiagnostics('pipelines:getBuildLog', params),
     getRelease: (params: {
       providerId: string;
       azureProjectId: string;
       releaseId: number;
-    }) => ipcRenderer.invoke('pipelines:getRelease', params),
+    }) => invokeWithDiagnostics('pipelines:getRelease', params),
     listBranches: (params: {
       providerId: string;
       azureProjectId: string;
       repoId: string;
-    }) => ipcRenderer.invoke('pipelines:listBranches', params),
+    }) => invokeWithDiagnostics('pipelines:listBranches', params),
     getDefinitionParams: (params: {
       providerId: string;
       azureProjectId: string;
       definitionId: number;
-    }) => ipcRenderer.invoke('pipelines:getDefinitionParams', params),
+    }) => invokeWithDiagnostics('pipelines:getDefinitionParams', params),
     getYamlParameters: (params: GetYamlParametersIpcParams) =>
-      ipcRenderer.invoke('pipelines:getYamlParameters', params),
+      invokeWithDiagnostics('pipelines:getYamlParameters', params),
     queueBuild: (params: QueueBuildIpcParams) =>
-      ipcRenderer.invoke('pipelines:queueBuild', params),
+      invokeWithDiagnostics('pipelines:queueBuild', params),
     createRelease: (params: {
       providerId: string;
       azureProjectId: string;
       definitionId: number;
       description?: string;
-    }) => ipcRenderer.invoke('pipelines:createRelease', params),
+    }) => invokeWithDiagnostics('pipelines:createRelease', params),
     cancelBuild: (params: {
       providerId: string;
       azureProjectId: string;
       buildId: number;
-    }) => ipcRenderer.invoke('pipelines:cancelBuild', params),
+    }) => invokeWithDiagnostics('pipelines:cancelBuild', params),
   },
   feed: {
-    getItems: () => ipcRenderer.invoke('feed:getItems'),
-    getTaskItems: () => ipcRenderer.invoke('feed:getTaskItems'),
-    getPullRequestItems: () => ipcRenderer.invoke('feed:getPullRequestItems'),
-    getNoteItems: () => ipcRenderer.invoke('feed:getNoteItems'),
-    getWorkItemItems: () => ipcRenderer.invoke('feed:getWorkItemItems'),
+    getItems: () => invokeWithDiagnostics('feed:getItems'),
+    getTaskItems: () => invokeWithDiagnostics('feed:getTaskItems'),
+    getPullRequestItems: () => invokeWithDiagnostics('feed:getPullRequestItems'),
+    getNoteItems: () => invokeWithDiagnostics('feed:getNoteItems'),
+    getWorkItemItems: () => invokeWithDiagnostics('feed:getWorkItemItems'),
     createNote: (params: { content: string }) =>
-      ipcRenderer.invoke('feed:createNote', params),
+      invokeWithDiagnostics('feed:createNote', params),
     createWorkItemVerificationNote: (
       params: CreateWorkItemVerificationNoteParams,
-    ) => ipcRenderer.invoke('feed:createWorkItemVerificationNote', params),
+    ) => invokeWithDiagnostics('feed:createWorkItemVerificationNote', params),
     updateNote: (params: {
       id: string;
       content?: string;
       completedAt?: string | null;
-    }) => ipcRenderer.invoke('feed:updateNote', params),
+    }) => invokeWithDiagnostics('feed:updateNote', params),
     deleteNote: (params: { id: string }) =>
-      ipcRenderer.invoke('feed:deleteNote', params),
+      invokeWithDiagnostics('feed:deleteNote', params),
   },
   app: {
     isDevMode: !!process.env.ELECTRON_RENDERER_URL,
     devBadgeLabel,
     hasExistingLocalStorageBucket,
     getIsPreviewMode: () =>
-      ipcRenderer.invoke('app:getIsPreviewMode') as Promise<boolean>,
+      invokeWithDiagnostics('app:getIsPreviewMode') as Promise<boolean>,
     reportLocalStorageBootBlocked: () =>
-      ipcRenderer.invoke(
+      invokeWithDiagnostics(
         'app:reportLocalStorageBootBlocked',
       ) as Promise<string>,
     getReloadUpdateInfo: (params: { builtCommitHash: string }) =>
-      ipcRenderer.invoke('app:getReloadUpdateInfo', params) as Promise<{
+      invokeWithDiagnostics('app:getReloadUpdateInfo', params) as Promise<{
         commitCount: number;
         latestCommitHash: string | null;
       }>,
     reloadPreview: () =>
-      ipcRenderer.invoke('app:reloadPreview') as Promise<void>,
+      invokeWithDiagnostics('app:reloadPreview') as Promise<void>,
     onReloadPreviewProgress: (
       callback: (progress: {
         step:
@@ -2037,7 +2063,7 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
   system: {
-    getMemoryUsage: () => ipcRenderer.invoke('system:getMemoryUsage'),
+    getMemoryUsage: () => invokeWithDiagnostics('system:getMemoryUsage'),
   },
   debugLogs: {
     onBatch: (callback: (entries: DebugLogEntry[]) => void) => {
@@ -2049,7 +2075,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   codeFolding: {
     getFoldRanges: (content: string, language: string) =>
-      ipcRenderer.invoke('codeFolding:getFoldRanges', content, language),
+      invokeWithDiagnostics('codeFolding:getFoldRanges', content, language),
   },
   onRateLimitSwap: (callback: (data: { from: string; to: string }) => void) => {
     const handler = (_: unknown, data: { from: string; to: string }) =>
