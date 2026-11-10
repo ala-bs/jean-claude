@@ -6,7 +6,10 @@ import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
 import { deleteAttachmentFile } from './attachment-file-deletion';
-import { logPerformanceEvent } from '../lib/performance-log';
+import {
+  beginPerformanceSpan,
+  logPerformanceEvent,
+} from '../lib/performance-log';
 import { resolveSourceBranchStartPoint } from './pull-source-branch';
 
 
@@ -1306,6 +1309,29 @@ function validateWorkItemSummaryRequest(params: unknown) {
 
 export function registerIpcHandlers() {
   dbg.ipc('Registering IPC handlers');
+
+  // Track every handler as an in-flight span so a main-loop stall is logged
+  // with the channels that were running at the time (see `describeActiveSpans`).
+  // Wrapping `handle` once covers every channel registered below, including the
+  // ones delegated to `register*IpcHandlers` helpers that receive `ipcMain`.
+  // Diagnostics only: the handler's arguments, result and rejection are passed
+  // through untouched, and `debug:log` is skipped to avoid recursion with the
+  // renderer's own performance reporting.
+  const registerHandler = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = ((
+    channel: string,
+    listener: (...args: never[]) => unknown,
+  ) =>
+    registerHandler(channel, (async (...args: never[]) => {
+      if (channel === 'debug:log') return listener(...args);
+      const endSpan = beginPerformanceSpan(`ipc:${channel}`);
+      try {
+        return await listener(...args);
+      } finally {
+        endSpan();
+      }
+    }) as never)) as typeof ipcMain.handle;
+
   let previewReloadInProgress = false;
 
   registerPrWorkspaceIpcHandlers({

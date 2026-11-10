@@ -117,13 +117,46 @@ function invokeWithDiagnostics(channel: string, ...args: unknown[]) {
   });
 }
 
+// Chromium clamps timers in a hidden or occluded renderer to one per second, so
+// a backgrounded window reports a steady `1000 - 100 = 900 ms` "delay" forever.
+// Those are not stalls, and at one line per second they bury every real signal.
+// Hidden windows therefore use a threshold above the 1 Hz clamp: a genuine
+// multi-second freeze is still captured, the clamp artifact is not. Every line
+// carries the visibility it was measured under so the two are never confused.
+const VISIBLE_DELAY_THRESHOLD_MS = 250;
+const HIDDEN_DELAY_THRESHOLD_MS = 2000;
+
+/** `true` when the window was hidden at any point since the previous tick. */
+let hiddenSinceLastTick = false;
+const isDocumentHidden = () =>
+  typeof document !== 'undefined' && document.visibilityState !== 'visible';
+
+if (typeof document !== 'undefined') {
+  hiddenSinceLastTick = isDocumentHidden();
+  document.addEventListener('visibilitychange', () => {
+    // A window that was hidden for part of the interval was clamped for part of
+    // the interval, which is enough to make that tick's delay meaningless.
+    hiddenSinceLastTick = true;
+  });
+}
+
 let lastRendererLoopTick = performance.now();
+let lastRendererLoopWallTick = Date.now();
 setInterval(() => {
   const now = performance.now();
+  const wallNow = Date.now();
   const delay = now - lastRendererLoopTick - 100;
+  const wallDrift = Math.round(wallNow - lastRendererLoopWallTick - (now - lastRendererLoopTick));
   lastRendererLoopTick = now;
-  if (delay >= 250) {
-    const message = `Renderer event loop delayed by ${Math.round(delay)} ms`;
+  lastRendererLoopWallTick = wallNow;
+
+  const hidden = hiddenSinceLastTick || isDocumentHidden();
+  hiddenSinceLastTick = isDocumentHidden();
+  const threshold = hidden ? HIDDEN_DELAY_THRESHOLD_MS : VISIBLE_DELAY_THRESHOLD_MS;
+
+  if (delay >= threshold) {
+    const visibility = hidden ? 'hidden' : 'visible';
+    const message = `Renderer event loop delayed by ${Math.round(delay)} ms | visibility=${visibility} wallDrift=${wallDrift} ms`;
     console.warn(`[performance] ${message}`);
     void ipcRenderer.invoke('debug:log', { scope: 'performance', message }).catch(() => {});
   }

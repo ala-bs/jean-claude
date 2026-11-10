@@ -213,6 +213,7 @@ export function useCacheResource<TData, TSelected = TData>({
   key,
   enabled = true,
   staleTime = 0,
+  staleReloadDelayMs = 0,
   load,
   ingest,
   select,
@@ -221,6 +222,14 @@ export function useCacheResource<TData, TSelected = TData>({
   key: string;
   enabled?: boolean;
   staleTime?: number;
+  /**
+   * Delay before a stale mark triggers a reload, coalescing every mark that
+   * arrives inside the window into one load. `0` reloads immediately.
+   *
+   * Only worth setting for a resource whose load is expensive *and* whose
+   * invalidations are frequent; it trades that much freshness for the saving.
+   */
+  staleReloadDelayMs?: number;
   load: () => Promise<TData>;
   ingest?: (data: TData) => void;
   select?: () => TSelected | undefined;
@@ -313,13 +322,31 @@ export function useCacheResource<TData, TSelected = TData>({
     void loadResource().catch(() => {});
   }, [enabled, loadResource]);
 
+  // A stale mark normally reloads immediately, which is what makes the cache
+  // feel live. For an expensive resource invalidated by high-frequency events
+  // it is instead a reload loop: `feed:tasks` costs seconds of git subprocesses
+  // and HTTP per load, and every agent status change marks it stale, so the
+  // loads ran back to back and starved the main process. `staleReloadDelayMs`
+  // coalesces every mark arriving inside the window into a single reload.
+  //
+  // The timer is cleared on unmount and whenever `meta` changes, so a resource
+  // that goes fresh again before the window elapses never loads at all.
   useEffect(() => {
     if (!enabled || !shouldLoadChangedResource(meta)) {
       return;
     }
 
-    void loadResource().catch(() => {});
-  }, [enabled, loadResource, meta]);
+    if (!staleReloadDelayMs) {
+      void loadResource().catch(() => {});
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadResource().catch(() => {});
+    }, staleReloadDelayMs);
+
+    return () => window.clearTimeout(timer);
+  }, [enabled, loadResource, meta, staleReloadDelayMs]);
 
 
   const refetch = useCallback(async () => {

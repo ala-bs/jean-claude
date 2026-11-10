@@ -46,7 +46,12 @@ import { agentService } from './services/agent-service';
 import { cleanupOrphanedWorkspaces } from './services/system-project-service';
 import { createReloadPreviewReadinessRegistrar } from './services/reload-preview-service';
 import { dbg } from './lib/debug';
-import { logPerformanceEvent } from './lib/performance-log';
+import {
+  describeActiveSpans,
+  describeAppMetrics,
+  describeProcessLoad,
+  logPerformanceEvent,
+} from './lib/performance-log';
 import { killOrphanedCoreSimulatorHelpers } from './services/mobile-preview-ios-idb-adapter';
 import { migrateDatabase } from './database';
 import { pipelineTrackingService } from './services/pipeline-tracking-service';
@@ -430,13 +435,34 @@ app.whenReady().then(async () => {
   registerReloadPreviewReadiness.signalNow();
   // A synchronous query or other CPU-heavy main-process work delays every
   // renderer IPC reply. Measure that delay independently of IPC round trips.
+  // Sample CPU and wall clock on every tick so a stall can be attributed. The
+  // delay alone cannot distinguish "we blocked on our own work" from "the OS
+  // never scheduled us"; the CPU consumed across the gap can. See
+  // `describeProcessLoad`.
   let lastMainLoopTick = performance.now();
+  let lastMainLoopWallTick = Date.now();
+  let lastMainLoopCpu = process.cpuUsage();
   const mainLoopMonitor = setInterval(() => {
     const now = performance.now();
-    const delay = now - lastMainLoopTick - 100;
+    const wallNow = Date.now();
+    const cpuNow = process.cpuUsage();
+    const elapsed = now - lastMainLoopTick;
+    const cpuDelta = {
+      user: cpuNow.user - lastMainLoopCpu.user,
+      system: cpuNow.system - lastMainLoopCpu.system,
+    };
+    const wallElapsed = wallNow - lastMainLoopWallTick;
+    const delay = elapsed - 100;
     lastMainLoopTick = now;
+    lastMainLoopWallTick = wallNow;
+    lastMainLoopCpu = cpuNow;
     if (delay >= 250) {
-      const message = `Main event loop delayed by ${Math.round(delay)} ms`;
+      const load = describeProcessLoad({
+        elapsedMs: elapsed,
+        cpuDelta,
+        wallElapsedMs: wallElapsed,
+      });
+      const message = `Main event loop delayed by ${Math.round(delay)} ms | ${load} | spans=[${describeActiveSpans()}] | ${describeAppMetrics()}`;
       dbg.main('%s', message);
       void logPerformanceEvent({ source: 'main', message });
     }
