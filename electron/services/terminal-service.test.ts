@@ -100,6 +100,37 @@ describe('terminalService', () => {
     expect(ensure('a').backlog).toBe('hello world');
   });
 
+  it('clears replay and pending output while keeping the shell and stream offset', async () => {
+    vi.useFakeTimers();
+    ensure('a');
+    const received: { data: string; offset: number }[] = [];
+    const off = terminalService.onData((event) => received.push(event));
+    spawned[0].emitData('old logs');
+
+    expect(terminalService.clear('a')).toBe(8);
+    expect(spawned[0].write).toHaveBeenCalledWith('\x0c');
+    expect(spawned[0].kill).not.toHaveBeenCalled();
+    expect(ensure('a')).toMatchObject({ backlog: '', offset: 8 });
+    vi.runAllTimers();
+    expect(received).toEqual([]);
+
+    spawned[0].emitData('new output');
+    vi.runAllTimers();
+    expect(received).toEqual([{ sessionId: 'a', data: 'new output', offset: 8 }]);
+    expect(ensure('a')).toMatchObject({ backlog: 'new output', offset: 18 });
+    off();
+  });
+
+  it('clears an exited shell without sending input', () => {
+    ensure('a');
+    spawned[0].emitData('old logs');
+    spawned[0].emitExit({ exitCode: 1 });
+
+    expect(terminalService.clear('a')).toBe(8);
+    expect(ensure('a')).toMatchObject({ backlog: '', offset: 8, exitCode: 1 });
+    expect(spawned[0].write).not.toHaveBeenCalled();
+  });
+
   it('honours the requested size on spawn and forwards later resizes', () => {
     ensure('a', 100, 40);
     expect(spawned[0].options.cols).toBe(100);

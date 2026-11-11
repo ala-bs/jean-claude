@@ -1694,6 +1694,8 @@ contextBridge.exposeInMainWorld('api', {
     }) => invokeWithDiagnostics('project:terminal:ensure', params),
     write: (params: { sessionId: string; data: string }) =>
       invokeWithDiagnostics('project:terminal:write', params),
+    clear: (sessionId: string) =>
+      invokeWithDiagnostics('project:terminal:clear', sessionId),
     resize: (params: { sessionId: string; cols: number; rows: number }) =>
       invokeWithDiagnostics('project:terminal:resize', params),
     close: (sessionId: string) =>

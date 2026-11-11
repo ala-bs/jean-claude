@@ -6530,6 +6530,10 @@ export function registerIpcHandlers() {
     },
   );
 
+  ipcMain.handle('project:terminal:clear', (_, sessionId: string) => {
+    return terminalService.clear(sessionId);
+  });
+
   ipcMain.handle(
     'project:terminal:resize',
     (_, params: { sessionId: string; cols: number; rows: number }) => {
