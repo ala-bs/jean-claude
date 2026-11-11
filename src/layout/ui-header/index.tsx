@@ -593,7 +593,7 @@ export function Header() {
       {/* LEFT — traffic lights + menu */}
       {isMac && !isWindowFullscreen && <div className="w-[70px] shrink-0" />}
       <div
-        className="flex min-w-0 items-center px-2"
+        className="relative z-10 flex min-w-0 items-center px-2"
         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
       >
         <Dropdown
@@ -772,14 +772,12 @@ export function Header() {
       </div>
 
       {/* CENTER — Activity (absolutely centered) */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <div
-          ref={activityButtonRef}
-          className="pointer-events-auto"
-          style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
-        >
-          <ActivityButton />
-        </div>
+      <div
+        ref={activityButtonRef}
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+        style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+      >
+        <ActivityButton />
       </div>
 
       {/* Spacer to push telemetry right */}
@@ -787,7 +785,7 @@ export function Header() {
 
       {/* RIGHT — telemetry */}
       <div
-        className="flex min-w-0 items-center justify-end gap-1 px-4"
+        className="relative z-10 flex min-w-0 items-center justify-end gap-1 px-4"
         style={
           {
             WebkitAppRegion: 'no-drag',
