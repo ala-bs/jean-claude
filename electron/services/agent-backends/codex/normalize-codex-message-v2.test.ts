@@ -11,6 +11,31 @@ import {
 } from './normalize-codex-message-v2';
 
 describe('Codex MCP elicitation normalization', () => {
+  it('hides the blank schema value and preserves explicitly blank typed fields', () => {
+    const schema = {
+      properties: {
+        target: { type: 'string', enum: ['staging', ''] },
+        features: { type: 'array', items: { type: 'string', enum: ['logs'] } },
+        count: { type: 'integer' },
+        dryRun: { type: 'boolean' },
+        [JEAN_CLAUDE_ANSWER_FILES_FIELD]: { type: 'string' },
+      },
+      required: ['target'],
+    };
+    const elicitation = normalizeCodexMcpElicitation({
+      requestId: 'blank-1',
+      params: { mode: 'form', requestedSchema: schema },
+    });
+    expect(elicitation?.request.questions[0]).toMatchObject({
+      id: 'target',
+      options: [{ label: 'staging' }],
+    });
+    expect(codexMcpElicitationContentFromAnswers({
+      schema,
+      answers: { target: '', features: '', count: '', dryRun: '' },
+      leftEmptyQuestionKeys: ['target', 'features', 'count', 'dryRun'],
+    })).toEqual({ target: '', features: [] });
+  });
   it('maps a form schema to Jean-Claude questions and typed answers', () => {
     const elicitation = normalizeCodexMcpElicitation({
       requestId: 'elicitation-1',
@@ -41,9 +66,9 @@ describe('Codex MCP elicitation normalization', () => {
       requestId: 'elicitation-1',
       contextReminder: 'Choose a deployment target',
       questions: [
-        { id: 'target', type: 'single_choice', required: true },
-        { id: 'dryRun', type: 'text', required: false },
-        { id: 'features', type: 'multi_choice', required: false },
+        { id: 'target', type: 'single_choice', required: true, allowLeaveEmpty: false },
+        { id: 'dryRun', type: 'text', required: false, allowLeaveEmpty: false },
+        { id: 'features', type: 'multi_choice', required: false, allowLeaveEmpty: false },
       ],
     });
     expect(

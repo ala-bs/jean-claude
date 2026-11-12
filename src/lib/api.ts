@@ -2007,6 +2007,8 @@ export interface Api {
       rows: number;
     }) => Promise<TerminalSnapshot>;
     write: (params: { sessionId: string; data: string }) => Promise<void>;
+    /** Clears replayable output and sends Ctrl+L to a running shell. */
+    clear: (sessionId: string) => Promise<number>;
     resize: (params: {
       sessionId: string;
       cols: number;
@@ -3309,6 +3311,7 @@ export const api: Api = hasWindowApi
           exitCode: null,
         }),
         write: async () => {},
+        clear: async () => 0,
         resize: async () => {},
         close: async () => {},
         onData: () => () => {},

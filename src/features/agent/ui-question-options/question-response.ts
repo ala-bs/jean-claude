@@ -57,18 +57,24 @@ export function buildQuestionResponse({
   customAnswers,
   notes,
   wasFreeformByQuestion,
+  leftEmptyQuestionKeys = {},
 }: {
   questions: AgentQuestion[];
   answers: Record<string, string>;
   customAnswers: Record<string, string>;
   notes: Record<string, string>;
   wasFreeformByQuestion: Record<string, boolean>;
+  leftEmptyQuestionKeys?: Record<string, boolean>;
 }): QuestionResponse {
   const responseAnswers: Record<string, string> = {};
   const memoryDetails: AgentMemoryQuestionResponseDetail[] = [];
 
   for (const question of questions) {
     const questionKey = getQuestionKey(question);
+    if (leftEmptyQuestionKeys[questionKey]) {
+      responseAnswers[questionKey] = '';
+      continue;
+    }
     const value = answers[questionKey];
     const customValue = customAnswers[questionKey]?.trim() || null;
     const note = notes[questionKey]?.trim() || null;
@@ -145,6 +151,9 @@ export function buildQuestionResponse({
 
   return {
     answers: responseAnswers,
+    leftEmptyQuestionKeys: questions
+      .filter((question) => leftEmptyQuestionKeys[getQuestionKey(question)])
+      .map(getQuestionKey),
     wasFreeform: Object.values(wasFreeformByQuestion).some(Boolean),
     wasFreeformByQuestion,
     memoryDetails,

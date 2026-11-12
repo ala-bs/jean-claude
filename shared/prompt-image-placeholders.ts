@@ -27,12 +27,20 @@ export function hasPromptImagePlaceholder(text: string): boolean {
 }
 
 /**
+ * One source of truth for the marker shape, as a string so the line-local
+ * remover can embed it in a larger pattern. Identity-escaped `\/` is legal
+ * under `g` alone — adding the `u` or `v` flag to any regex built from this
+ * would throw.
+ */
+const PLACEHOLDER_SOURCE =
+  String.raw`!\[([^\]]*)\]\(jc-image:\/\/([A-Za-z0-9_-]+)(?:\s+=\d+x\d*)?\)`;
+
+/**
  * Built fresh per call rather than shared at module scope: a global regex
  * carries `lastIndex` between callers, so one early `break` in any consumer
  * would silently corrupt the next parse.
  */
-const placeholderRe = () =>
-  /!\[([^\]]*)\]\(jc-image:\/\/([A-Za-z0-9_-]+)(?:\s+=\d+x\d*)?\)/g;
+const placeholderRe = () => new RegExp(PLACEHOLDER_SOURCE, 'g');
 
 /** Characters that would break out of a markdown image label or target. */
 function sanitizeLabel(value: string): string {
@@ -131,6 +139,27 @@ export function removePromptImagePlaceholder(
   );
 }
 
+/**
+ * Remove every placeholder, taking the whole line when a marker sits alone on
+ * one. The token-agnostic counterpart of `removePromptImagePlaceholder`, and
+ * the one to use when the result is text the user will see and keep editing —
+ * a persisted draft — rather than a throwaway preview.
+ *
+ * `stripPromptImagePlaceholders` is the wrong tool there: it leaves the marker's
+ * line behind as blank, which invites a follow-up whole-string tidy
+ * (`trim`, collapsing blank runs) that silently rewrites bytes the user typed
+ * far away from any image.
+ */
+export function removePromptImagePlaceholderLines(text: string): string {
+  return text
+    // Alone on its own line: take the line with it, matching what removing a
+    // single image from the composer already does.
+    .replace(new RegExp(`\\n[ \\t]*${PLACEHOLDER_SOURCE}[ \\t]*(?=\\n|$)`, 'g'), '')
+    .replace(new RegExp(`^[ \\t]*${PLACEHOLDER_SOURCE}[ \\t]*\\n`), '')
+    // Inline with other text: drop just the placeholder.
+    .replace(placeholderRe(), '');
+}
+
 export type PromptBlock =
   | { type: 'text'; text: string }
   | { type: 'image'; image: PromptImagePart };
@@ -197,6 +226,67 @@ export function splitPromptTextByImages({
       (image) => !image.placeholderToken || !placed.has(image.placeholderToken),
     ),
   };
+}
+
+/**
+ * Name the images a multimodal prompt sends as bare content blocks.
+ *
+ * An image block carries only bytes and a media type — not the filename, and
+ * not any ordinal. Position alone tells the model *where* an image was
+ * referenced, but gives neither side a handle to name one: the user cannot
+ * write "the padding in a.png is wrong" and the model cannot answer "in the
+ * second image". A short text block before each image restores that, and
+ * mirrors what the flat-text backends already emit as `[image: a.png]`.
+ *
+ * Returns a labeller rather than a transformed list because callers place
+ * images from several passes (inline placeholders first, then unanchored
+ * trailing images) and the numbering has to run unbroken across all of them.
+ * Numbers are positional per message and recomputed on every send, so they are
+ * never persisted and never have to be kept in sync with anything.
+ */
+export function createPromptImageLabeller(): (
+  image: PromptImagePart,
+) => { type: 'text'; text: string } {
+  let count = 0;
+  return (image) => {
+    count += 1;
+    const name = labelFilename(image.filename);
+    return {
+      type: 'text',
+      text: name ? `[Image #${count}: ${name}]` : `[Image #${count}]`,
+    };
+  };
+}
+
+/** Longest filename echoed into a label; the rest is elided. */
+const MAX_LABEL_FILENAME_LENGTH = 80;
+
+/**
+ * A filename is not trusted input. Work-item images take theirs from the
+ * `fileName` query param of a URL scraped out of work-item HTML, so whoever
+ * can write to the board chooses this string — and the label is a text block
+ * in the user turn of a prompt to an agent that can run tools.
+ *
+ * So: drop control and bidi characters, flatten newlines so one label can
+ * never look like two, `sanitizeLabel` the bracket characters that would
+ * otherwise close the label early, and cap the length.
+ */
+function labelFilename(filename: string | undefined): string | undefined {
+  if (!filename) return undefined;
+  const flattened = filename
+    // Control characters become a space rather than vanishing, so a newline
+    // cannot silently fuse two words into one.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+    // Bidi overrides are zero-width; drop them outright.
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!flattened) return undefined;
+  const safe = sanitizeLabel(flattened);
+  return safe.length > MAX_LABEL_FILENAME_LENGTH
+    ? `${safe.slice(0, MAX_LABEL_FILENAME_LENGTH - 1)}\u2026`
+    : safe;
 }
 
 /**

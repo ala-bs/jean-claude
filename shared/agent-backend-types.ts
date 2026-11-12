@@ -236,6 +236,8 @@ export interface NormalizedQuestion {
   allowFreeform?: boolean;
   /** False when a typed backend schema cannot carry file references. */
   allowFileAttachments?: boolean;
+  /** False when the source form cannot represent an explicit blank value. */
+  allowLeaveEmpty?: boolean;
 }
 
 export interface NormalizedQuestionRequest {

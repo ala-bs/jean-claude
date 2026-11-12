@@ -1404,6 +1404,7 @@ export function useSetAutoComplete(
         pullRequest: updatedPr,
       });
       queryClient.setQueryData(queryKey, updatedPr);
+      updateFeedItemsForPullRequest(projectId, updatedPr);
       if (!repoInfoOverride) {
         queryClient.invalidateQueries({ queryKey: ['pull-requests', projectId] });
       }

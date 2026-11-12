@@ -199,6 +199,8 @@ docs/keyboard-shortcuts.md  # Every key binding + collision rules (keep in sync)
 
 ## Development Notes
 
+- For intermittent renderer freezes, read `docs/renderer-freeze-investigation.md` and inspect the persisted `performance.log` around an occurrence before changing IPC, SQL, or renderer code. Record the confirmed root cause with the fix.
+
 - macOS: Uses `hiddenInset` title bar with custom traffic light positioning
 - All IPC methods are async and go through the preload bridge
 - Database auto-migrates on app startup

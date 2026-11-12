@@ -197,6 +197,7 @@ export function shouldAutoRequeue({
 type Settlement = {
   outcome: 'succeeded' | 'failed';
   reason: string;
+  jobId?: string;
 };
 
 /**
@@ -354,7 +355,7 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
   }, [isArmed]);
 
   const settle = useCallback(
-    ({ outcome, reason }: Settlement) => {
+    ({ outcome, reason, jobId }: Settlement) => {
       // A failed turn does NOT mean Azure dropped the auto-complete. Conflicts
       // and rejected checks leave it armed, so the PR would merge on its own
       // later — while the next queued PR is already armed too. That is exactly
@@ -363,11 +364,12 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
       if (outcome === 'failed' && pr?.status === 'active' && pr.autoCompleteSetBy) {
         autoCompleteMutation.mutate({ enabled: false });
       }
-      if (entry.jobId) {
+      const settledJobId = jobId ?? entry.jobId;
+      if (settledJobId) {
         if (outcome === 'succeeded') {
-          markJobSucceeded(entry.jobId);
+          markJobSucceeded(settledJobId);
         } else {
-          markJobFailed(entry.jobId, reason);
+          markJobFailed(settledJobId, reason);
         }
       }
       addToast({
@@ -464,7 +466,11 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
         autoCompleteSetById: entry.autoCompleteSetById,
         completionOptions: entry.completionOptions,
       })
-      .then(() => {
+      .then((updatedPr) => {
+        if (updatedPr.status === 'completed') {
+          if (isStillQueued()) settle({ outcome: 'succeeded', reason: 'merged', jobId });
+          return;
+        }
         // The user can leave the queue while the PATCH is in flight. Cancelling
         // there would race this call, so the cancel path leaves `arming` alone
         // and we undo it here, once Azure has definitely accepted it.
@@ -508,6 +514,7 @@ function QueueEntryRunner({ entry }: { entry: PrCompletionQueueEntry }) {
     prId,
     projectId,
     remove,
+    settle,
     setJobId,
     setStatus,
   ]);

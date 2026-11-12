@@ -5707,6 +5707,48 @@ describe('agentService provider runtime', () => {
     await startPromise;
   });
 
+  it('delivers an intentionally empty required answer without capturing memory', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'question',
+      request: {
+        requestId: 'question-left-empty',
+        questions: [{
+          id: 'choice',
+          question: 'Which option?',
+          header: 'Choice',
+          multiSelect: false,
+          options: [{ label: 'A', description: '' }],
+        }],
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'question',
+        data: { requestId: 'question-left-empty' },
+      });
+    });
+
+    await agentService.respond('step-1', 'question-left-empty', {
+      answers: { choice: '' },
+      leftEmptyQuestionKeys: ['choice'],
+      memoryDetails: [],
+    });
+
+    expect(providerCalls.questions).toEqual([
+      expect.objectContaining({
+        answer: { choice: '' },
+        metadata: expect.objectContaining({ leftEmptyQuestionKeys: ['choice'] }),
+      }),
+    ]);
+    expect(captureAgentMemoryEventSafeMock).not.toHaveBeenCalled();
+
+    release();
+    await startPromise;
+  });
+
   // "Decide for me" is a deferral, not a stated preference. It must still reach
   // the agent, but recording it would teach memory something the user never said.
   it('delivers Decide for me without capturing it as a preference', async () => {

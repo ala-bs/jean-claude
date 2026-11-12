@@ -6,6 +6,10 @@ import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
 import { deleteAttachmentFile } from './attachment-file-deletion';
+import {
+  beginPerformanceSpan,
+  logPerformanceEvent,
+} from '../lib/performance-log';
 import { resolveSourceBranchStartPoint } from './pull-source-branch';
 
 
@@ -1305,6 +1309,29 @@ function validateWorkItemSummaryRequest(params: unknown) {
 
 export function registerIpcHandlers() {
   dbg.ipc('Registering IPC handlers');
+
+  // Track every handler as an in-flight span so a main-loop stall is logged
+  // with the channels that were running at the time (see `describeActiveSpans`).
+  // Wrapping `handle` once covers every channel registered below, including the
+  // ones delegated to `register*IpcHandlers` helpers that receive `ipcMain`.
+  // Diagnostics only: the handler's arguments, result and rejection are passed
+  // through untouched, and `debug:log` is skipped to avoid recursion with the
+  // renderer's own performance reporting.
+  const registerHandler = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = ((
+    channel: string,
+    listener: (...args: never[]) => unknown,
+  ) =>
+    registerHandler(channel, (async (...args: never[]) => {
+      if (channel === 'debug:log') return listener(...args);
+      const endSpan = beginPerformanceSpan(`ipc:${channel}`);
+      try {
+        return await listener(...args);
+      } finally {
+        endSpan();
+      }
+    }) as never)) as typeof ipcMain.handle;
+
   let previewReloadInProgress = false;
 
   registerPrWorkspaceIpcHandlers({
@@ -5808,13 +5835,18 @@ export function registerIpcHandlers() {
       }
       // Format-string placeholders keep renderer input out of the format
       // directive itself, so a `%j` in the message stays literal text.
-      dbg.renderer('%s %s %s', clamp(params?.scope, 64), clamp(params?.message, 200), data);
+      const scope = clamp(params?.scope, 64);
+      const message = clamp(params?.message, 200);
+      dbg.renderer('%s %s %s', scope, message, data);
+      if (scope === 'performance') {
+        void logPerformanceEvent({ source: 'renderer', message });
+      }
       // PR image uploads are reported long after the fact, so mirror just that
       // scope to a file the user can hand back.
-      if (clamp(params?.scope, 64) === '[pr-create]') {
+      if (scope === '[pr-create]') {
         logPrImageEventSync({
           source: 'renderer',
-          message: clamp(params?.message, 200),
+          message,
           data: params?.data,
         });
       }
@@ -6497,6 +6529,10 @@ export function registerIpcHandlers() {
       terminalService.write(params);
     },
   );
+
+  ipcMain.handle('project:terminal:clear', (_, sessionId: string) => {
+    return terminalService.clear(sessionId);
+  });
 
   ipcMain.handle(
     'project:terminal:resize',

@@ -194,6 +194,18 @@ class TerminalService {
     session.pty.write(data);
   }
 
+  /** Drops replayable output and asks the live shell to redraw a clear screen. */
+  clear(sessionId: string): number {
+    const session = this.sessions.get(sessionId);
+    if (!session) return 0;
+    this.clearFlushTimer(session);
+    session.backlog = '';
+    session.pending = '';
+    session.pendingOffset = session.totalChars;
+    if (session.isRunning) session.pty.write('\x0c');
+    return session.totalChars;
+  }
+
   resize({
     sessionId,
     cols,

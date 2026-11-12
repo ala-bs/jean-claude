@@ -124,13 +124,16 @@ function isQuestionAnswered({
   question,
   value,
   other,
+  leftEmpty = false,
   hasFiles = false,
 }: {
   question: AgentQuestion;
   value: string | undefined;
   other: string | undefined;
+  leftEmpty?: boolean;
   hasFiles?: boolean;
 }) {
+  if (leftEmpty) return true;
   // An optional question can be skipped, but files must accompany an answer.
   if (question.required === false && !hasFiles) return true;
   if (other?.trim()) return true;
@@ -205,6 +208,7 @@ const QuestionInput = memo(function QuestionInput({
   notesValue,
   isNotesOpen,
   isOtherOpen,
+  isLeftEmptySelected,
   onActivate,
   onSelectOption,
   onTextChange,
@@ -221,6 +225,7 @@ const QuestionInput = memo(function QuestionInput({
   notesValue: string;
   isNotesOpen: boolean;
   isOtherOpen: boolean;
+  isLeftEmptySelected: boolean;
   onActivate: (params: { questionIndex: number; optionIndex: number }) => void;
   onSelectOption: (params: {
     questionIndex: number;
@@ -236,8 +241,10 @@ const QuestionInput = memo(function QuestionInput({
   const mode = getQuestionInputMode(question);
   const selectedLabels = getSelectedLabels(value);
   const allowsFreeform = question.allowFreeform ?? true;
+  const allowsLeaveEmpty = question.allowLeaveEmpty ?? true;
   const decideForMeIndex = question.options.length;
-  const otherOptionIndex = decideForMeIndex + 1;
+  const leaveEmptyIndex = decideForMeIndex + (allowsFreeform ? 1 : 0);
+  const otherOptionIndex = leaveEmptyIndex + (allowsLeaveEmpty ? 1 : 0);
   const isFreeformOpen = allowsFreeform && isOtherOpen;
   const isDecideForMeSelected = value === DECIDE_FOR_ME;
   const otherPlaceholder =
@@ -247,7 +254,7 @@ const QuestionInput = memo(function QuestionInput({
     return (
       <div className="space-y-1.5">
         <Textarea
-          value={isDecideForMeSelected ? '' : value}
+          value={isDecideForMeSelected || isLeftEmptySelected ? '' : value}
           onFocus={() => onActivate({ questionIndex, optionIndex: 0 })}
           onChange={(event) =>
             onTextChange({ questionIndex, value: event.currentTarget.value })
@@ -274,6 +281,22 @@ const QuestionInput = memo(function QuestionInput({
           <Sparkles className="h-3.5 w-3.5" />
           Decide for me
         </button>
+        {allowsLeaveEmpty ? <button
+          type="button"
+          aria-pressed={isLeftEmptySelected}
+          onFocus={() => onActivate({ questionIndex, optionIndex: 1 })}
+          onClick={() => {
+            onActivate({ questionIndex, optionIndex: 1 });
+            onSelectOption({ questionIndex, optionIndex: 1 });
+          }}
+          className={`flex items-center gap-2 rounded-lg border p-2 text-left text-[13px] font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+            isLeftEmptySelected
+              ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+              : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
+          }`}
+        >
+          Leave empty
+        </button> : null}
         {allowsFreeform ? (
           <Textarea
             value={otherValue}
@@ -366,6 +389,22 @@ const QuestionInput = memo(function QuestionInput({
               Decide for me
             </button>
           ) : null}
+          {allowsLeaveEmpty ? <button
+            type="button"
+            aria-pressed={isLeftEmptySelected}
+            onFocus={() => onActivate({ questionIndex, optionIndex: leaveEmptyIndex })}
+            onClick={() => {
+              onActivate({ questionIndex, optionIndex: leaveEmptyIndex });
+              onSelectOption({ questionIndex, optionIndex: leaveEmptyIndex });
+            }}
+            className={`inline-flex items-center rounded-md border px-2.5 py-1 text-left text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+              isLeftEmptySelected
+                ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+                : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
+            }`}
+          >
+            Leave empty
+          </button> : null}
         </div>
         {allowsFreeform ? (
           <Textarea
@@ -464,6 +503,22 @@ const QuestionInput = memo(function QuestionInput({
             </span>
           </button>
         ) : null}
+        {allowsLeaveEmpty ? <button
+          type="button"
+          aria-pressed={isLeftEmptySelected}
+          onFocus={() => onActivate({ questionIndex, optionIndex: leaveEmptyIndex })}
+          onClick={() => {
+            onActivate({ questionIndex, optionIndex: leaveEmptyIndex });
+            onSelectOption({ questionIndex, optionIndex: leaveEmptyIndex });
+          }}
+          className={`flex items-start gap-2 rounded-lg border p-2 text-left text-[13px] font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+            isLeftEmptySelected
+              ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+              : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
+          }`}
+        >
+          Leave empty
+        </button> : null}
         {allowsFreeform ? (
           isFreeformOpen ? (
             <Textarea
@@ -580,6 +635,7 @@ export function QuestionOptions({
     (state) => state.finishQuestionResponse,
   );
   const answers = draft?.answers ?? EMPTY_ANSWERS;
+  const leftEmptyQuestionKeys = draft?.leftEmptyQuestionKeys ?? {};
   const otherAnswers = draft?.otherAnswers ?? EMPTY_ANSWERS;
   const notes = draft?.notes ?? EMPTY_ANSWERS;
   const files = draft?.files;
@@ -619,14 +675,24 @@ export function QuestionOptions({
 
   const attachFile = useCallback(
     (questionKey: string, file: PromptFilePart) => {
+      if (useTaskMessagesStore.getState().questionDrafts[draftKey]
+        ?.leftEmptyQuestionKeys?.[questionKey]) {
+        void deleteAttachmentFiles({ projectPath: projectRoot, files: [file] });
+        return;
+      }
       if (
         !projectRoot ||
         !attachQuestionFile(draftKey, questionKey, file, projectRoot)
       ) {
         void deleteAttachmentFiles({ projectPath: projectRoot, files: [file] });
+      } else {
+        updateDraft((prev) => ({
+          ...prev,
+          leftEmptyQuestionKeys: { ...prev.leftEmptyQuestionKeys, [questionKey]: false },
+        }));
       }
     },
-    [attachQuestionFile, draftKey, projectRoot],
+    [attachQuestionFile, draftKey, projectRoot, updateDraft],
   );
 
   const removeFile = useCallback(
@@ -662,11 +728,11 @@ export function QuestionOptions({
 
   const getOptionCount = useCallback((question: AgentQuestion) => {
     const mode = getQuestionInputMode(question);
-    if (mode === 'text') return 1;
-    if (mode === 'multi-choice') return question.options.length + 1;
-    // allowFreeform === false means only the listed choices are acceptable, so
-    // neither the "Decide for me" nor the "Other" slot is rendered.
-    return question.options.length + (question.allowFreeform === false ? 0 : 2);
+    const blankCount = question.allowLeaveEmpty === false ? 0 : 1;
+    if (mode === 'text') return 1 + blankCount;
+    if (mode === 'multi-choice')
+      return question.options.length + (question.allowFreeform === false ? 0 : 1) + blankCount;
+    return question.options.length + (question.allowFreeform === false ? 0 : 2) + blankCount;
   }, []);
 
   useEffect(() => {
@@ -708,8 +774,36 @@ export function QuestionOptions({
       if (!question) return false;
       const questionKey = getQuestionKey(question);
       const mode = getQuestionInputMode(question);
+      const leaveEmptyIndex =
+        mode === 'text'
+          ? 1
+          : question.options.length + (question.allowFreeform === false ? 0 : 1);
 
-      if (optionIndex === question.options.length) {
+      if (question.allowLeaveEmpty !== false && optionIndex === leaveEmptyIndex) {
+        const attached = useTaskMessagesStore.getState().questionDrafts[draftKey]
+          ?.files?.[questionKey] ?? [];
+        updateDraft((prev) => ({
+          ...prev,
+          answers: { ...prev.answers, [questionKey]: '' },
+          otherAnswers: { ...prev.otherAnswers, [questionKey]: '' },
+          notes: { ...prev.notes, [questionKey]: '' },
+          files: { ...prev.files, [questionKey]: [] },
+          leftEmptyQuestionKeys: { ...prev.leftEmptyQuestionKeys, [questionKey]: true },
+        }));
+        if (attached.length) {
+          void deleteAttachmentFiles({ projectPath: projectRoot, files: attached });
+        }
+        setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: false }));
+        setWasFreeformByQuestion((prev) => ({ ...prev, [questionKey]: false }));
+        return true;
+      }
+
+      updateDraft((prev) => ({
+        ...prev,
+        leftEmptyQuestionKeys: { ...prev.leftEmptyQuestionKeys, [questionKey]: false },
+      }));
+
+      if (optionIndex === question.options.length && question.allowFreeform !== false) {
         updateDraft((prev) => ({
           ...prev,
           answers: { ...prev.answers, [questionKey]: DECIDE_FOR_ME },
@@ -749,7 +843,8 @@ export function QuestionOptions({
 
       const isOther =
         question.allowFreeform !== false &&
-        optionIndex === question.options.length + 1;
+        optionIndex === question.options.length +
+          (question.allowLeaveEmpty === false ? 1 : 2);
       setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: isOther }));
 
       if (isOther) {
@@ -781,17 +876,21 @@ export function QuestionOptions({
       }));
       return true;
     },
-    [request.questions, updateDraft],
+    [draftKey, projectRoot, request.questions, updateDraft],
   );
 
   const updateTextAnswer = useCallback(
     ({ questionIndex, value }: { questionIndex: number; value: string }) => {
       const question = request.questions[questionIndex];
       if (!question) return;
-       updateDraft((prev) => ({
-         ...prev,
-         answers: { ...prev.answers, [getQuestionKey(question)]: value },
-       }));
+      updateDraft((prev) => ({
+        ...prev,
+        answers: { ...prev.answers, [getQuestionKey(question)]: value },
+        leftEmptyQuestionKeys: {
+          ...prev.leftEmptyQuestionKeys,
+          [getQuestionKey(question)]: false,
+        },
+      }));
     },
     [request.questions, updateDraft],
   );
@@ -802,6 +901,10 @@ export function QuestionOptions({
       if (!question || question.allowFreeform === false) return;
       const questionKey = getQuestionKey(question);
       const mode = getQuestionInputMode(question);
+      updateDraft((prev) => ({
+        ...prev,
+        leftEmptyQuestionKeys: { ...prev.leftEmptyQuestionKeys, [questionKey]: false },
+      }));
       if (mode === 'text' || mode === 'multi-choice') {
         updateDraft((prev) => ({
           ...prev,
@@ -863,6 +966,10 @@ export function QuestionOptions({
       updateDraft((prev) => ({
         ...prev,
         notes: { ...prev.notes, [getQuestionKey(question)]: value },
+        leftEmptyQuestionKeys: {
+          ...prev.leftEmptyQuestionKeys,
+          [getQuestionKey(question)]: false,
+        },
       }));
     },
     [request.questions, updateDraft],
@@ -920,6 +1027,7 @@ export function QuestionOptions({
       question,
       value: answers[key],
       other: otherAnswers[key],
+      leftEmpty: !!leftEmptyQuestionKeys[key],
       hasFiles: (files?.[key]?.length ?? 0) > 0,
     });
   });
@@ -929,6 +1037,7 @@ export function QuestionOptions({
       question,
       value: answers[key],
       other: otherAnswers[key],
+      leftEmpty: !!leftEmptyQuestionKeys[key],
       hasFiles: (files?.[key]?.length ?? 0) > 0,
     });
   }).length;
@@ -964,6 +1073,7 @@ export function QuestionOptions({
           customAnswers: otherAnswers,
           notes,
           wasFreeformByQuestion: effectiveWasFreeformByQuestion,
+          leftEmptyQuestionKeys,
         }),
         files,
       });
@@ -1022,6 +1132,7 @@ export function QuestionOptions({
               question,
               value: answers[questionKey],
               other: otherAnswers[questionKey],
+              leftEmpty: !!leftEmptyQuestionKeys[questionKey],
             });
 
             return (
@@ -1048,6 +1159,7 @@ export function QuestionOptions({
                 notesValue={notes[questionKey] || ''}
                 isNotesOpen={!!notesOpenByQuestion[questionKey]}
                 isOtherOpen={!!otherOpenByQuestion[questionKey]}
+                isLeftEmptySelected={!!leftEmptyQuestionKeys[questionKey]}
                 onActivate={activateOption}
                 onSelectOption={selectOption}
                 onTextChange={updateTextAnswer}

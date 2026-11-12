@@ -63,6 +63,12 @@ import {
   removePastedPromptPlaceholder,
   reservePastedPromptFilename,
 } from '@/lib/pasted-prompt-placeholders';
+import {
+  buildPromptImagePlaceholder,
+  createPromptImageToken,
+  removePromptImagePlaceholder,
+} from '@shared/prompt-image-placeholders';
+
 import { Kbd } from '@/common/ui/kbd';
 import { useToastStore } from '@/stores/toasts';
 
@@ -195,6 +201,13 @@ function isImageAttachmentUrl(url: string): boolean {
  * Extracts unique Azure DevOps image URLs from work item HTML fields.
  * Looks at both description and reproSteps. Filters out non-image attachments.
  */
+/** Tokens already committed to the draft, so a new mint cannot collide. */
+function imagePlaceholderTokens(images?: PromptImagePart[]): string[] {
+  return (images ?? [])
+    .map((image) => image.placeholderToken)
+    .filter((token): token is string => Boolean(token));
+}
+
 export function extractWorkItemImageUrls(
   workItems: AzureDevOpsWorkItem[],
 ): string[] {
@@ -756,6 +769,71 @@ export function PromptComposer({
     [addToast],
   );
 
+  /**
+   * Attach one image and anchor it in the prompt with a `jc-image://` marker at
+   * the caret, so a prompt naming several images says which is which.
+   *
+   * The marker goes in synchronously, before the decode: that is the only
+   * moment the caret still points where the user pasted. If the decode then
+   * fails, the marker is rolled back — exactly the shape the pasted-text
+   * attachment above uses, and the reason `latestTemplateRef` exists.
+   *
+   * `taken` accumulates tokens minted during this one gesture: the `images`
+   * prop cannot have updated yet, so it alone would let two images pasted
+   * together collide on a token and silently drop one.
+   */
+  const attachImageAtCaret = useCallback(
+    (file: File, taken: string[], context: string) => {
+      if (!onImageAttach) return;
+      const token = createPromptImageToken(taken);
+      taken.push(token);
+
+      const inserted = editorApiRef.current?.insertAtCursor(
+        buildPromptImagePlaceholder({ token, filename: file.name }),
+      );
+      if (inserted) latestTemplateRef.current = inserted;
+
+      const rollback = (message: string) => {
+        const next = removePromptImagePlaceholder(
+          latestTemplateRef.current,
+          token,
+        );
+        latestTemplateRef.current = next;
+        onTemplateChange(next);
+        showImageError(message);
+      };
+
+      void processImageFile(
+        file,
+        (image) => onImageAttach({ ...image, placeholderToken: token }),
+        rollback,
+      ).catch((err) => {
+        rollback('Failed to process image');
+        console.error(`Failed to process ${context} image:`, err);
+      });
+    },
+    [onImageAttach, onTemplateChange, showImageError],
+  );
+
+  /** Strip an image's marker when its chip is removed, so none dangles. */
+  const handleImageRemove = useCallback(
+    (index: number) => {
+      const token = images?.[index]?.placeholderToken;
+      if (token) {
+        const next = removePromptImagePlaceholder(
+          latestTemplateRef.current,
+          token,
+        );
+        if (next !== latestTemplateRef.current) {
+          latestTemplateRef.current = next;
+          onTemplateChange(next);
+        }
+      }
+      onImageRemove?.(index);
+    },
+    [images, onImageRemove, onTemplateChange],
+  );
+
   const handlePaste = useCallback(
     (e: ClipboardEvent<HTMLElement> | globalThis.ClipboardEvent) => {
       if (!e.clipboardData) return;
@@ -771,16 +849,10 @@ export function PromptComposer({
         if (allowed <= 0) return;
 
         e.preventDefault();
+        const taken = imagePlaceholderTokens(images);
         for (const item of imageItems.slice(0, allowed)) {
           const file = item.getAsFile();
-          if (file) {
-            void processImageFile(file, onImageAttach, showImageError).catch(
-              (err) => {
-                showImageError('Failed to process image');
-                console.error('Failed to process pasted image:', err);
-              },
-            );
-          }
+          if (file) attachImageAtCaret(file, taken, 'pasted');
         }
         if (nextVideoFile && allowed > imageItems.length) {
           setVideoFile(nextVideoFile);
@@ -832,6 +904,7 @@ export function PromptComposer({
       }
     },
     [
+      attachImageAtCaret,
       onImageAttach,
       onFileAttach,
       images,
@@ -877,13 +950,9 @@ export function PromptComposer({
             f.type.startsWith('image/'),
           );
           const nextVideoFile = droppedFiles.find(isVideoFile);
+          const taken = imagePlaceholderTokens(images);
           for (const file of imageFiles.slice(0, allowed)) {
-            void processImageFile(file, onImageAttach, showImageError).catch(
-              (err) => {
-                showImageError('Failed to process image');
-                console.error('Failed to process dropped image:', err);
-              },
-            );
+            attachImageAtCaret(file, taken, 'dropped');
           }
           if (nextVideoFile && allowed > imageFiles.length) {
             setVideoFile(nextVideoFile);
@@ -906,7 +975,14 @@ export function PromptComposer({
         }
       }
     },
-    [onImageAttach, onFileAttach, images, projectRoot, showImageError],
+    [
+      attachImageAtCaret,
+      onImageAttach,
+      onFileAttach,
+      images,
+      projectRoot,
+      showImageError,
+    ],
   );
 
   const handleFileSelect = useCallback(
@@ -923,20 +999,16 @@ export function PromptComposer({
       const files = Array.from(e.target.files);
       const imageFiles = files.filter((file) => file.type.startsWith('image/'));
       const nextVideoFile = files.find(isVideoFile);
+      const taken = imagePlaceholderTokens(images);
       for (const file of imageFiles.slice(0, allowed)) {
-        void processImageFile(file, onImageAttach, showImageError).catch(
-          (err) => {
-            showImageError('Failed to process image');
-            console.error('Failed to process selected image:', err);
-          },
-        );
+        attachImageAtCaret(file, taken, 'selected');
       }
       if (nextVideoFile && allowed > imageFiles.length) {
         setVideoFile(nextVideoFile);
       }
       e.target.value = '';
     },
-    [onImageAttach, images, showImageError],
+    [attachImageAtCaret, onImageAttach, images],
   );
 
   const handleOpenFilePicker = useCallback(async () => {
@@ -1346,7 +1418,7 @@ export function PromptComposer({
               images={images}
               previewUrls={imagePreviewUrls}
               onPreview={setPreviewIndex}
-              onRemove={onImageRemove}
+              onRemove={handleImageRemove}
             />}
         </div>
       )}

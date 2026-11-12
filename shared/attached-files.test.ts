@@ -39,4 +39,13 @@ describe('buildAskQuestionElicitationSchema', () => {
       title: 'Notes?',
     });
   });
+
+  it('allows an explicit blank without adding a visible choice label', () => {
+    const schema = buildAskQuestionElicitationSchema({
+      questions: [{ id: 'choice', label: 'Choice?', type: 'single_choice', options: [{ label: 'A' }] }],
+    });
+
+    expect(schema.properties.choice.enum).toEqual(['A', '']);
+    expect(schema.required).toEqual(['choice']);
+  });
 });

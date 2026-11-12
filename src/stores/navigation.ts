@@ -3,6 +3,10 @@ import { useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+import {
+  hasPromptImagePlaceholder,
+  removePromptImagePlaceholderLines,
+} from '@shared/prompt-image-placeholders';
 import type {
   MobilePlatform,
   MobilePreviewQuality,
@@ -147,6 +151,17 @@ interface TaskState {
   // Selecting a step clears this flag; opening the overview sets it.
   showWorkspaceOverview?: boolean;
   prDraft?: PrDraft;
+}
+
+/**
+ * Drop image placeholders from an Add Step prompt about to be persisted
+ * without its images, taking each marker's own line with it. Line-local, so
+ * every other byte the user typed survives a reload — the same contract as the
+ * new-task draft store.
+ */
+function stripPersistedImagePlaceholders(prompt: string): string {
+  if (!prompt || !hasPromptImagePlaceholder(prompt)) return prompt;
+  return removePromptImagePlaceholderLines(prompt);
 }
 
 const defaultAddStepDialogDraft: AddStepDialogDraft = {
@@ -1023,7 +1038,23 @@ const useStore = create<NavigationState>()(
             },
           ]),
         ),
-        addStepDrafts: state.addStepDrafts,
+        // Add Step images live in dialog component state and are never
+        // persisted, so the placeholders that reference them must not be
+        // either: a restored marker with no image tells the agent an image was
+        // referenced and then sends none.
+        addStepDrafts: Object.fromEntries(
+          Object.entries(state.addStepDrafts).map(([taskId, draft]) => [
+            taskId,
+            draft
+              ? {
+                  ...draft,
+                  promptTemplate: stripPersistedImagePlaceholders(
+                    draft.promptTemplate,
+                  ),
+                }
+              : draft,
+          ]),
+        ),
       }),
       merge: (persisted, current) => {
         const persistedState = persisted as Partial<NavigationState>;

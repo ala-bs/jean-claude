@@ -291,6 +291,14 @@ function canonicalizeQuestionResponse({
   }
 
   const questionKeys = getStableQuestionKeys(request.questions);
+  if (!Array.isArray(response.leftEmptyQuestionKeys ?? [])) {
+    return reject('invalid-left-empty-keys');
+  }
+  const leftEmptyKeys = new Set(response.leftEmptyQuestionKeys ?? []);
+  if ([...leftEmptyKeys].some((key) => !questionKeys.includes(key)) ||
+      leftEmptyKeys.size !== (response.leftEmptyQuestionKeys?.length ?? 0)) {
+    return reject('invalid-left-empty-keys');
+  }
   if (
     response.files !== undefined &&
     (!response.files || typeof response.files !== 'object' || Array.isArray(response.files))
@@ -351,6 +359,9 @@ function canonicalizeQuestionResponse({
       return reject('attachments-not-supported', questionIndex);
     }
     if (rendererAnswer === undefined) {
+      if (leftEmptyKeys.has(questionKey)) {
+        return reject('left-empty-without-answer', questionIndex);
+      }
       if (files.length) {
         return reject('files-without-answer', questionIndex);
       }
@@ -358,6 +369,14 @@ function canonicalizeQuestionResponse({
       if (question.required ?? true) {
         return reject('missing-required-answer', questionIndex);
       }
+      continue;
+    }
+    if (leftEmptyKeys.has(questionKey)) {
+      if (rendererAnswer !== '' || detail || files.length) {
+        return reject('invalid-left-empty-answer', questionIndex);
+      }
+      answers[questionKey] = '';
+      plainAnswers[questionKey] = '';
       continue;
     }
     if (!detail) return reject('answer-without-detail', questionIndex);
@@ -2400,6 +2419,9 @@ class AgentService {
       ...(q.allowFileAttachments !== undefined
         ? { allowFileAttachments: q.allowFileAttachments }
         : {}),
+      ...(q.allowLeaveEmpty !== undefined
+        ? { allowLeaveEmpty: q.allowLeaveEmpty }
+        : {}),
     }));
   }
 
@@ -3637,7 +3659,11 @@ class AgentService {
         response: questionResponse,
       });
       if (request.source === 'jc-mcp') {
-        this.questionBroker.answerRequest(requestId, canonicalResponse.answers);
+        this.questionBroker.answerRequest(
+          requestId,
+          canonicalResponse.answers,
+          questionResponse.leftEmptyQuestionKeys,
+        );
       } else {
         if (!session.runHandle) {
           throw new Error(`No active run handle for step ${stepId}`);
@@ -3657,6 +3683,7 @@ class AgentService {
           metadata: {
             wasFreeform: questionResponse.wasFreeform,
             wasFreeformByQuestion: questionResponse.wasFreeformByQuestion,
+            leftEmptyQuestionKeys: questionResponse.leftEmptyQuestionKeys,
             questionKeys: canonicalResponse.questionKeys,
             ...(Object.keys(canonicalResponse.files).length > 0
               ? { files: canonicalResponse.files }

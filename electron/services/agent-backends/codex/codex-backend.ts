@@ -389,6 +389,7 @@ export class CodexBackend implements AgentBackend {
             schema: pending.schema,
             answers: answer,
             files: metadata.files,
+            leftEmptyQuestionKeys: metadata.leftEmptyQuestionKeys,
           }),
         });
       } finally {

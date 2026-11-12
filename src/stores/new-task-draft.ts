@@ -9,6 +9,10 @@ import type {
   PromptFilePart,
   PromptImagePart,
 } from '@shared/agent-backend-types';
+import {
+  hasPromptImagePlaceholder,
+  removePromptImagePlaceholderLines,
+} from '@shared/prompt-image-placeholders';
 import type {
   InteractionMode,
   ModelPreference,
@@ -72,6 +76,22 @@ interface NewTaskDraftState {
   clearAllDrafts: () => void;
 }
 
+/**
+ * Drop image placeholders from a draft prompt that is about to be persisted
+ * without its images, taking each marker's own line with it.
+ *
+ * Deliberately line-local: every other byte the user typed is preserved, so a
+ * restored draft keeps its indentation, its markdown hard breaks and its blank
+ * runs. A whole-prompt tidy here would rewrite text nowhere near an image, and
+ * only for drafts that happen to contain one.
+ */
+function stripPersistedImagePlaceholders(
+  prompt: string | undefined,
+): string | undefined {
+  if (!prompt || !hasPromptImagePlaceholder(prompt)) return prompt;
+  return removePromptImagePlaceholderLines(prompt);
+}
+
 const useStore = create<NewTaskDraftState>()(
   persist(
     (set, get) => ({
@@ -122,10 +142,21 @@ const useStore = create<NewTaskDraftState>()(
         ...state,
         // Strip images (large base64 blobs) from persisted drafts. File
         // attachments are just {filePath, filename} and are kept.
+        //
+        // The prompt text must lose its image placeholders in the same step:
+        // a persisted `jc-image://` marker whose image is gone resolves to
+        // nothing, so a restored draft would tell the agent an image was
+        // referenced while sending no image at all.
         drafts: Object.fromEntries(
           Object.entries(state.drafts).map(([key, draft]) => [
             key,
-            draft ? { ...draft, images: undefined } : draft,
+            draft
+              ? {
+                  ...draft,
+                  images: undefined,
+                  prompt: stripPersistedImagePlaceholders(draft.prompt),
+                }
+              : draft,
           ]),
         ),
       }),

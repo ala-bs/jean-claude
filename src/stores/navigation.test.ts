@@ -304,4 +304,39 @@ describe('navigation store', () => {
     ]);
     expect(state.mobilePreviewSelectedDeviceByKey['task-1:.']).toBeNull();
   });
+
+  it('strips image placeholders from the add-step prompt it persists, since the images are not persisted', async () => {
+    const { useNavigationStore } = await import('./navigation');
+
+    useNavigationStore.getState().setAddStepDraft('task-1', {
+      promptTemplate:
+        'fix this\n\n![shot.png](jc-image://a3f9k2 =420x)\n\nand that',
+    });
+
+    const persisted = JSON.parse(localStorage.getItem('navigation') ?? '{}');
+    const draft = persisted.state.addStepDrafts['task-1'];
+
+    expect(draft.promptTemplate).not.toContain('jc-image://');
+    expect(draft.promptTemplate).toBe('fix this\n\n\nand that');
+
+    // In-memory state keeps the marker, so an unreloaded dialog still resolves
+    // it against the images held in component state.
+    expect(
+      useNavigationStore.getState().addStepDrafts['task-1']?.promptTemplate,
+    ).toContain('jc-image://a3f9k2');
+  });
+
+  it('preserves add-step prompt bytes away from a marker', async () => {
+    const { useNavigationStore } = await import('./navigation');
+
+    useNavigationStore.getState().setAddStepDraft('task-1', {
+      promptTemplate:
+        '  # notes\n\n\n\nline one  \nline two\n\n![a.png](jc-image://a3f9k2 =420x)',
+    });
+
+    const persisted = JSON.parse(localStorage.getItem('navigation') ?? '{}');
+    expect(persisted.state.addStepDrafts['task-1'].promptTemplate).toBe(
+      '  # notes\n\n\n\nline one  \nline two\n',
+    );
+  });
 });

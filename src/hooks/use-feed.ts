@@ -39,6 +39,18 @@ function shouldHideReviewPr(item: FeedItem) {
   );
 }
 
+/**
+ * How long to wait before an invalidation reloads the task feed.
+ *
+ * `feed:tasks` is marked stale by every agent status change and every
+ * task/step mutation, and one load costs seconds in the main process (two or
+ * three `git status` subprocesses per task with a worktree, plus per-PR Azure
+ * DevOps calls). Reloading on each mark made those loads run back to back and
+ * stalled the app. Collapsing a burst into one reload costs at most this much
+ * freshness on the sidebar's status dots and git badges.
+ */
+const TASK_FEED_STALE_RELOAD_DELAY_MS = 2000;
+
 export function useTaskFeedItems() {
   const windowFocused = useWindowFocused();
   const refetchInterval = windowFocused ? 3 * 60 * 1000 : false;
@@ -47,6 +59,7 @@ export function useTaskFeedItems() {
     load: async () => api.feed.getTaskItems(),
     ingest: (items) => ingestFeedItems('feed:tasks', items),
     staleTime: refetchInterval === false ? Infinity : refetchInterval,
+    staleReloadDelayMs: TASK_FEED_STALE_RELOAD_DELAY_MS,
   });
   const refetch = query.refetch;
 

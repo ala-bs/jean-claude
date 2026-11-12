@@ -22,11 +22,11 @@ import {
   ASK_QUESTION_TOOL_SCHEMA,
   askQuestionViaBridge,
 } from './ask-question-bridge';
+import { formatElicitationResult } from './format-elicitation-result';
 
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import {
   buildAskQuestionElicitationSchema,
-  JEAN_CLAUDE_ANSWER_FILES_FIELD,
 } from '@shared/attached-files';
 import type { ThinkingEffort } from '@shared/types';
 
@@ -56,17 +56,6 @@ function isReviewToolEnabled(): boolean {
 
 function isCodexElicitationEnabled(): boolean {
   return process.env.JC_MCP_USE_CODEX_ELICITATION === '1';
-}
-
-function formatElicitationResult(content: Record<string, unknown>): string {
-  const answers = Object.entries(content)
-    .filter(([key]) => key !== JEAN_CLAUDE_ANSWER_FILES_FIELD)
-    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`)
-    .join('\n');
-  const files = content[JEAN_CLAUDE_ANSWER_FILES_FIELD];
-  return typeof files === 'string' && files.trim()
-    ? `${answers}\n\n${files.trim()}`
-    : answers;
 }
 
 function getMcpWorkingDirectory(): string {

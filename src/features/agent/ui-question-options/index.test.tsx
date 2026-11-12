@@ -7,12 +7,16 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { processAttachmentFile } from '@/lib/file-attachment-utils';
+import { deleteAttachmentFiles } from '@/lib/prompt-attachment-cleanup';
 import { getQuestionDraftKey, useTaskMessagesStore } from '@/stores/task-messages';
 import { QuestionContextReminder, QuestionOptions } from '.';
 
 vi.mock('@/lib/file-attachment-utils', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/file-attachment-utils')>()),
   processAttachmentFile: vi.fn(),
+}));
+vi.mock('@/lib/prompt-attachment-cleanup', () => ({
+  deleteAttachmentFiles: vi.fn(async () => {}),
 }));
 
 const reactActEnvironment = globalThis as typeof globalThis & {
@@ -49,6 +53,191 @@ describe('QuestionContextReminder', () => {
 });
 
 describe('QuestionOptions', () => {
+  it('hides Leave empty when a source form cannot carry a blank', () => {
+    const markup = renderToStaticMarkup(
+      <RootKeyboardBindings>
+        <QuestionOptions
+          request={{
+            taskId: 'task-1',
+            requestId: 'request-no-blank',
+            questions: [{
+              key: 'count',
+              type: 'text',
+              question: 'How many?',
+              header: 'Count',
+              multiSelect: false,
+              options: [],
+              allowLeaveEmpty: false,
+            }],
+          }}
+          onRespond={() => {}}
+        />
+      </RootKeyboardBindings>,
+    );
+    expect(markup).not.toContain('Leave empty');
+    expect(markup).toContain('Decide for me');
+  });
+  it('cleans an attachment added to the draft before the next render', async () => {
+    const key = getQuestionDraftKey('task-1', 'request-stale-files');
+    useTaskMessagesStore.setState({ questionDrafts: {}, questionFileUploads: {} });
+    const file = {
+      type: 'file' as const,
+      filename: 'late.txt',
+      filePath: '/repo/.jean-claude/tmp/late.txt',
+    };
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(
+        <RootKeyboardBindings>
+          <QuestionOptions
+            request={{
+              taskId: 'task-1',
+              requestId: 'request-stale-files',
+              questions: [{
+                key: 'choice',
+                type: 'single_choice',
+                question: 'Choose one',
+                header: 'Choice',
+                multiSelect: false,
+                options: [{ label: 'A', description: '' }],
+              }],
+            }}
+            projectRoot="/repo"
+            onRespond={() => {}}
+          />
+        </RootKeyboardBindings>,
+      ));
+      const leaveEmpty = Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent?.includes('Leave empty'),
+      ) as HTMLButtonElement;
+      await act(async () => {
+        useTaskMessagesStore.getState().updateQuestionDraft(key, (draft) => ({
+          ...draft,
+          files: { choice: [file] },
+        }));
+        leaveEmpty.click();
+      });
+      expect(useTaskMessagesStore.getState().questionDrafts[key]?.files?.choice).toEqual([]);
+      expect(deleteAttachmentFiles).toHaveBeenCalledWith({
+        projectPath: '/repo',
+        files: [file],
+      });
+    } finally {
+      await act(async () => root.unmount());
+      vi.mocked(deleteAttachmentFiles).mockClear();
+    }
+  });
+  it('keeps Leave empty selected when an earlier file upload finishes', async () => {
+    const key = getQuestionDraftKey('task-1', 'request-blank-upload');
+    useTaskMessagesStore.setState({ questionDrafts: {}, questionFileUploads: {} });
+    const file = {
+      type: 'file' as const,
+      filename: 'spec.txt',
+      filePath: '/repo/.jean-claude/tmp/spec.txt',
+    };
+    let finishCopy: (() => void) | undefined;
+    vi.mocked(processAttachmentFile).mockImplementation(
+      (_source, _root, onAttach) => new Promise<void>((resolve) => {
+        finishCopy = () => {
+          onAttach(file);
+          resolve();
+        };
+      }),
+    );
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(
+        <RootKeyboardBindings>
+          <QuestionOptions
+            request={{
+              taskId: 'task-1',
+              requestId: 'request-blank-upload',
+              questions: [{
+                key: 'choice',
+                type: 'single_choice',
+                question: 'Choose one',
+                header: 'Choice',
+                multiSelect: false,
+                options: [{ label: 'A', description: '' }],
+              }],
+            }}
+            projectRoot="/repo"
+            onRespond={() => {}}
+          />
+        </RootKeyboardBindings>,
+      ));
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+      Object.defineProperty(input, 'files', {
+        configurable: true,
+        value: [new File(['spec'], 'spec.txt')],
+      });
+      await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
+      const leaveEmpty = Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent?.includes('Leave empty'),
+      ) as HTMLButtonElement;
+      await act(async () => leaveEmpty.click());
+      await act(async () => finishCopy?.());
+
+      expect(useTaskMessagesStore.getState().questionDrafts[key]).toMatchObject({
+        leftEmptyQuestionKeys: { choice: true },
+        files: { choice: [] },
+      });
+      expect(deleteAttachmentFiles).toHaveBeenCalledWith({
+        projectPath: '/repo',
+        files: [file],
+      });
+    } finally {
+      await act(async () => root.unmount());
+      vi.mocked(processAttachmentFile).mockReset();
+      vi.mocked(deleteAttachmentFiles).mockClear();
+    }
+  });
+  it('submits Leave empty for a required fixed-choice question', async () => {
+    const onRespond = vi.fn();
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(
+        <RootKeyboardBindings>
+          <QuestionOptions
+            request={{
+              taskId: 'task-1',
+              requestId: 'request-leave-empty',
+              questions: [{
+                key: 'choice',
+                type: 'single_choice',
+                question: 'Choose one',
+                header: 'Choice',
+                multiSelect: false,
+                options: [{ label: 'A', description: '' }],
+                allowFreeform: false,
+              }],
+            }}
+            onRespond={onRespond}
+          />
+        </RootKeyboardBindings>,
+      ));
+      const leaveEmpty = Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent?.includes('Leave empty'),
+      ) as HTMLButtonElement;
+      expect(leaveEmpty).toBeDefined();
+      await act(async () => leaveEmpty.click());
+      const submit = Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent?.includes('Submit answers'),
+      ) as HTMLButtonElement;
+      expect(submit.disabled).toBe(false);
+      await act(async () => submit.click());
+      expect(onRespond).toHaveBeenCalledWith('request-leave-empty', expect.objectContaining({
+        answers: { choice: '' },
+        leftEmptyQuestionKeys: ['choice'],
+        memoryDetails: [],
+      }));
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
   it('keeps submission blocked after remount until a slow file copy finishes', async () => {
     const key = getQuestionDraftKey('task-1', 'request-slow-copy');
     useTaskMessagesStore.setState({
@@ -209,6 +398,9 @@ describe('QuestionOptions', () => {
       markup.indexOf('Decide for me'),
     );
     expect(markup.indexOf('Decide for me')).toBeLessThan(
+      markup.indexOf('Leave empty'),
+    );
+    expect(markup.indexOf('Leave empty')).toBeLessThan(
       markup.indexOf('Add another answer'),
     );
   });
@@ -259,6 +451,7 @@ describe('QuestionOptions', () => {
       );
 
       expect(markup).toContain('Decide for me');
+      expect(markup).toContain('Leave empty');
       if (type === 'text') {
         expect(markup.indexOf('Decide for me')).toBeLessThan(
           markup.indexOf('Add another answer'),

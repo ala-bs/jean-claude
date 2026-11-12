@@ -40,6 +40,10 @@ import type {
   AgentQuestion,
   QuestionResponseMetadata,
 } from '@shared/agent-types';
+import {
+  createPromptImageLabeller,
+  splitPromptTextByImages,
+} from '@shared/prompt-image-placeholders';
 import type { InteractionMode } from '@shared/types';
 
 import {
@@ -60,7 +64,6 @@ import {
 import { dbg } from '../../../lib/debug';
 import { getChildProcessEnv } from '../../../lib/child-process-env';
 import type { ResolvedPermissionRule } from '../../../../shared/permission-types';
-import { splitPromptTextByImages } from '@shared/prompt-image-placeholders';
 
 
 
@@ -167,12 +170,19 @@ function buildSdkUserMessage(
     images,
   });
 
+  // Images resolved from a placeholder are announced by a `[Image #N: name]`
+  // text block, so one can be referred to by name or ordinal and not position
+  // alone. Trailing images are deliberately left bare: they have no slot in
+  // the text to disambiguate, and labelling them would change the wire format
+  // for every prompt that never used the placeholder feature.
+  const label = createPromptImageLabeller();
+
   for (const block of blocks) {
-    content.push(
-      block.type === 'text'
-        ? { type: 'text', text: block.text }
-        : imageBlock(block.image),
-    );
+    if (block.type === 'text') {
+      content.push({ type: 'text', text: block.text });
+      continue;
+    }
+    content.push(label(block.image), imageBlock(block.image));
   }
 
   // Always emit a text block, even when empty: this mirrors what the SDK

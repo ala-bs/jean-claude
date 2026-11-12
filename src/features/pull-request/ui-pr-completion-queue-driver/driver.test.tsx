@@ -831,6 +831,26 @@ describe('PrCompletionQueueDriver', () => {
     expect(queuedPrIds()).toEqual([102]);
   });
 
+  it('treats a merge discovered during arming as success and advances the queue', async () => {
+    enqueue(101);
+    enqueue(102);
+    await render();
+    const jobId = usePrCompletionQueueStore.getState().entries[0]?.jobId;
+    const pending = armDeferred;
+    armDeferred = null;
+
+    await act(async () => {
+      pending?.resolve(makePr(101, { status: 'completed' }));
+    });
+
+    expect(queuedPrIds()).toEqual([102]);
+    expect(useBackgroundJobsStore.getState().jobs.find((job) => job.id === jobId)?.status).toBe('succeeded');
+    expect(setAutoComplete).not.toHaveBeenCalledWith({ prId: 101, enabled: false });
+    expect(setAutoComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ prId: 102, enabled: true }),
+    );
+  });
+
   it('keeps polling the armed PR across re-renders', async () => {
     vi.useFakeTimers();
     try {

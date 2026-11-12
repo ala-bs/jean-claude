@@ -70,6 +70,52 @@ describe('useSetAutoComplete', () => {
     expect(Reflect.get(results[0] as object, 'isAnyPending')).toBe(true);
     expect(Reflect.get(results[1] as object, 'isAnyPending')).toBe(true);
   });
+
+  it('updates feed documents when a queued PR is found merged', async () => {
+    const repoInfo = {
+      projectName: 'Project',
+      providerId: 'provider-1',
+      projectId: 'azure-project-1',
+      repoId: 'repo-1',
+    };
+    vi.spyOn(api.azureDevOps, 'setPullRequestAutoComplete').mockResolvedValue({
+      id: 42,
+      title: 'Merged PR',
+      status: 'completed',
+      isDraft: false,
+      createdBy: { id: 'owner-1', displayName: 'Owner', uniqueName: 'owner@example.com' },
+      creationDate: '2026-01-01T00:00:00Z',
+      sourceRefName: 'refs/heads/feature',
+      targetRefName: 'refs/heads/main',
+      url: 'https://example.test/pr/42',
+      description: '',
+      reviewers: [],
+    });
+    cache$.documents['feed:pullRequests'].data.set([
+      { id: 'pr-42', source: 'pull-request', projectId: 'local-project-1', pullRequestId: 42 } as never,
+    ]);
+    cache$.documents['feed:tasks'].data.set([
+      { id: 'task-1', source: 'task', projectId: 'local-project-1', pullRequestId: 42, workItemPrStatus: 'active' } as never,
+    ]);
+    let mutation: ReturnType<typeof useSetAutoComplete> | null = null;
+    function Consumer() {
+      mutation = useSetAutoComplete('local-project-1', 42, repoInfo);
+      return null;
+    }
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    flushSync(() => {
+      root!.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Consumer)));
+    });
+
+    await mutation!.mutateAsync({ enabled: true });
+
+    expect(cache$.documents['feed:pullRequests'].data.get()).toEqual([]);
+    expect(cache$.documents['feed:tasks'].data.get()).toMatchObject([
+      { workItemPrStatus: 'completed' },
+    ]);
+  });
 });
 
 describe('useMarkPullRequestDraft', () => {

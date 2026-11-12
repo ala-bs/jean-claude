@@ -10,6 +10,7 @@ import { X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getProjectTerminalSessionId } from '@shared/terminal-types';
 import { IconButton } from '@/common/ui/icon-button';
+import { useCommands } from '@/common/hooks/use-commands';
 import { readThemeFromCss } from './theme';
 import { Separator } from '@/common/ui/separator';
 import { sliceAfterReplay } from './replay';
@@ -37,10 +38,26 @@ export function ProjectTerminal({
   const containerRef = useRef<HTMLDivElement>(null);
   const paneRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const clearRef = useRef<() => void>(() => {});
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
 
   const sessionId = getProjectTerminalSessionId(projectId);
+
+  useCommands('project-terminal', [
+    {
+      label: 'Clear Project Terminal',
+      section: 'Project',
+      shortcut: 'cmd+k',
+      handler: () => {
+        // The command log overlay also owns ⌘K. Only consume it when the
+        // interactive terminal itself has focus.
+        if (!containerRef.current?.contains(document.activeElement)) return false;
+        clearRef.current();
+        return true;
+      },
+    },
+  ]);
 
   const { width, setWidth, minWidth, maxWidth } = useProjectTerminalPaneWidth();
   const { isDragging, handleMouseDown } = useHorizontalResize({
@@ -93,6 +110,8 @@ export function ProjectTerminal({
     // channel, and nothing orders those two against each other.
     let replayedThrough: number | null = null;
     const queued: { data: string; offset: number }[] = [];
+    let clearing = false;
+    const clearQueue: { data: string; offset: number }[] = [];
 
     const writeChunk = (chunk: { data: string; offset: number }) => {
       const text = sliceAfterReplay({
@@ -105,12 +124,40 @@ export function ProjectTerminal({
     const offData = api.terminal.onData((event) => {
       if (event.sessionId !== sessionId) return;
       const chunk = { data: event.data, offset: event.offset };
+      if (clearing) {
+        clearQueue.push(chunk);
+        return;
+      }
       if (replayedThrough === null) {
         queued.push(chunk);
         return;
       }
       writeChunk(chunk);
     });
+
+    clearRef.current = () => {
+      if (clearing) return;
+      clearing = true;
+      void api.terminal
+        .clear(sessionId)
+        .then(async (offset) => {
+          // xterm parses writes asynchronously. Wait for output already handed
+          // to it before clearing, or an old chunk can appear afterward.
+          await new Promise<void>((resolve) => terminal.write('', resolve));
+          if (disposed) return;
+          terminal.clear();
+          replayedThrough = Math.max(replayedThrough ?? 0, offset);
+          clearQueue.splice(0).forEach(writeChunk);
+        })
+        .catch((error: unknown) => {
+          if (disposed) return;
+          console.error('Failed to clear project terminal', error);
+          clearQueue.splice(0).forEach(writeChunk);
+        })
+        .finally(() => {
+          clearing = false;
+        });
+    };
 
     const offExit = api.terminal.onExit((event) => {
       if (event.sessionId !== sessionId) return;
@@ -171,6 +218,7 @@ export function ProjectTerminal({
       offData();
       offExit();
       dataSub.dispose();
+      clearRef.current = () => {};
       terminal.dispose();
       terminalRef.current = null;
       // Deliberately NOT calling `api.terminal.close` — the session outlives
@@ -209,8 +257,8 @@ export function ProjectTerminal({
     <div
       ref={paneRef}
       style={{ width }}
-      // Lets the project panel's panel-scope bindings decline while focus is in
-      // the terminal, so ⌘F/⌘K reach the shell instead of the commit search.
+      // Lets the project panel's bindings decline while focus is in the
+      // terminal, so ⌘F reaches the shell instead of the commit search.
       data-project-terminal
       className="panel-edge-shadow bg-bg-0 relative flex h-full flex-col"
     >

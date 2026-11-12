@@ -1,4 +1,5 @@
 import {
+  createPromptImageLabeller,
   hasPromptImagePlaceholder,
   renderPromptImagePlaceholders,
   splitPromptTextByImages,
@@ -48,6 +49,9 @@ export function interleavePromptParts(parts: PromptPart[]): PromptPart[] {
 
   const placed = new Set<PromptImagePart>();
   const expanded: PromptPart[] = [];
+  // Numbers only the images placed at a marker. Trailing images stay bare so
+  // all backends agree and marker-free prompts keep their existing wire shape.
+  const label = createPromptImageLabeller();
 
   for (const part of parts) {
     if (part.type !== 'text') continue;
@@ -60,11 +64,11 @@ export function interleavePromptParts(parts: PromptPart[]): PromptPart[] {
       if (!stillMissing.has(image)) placed.add(image);
     }
     for (const block of blocks) {
-      expanded.push(
-        block.type === 'text'
-          ? { type: 'text', text: block.text }
-          : block.image,
-      );
+      if (block.type === 'text') {
+        expanded.push({ type: 'text', text: block.text });
+        continue;
+      }
+      expanded.push(label(block.image), block.image);
     }
   }
 
@@ -73,6 +77,7 @@ export function interleavePromptParts(parts: PromptPart[]): PromptPart[] {
   for (const part of parts) {
     if (part.type === 'text') continue;
     if (part.type === 'image' && placed.has(part)) continue;
+    // Left unlabelled on purpose: see the labeller call above.
     expanded.push(part);
   }
 

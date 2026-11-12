@@ -267,6 +267,14 @@ describe('question-broker-service', () => {
     );
   });
 
+  it('accepts and identifies an explicitly empty required answer', () => {
+    expect(formatAnswerSummary({
+      questions,
+      answers: { approach: '', constraints: 'Fast' },
+      leftEmptyQuestionKeys: ['approach'],
+    })).toBe('Which approach?: [left empty]\nWhich constraints matter?: Fast');
+  });
+
   it('omits optional unanswered choice questions from plain text summary', () => {
     expect(
       formatAnswerSummary({
